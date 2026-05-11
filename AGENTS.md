@@ -6,6 +6,7 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
 
 - Mark co-op edits in original/decomp code with a concise `Co-op:` comment explaining why the hook exists. Keep comments focused on intent, not obvious mechanics.
 - Prefer Dusk's existing debug output paths for observability. Dusk-owned code can use `aurora::Module` via `dusk/logging.h`; original debug prints often use `OS_REPORT`, routed by `src/dusk/OSReport.cpp`. Avoid per-frame log spam unless a plan calls for gated or sampled tracing.
+- The user handles CMake/Visual Studio builds unless they explicitly ask Codex to run one. Codex should still use lightweight checks such as `git diff --check` and source inspection.
 
 ## Repository Map
 
@@ -14,6 +15,7 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
 - `docs/code-conventions.md`: Dusk-specific contribution rules. Read before editing original game/decomp code, especially for `#if TARGET_PC` and Dusk-modified code expectations.
 - `docs/co-op-roadmap.md`: co-op roadmap, current code evidence, singleton-touchpoint counts, risks, and first recommended implementation plans.
 - `docs/coop-player-slots-plan.md`: active first co-op milestone: no-behavior-change player slot registry.
+- `docs/coop-input-snapshot-plan.md`: active second co-op milestone: slot-aware input snapshot while preserving primary-player `PAD_1` behavior.
 - `files.cmake`: explicit source-file list. Update it when adding C++ source/header files that must be built.
 
 For co-op work, create one focused, self-contained plan in `docs/`, such as `docs/coop-player-slots-plan.md`. Do not put audit details, singleton counts, or long design notes in this file; put them in the roadmap or the active plan.

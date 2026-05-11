@@ -52,6 +52,7 @@
 #include "d/d_s_play.h"
 
 #if TARGET_PC
+#include "dusk/coop/input.h"
 #include "dusk/coop/player_slots.h"
 #endif
 #include "dusk/frame_interpolation.h"
@@ -9448,13 +9449,23 @@ void daAlink_c::setStickData() {
                             && mItemAcKeep.getActor() != NULL
                             && (checkCanoeRide() || mProcID == PROC_FISHING_CAST);
 
+#if TARGET_PC
+        // Co-op: snapshot this actor's slot input so future player actors do not hard-code PAD_1.
+        const dusk::coop::PlayerInputState player_input = dusk::coop::readInputForActor(this);
+#endif
+
         if (usingFishRod) {
             dmg_rod_class* mg_rod = (dmg_rod_class*)mItemAcKeep.getActor();
             mStickValue = JMAFastSqrt(SQUARE(mg_rod->getRodStickX()) + SQUARE(mg_rod->getRodStickY()));
             mStickAngle = cM_atan2s(-mg_rod->getRodStickX(), mg_rod->getRodStickY());
         } else {
+#if TARGET_PC
+            mStickValue = player_input.stickValue;
+            mStickAngle = player_input.stickAngle3D - -0x8000;
+#else
             mStickValue = mDoCPd_c::getStickValue(PAD_1);
             mStickAngle = mDoCPd_c::getStickAngle3D(PAD_1) - -0x8000;
+#endif
         }
 
         mMoveValue = mStickValue;
@@ -9480,6 +9491,51 @@ void daAlink_c::setStickData() {
             field_0x2fb9 = 1;
         }
 
+#if TARGET_PC
+        if (player_input.triggerButtons & PAD_BUTTON_B) {
+            mItemTrigger |= (daAlink_ITEM_BTN)BTN_B;
+        }
+        if (player_input.triggerButtons & PAD_BUTTON_A) {
+            mItemTrigger |= (daAlink_ITEM_BTN)BTN_A;
+        }
+        if (player_input.triggerButtons & PAD_BUTTON_X) {
+            mItemTrigger |= (daAlink_ITEM_BTN)BTN_X;
+        }
+        if (player_input.triggerButtons & PAD_BUTTON_Y) {
+            mItemTrigger |= (daAlink_ITEM_BTN)BTN_Y;
+        }
+        if (player_input.triggerButtons & PAD_TRIGGER_Z) {
+            mItemTrigger |= (daAlink_ITEM_BTN)BTN_Z;
+        }
+        if (player_input.triggerButtons & PAD_TRIGGER_L) {
+            mItemTrigger |= (daAlink_ITEM_BTN)BTN_L;
+        }
+        if (player_input.triggerLockR) {
+            mItemTrigger |= (daAlink_ITEM_BTN)BTN_R;
+        }
+
+        if (player_input.holdButtons & PAD_BUTTON_A) {
+            mItemButton |= (daAlink_ITEM_BTN)BTN_A;
+        }
+        if (player_input.holdButtons & PAD_BUTTON_B) {
+            mItemButton |= (daAlink_ITEM_BTN)BTN_B;
+        }
+        if (player_input.holdButtons & PAD_BUTTON_X) {
+            mItemButton |= (daAlink_ITEM_BTN)BTN_X;
+        }
+        if (player_input.holdButtons & PAD_BUTTON_Y) {
+            mItemButton |= (daAlink_ITEM_BTN)BTN_Y;
+        }
+        if (player_input.holdButtons & PAD_TRIGGER_Z) {
+            mItemButton |= (daAlink_ITEM_BTN)BTN_Z;
+        }
+        if (player_input.holdButtons & PAD_TRIGGER_L) {
+            mItemButton |= (daAlink_ITEM_BTN)BTN_L;
+        }
+        if (player_input.holdLockR) {
+            mItemButton |= (daAlink_ITEM_BTN)BTN_R;
+        }
+#else
         if (mDoCPd_c::getTrigB(PAD_1)) {
             mItemTrigger |= (daAlink_ITEM_BTN)BTN_B;
         }
@@ -9523,6 +9579,7 @@ void daAlink_c::setStickData() {
         if (mDoCPd_c::getHoldLockR(PAD_1)) {
             mItemButton |= (daAlink_ITEM_BTN)BTN_R;
         }
+#endif
 
         if (checkHeavyStateOn(TRUE, TRUE) &&
             (!checkBootsOrArmorHeavy() || !checkNoResetFlg0(FLG0_WATER_IN_MOVE)))
