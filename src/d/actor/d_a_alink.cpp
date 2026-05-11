@@ -51,6 +51,9 @@
 #include "d/actor/d_a_ni.h"
 #include "d/d_s_play.h"
 
+#if TARGET_PC
+#include "dusk/coop/player_slots.h"
+#endif
 #include "dusk/frame_interpolation.h"
 #include "dusk/settings.h"
 #include "res/Object/Alink.h"
@@ -4919,6 +4922,10 @@ int daAlink_c::create() {
 
         dComIfGp_setPlayer(0, this);
         dComIfGp_setLinkPlayer(this);
+        #if TARGET_PC
+        // Co-op: mirror vanilla player 0 into Dusk's sidecar slot registry without changing the singleton path.
+        dusk::coop::registerPlayer(dusk::coop::PlayerSlot::Primary, this);
+        #endif
         fopAcM_setStageLayer(&LEAFDRAW_BASE(this));
 
         if (sceneMode == 7) {
@@ -19827,6 +19834,10 @@ daAlink_c::~daAlink_c() {
 
     dKy_plight_cut(&mMagneBootsPlight);
 
+    #if TARGET_PC
+    // Co-op: clear only the matching sidecar slot before vanilla clears player 0.
+    dusk::coop::unregisterPlayer(dusk::coop::PlayerSlot::Primary, this);
+    #endif
     dComIfGp_setPlayer(0, NULL);
     dComIfGp_setLinkPlayer(NULL);
 }
