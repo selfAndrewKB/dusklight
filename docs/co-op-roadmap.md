@@ -51,6 +51,14 @@ Approximate singleton-touchpoint counts from `rg`:
 
 These counts are why the work should not begin with a mass replacement. It should begin by adding small, explicit player-slot and target-selection APIs, then converting call sites only when a milestone needs them.
 
+## Current ALINK Duplication Finding
+
+The first secondary ALINK prototype is documented in `docs/coop-secondary-player-prototype-plan.md`. It proved that a naive second `daAlink_c` is unsafe, but it did not prove that ALINK reuse should be abandoned.
+
+Runtime evidence showed that secondary ALINK attention could be gated successfully, and that player 1 still enters `PROC_MOVE` with valid input after the secondary exists. The visible animation lock was fixed by restoring player 1's shared ALINK model-data ownership after secondary `playerInit()` / `changeLink()`. This confirms the main culprit was shared `J3DModelData` matrix-calculator ownership, not controller input, attention, action-proc selection, or late create-time animation/model calls.
+
+The next plan is `docs/coop-alink-duplication-audit-plan.md`. Do not pivot to a full proxy/replica Link as the default architecture until that audit has classified the relevant singleton callsites and animation/model ownership hazards. A proxy remains a fallback or temporary diagnostic tool, not the preferred plan by default.
+
 ## Design Principles
 
 Single-player remains the compatibility baseline. Slot 0 is the primary player and must behave exactly like the current game until a co-op option is enabled. Existing call sites such as `dComIfGp_getPlayer(0)` should continue to mean the primary player.

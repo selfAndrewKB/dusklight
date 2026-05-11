@@ -54,10 +54,12 @@
 #if TARGET_PC
 #include "dusk/coop/input.h"
 #include "dusk/coop/player_slots.h"
+#include "dusk/logging.h"
 #endif
 #include "dusk/frame_interpolation.h"
 #include "dusk/settings.h"
 #include "res/Object/Alink.h"
+#include <cstdint>
 #include <cstring>
 
 static int daAlink_Create(fopAc_ac_c* i_this);
@@ -65,6 +67,45 @@ static int daAlink_Delete(daAlink_c* i_this);
 static int daAlink_Execute(daAlink_c* i_this);
 static int daAlink_Draw(daAlink_c* i_this);
 static fopAc_ac_c* daAlink_searchTagKandelaar(fopAc_ac_c* i_actor, void* i_data);
+
+#if TARGET_PC
+namespace {
+aurora::Module CoopAlinkLog("dusk::coop.alink");
+
+void coopLogPrimaryRuntimeState(daAlink_c* player) {
+    static u16 s_prev_proc = daAlink_c::PROC_MAX;
+    static uintptr_t s_prev_anm = 0;
+    static int s_sample = 0;
+
+    if (!dusk::coop::isPrimaryPlayer(player) ||
+        dusk::coop::getPlayer(dusk::coop::PlayerSlot::Secondary) == nullptr)
+    {
+        s_prev_proc = daAlink_c::PROC_MAX;
+        s_prev_anm = 0;
+        s_sample = 0;
+        return;
+    }
+
+    const uintptr_t anm = reinterpret_cast<uintptr_t>(player->mNowAnmPackUnder[0].getAnmTransform());
+    const bool changed = player->mProcID != s_prev_proc || anm != s_prev_anm;
+    s_sample++;
+    if (!changed && (s_sample % 30) != 0) {
+        return;
+    }
+
+    s_prev_proc = player->mProcID;
+    s_prev_anm = anm;
+
+    // Co-op: sample P1 only while the secondary prototype exists, to catch post-spawn animation lockups.
+    CoopAlinkLog.debug(
+        "primary runtime p1 0x{:x} proc {} speed {:.3f}/{:.3f} stick {:.3f} "
+        "under frame {:.3f} rate {:.3f} anm 0x{:x} flags 0x{:x}",
+        reinterpret_cast<uintptr_t>(player), player->mProcID, player->speedF, player->mNormalSpeed,
+        player->mStickValue, player->mUnderFrameCtrl[0].getFrame(),
+        player->mUnderFrameCtrl[0].getRate(), anm, player->attention_info.flags);
+}
+}
+#endif
 
 BOOL daAlink_c::getE3Zhint() {
     return false;
@@ -4893,6 +4934,33 @@ int daAlink_c::create() {
     s32 startMode = getStartMode();
     s16 startPoint = dComIfGp_getStartStagePoint();
     BOOL isHorseStart = checkHorseStart(sceneMode, startMode);
+#if TARGET_PC
+    // Co-op: actor argument -2 marks an intentionally spawned secondary ALINK prototype.
+    const bool coop_secondary = dusk::coop::isSecondaryPlayerPrototype(this);
+    auto coop_log_primary_state = [&](const char* phase) {
+        if (!coop_secondary) {
+            return;
+        }
+
+        daAlink_c* primary = static_cast<daAlink_c*>(dusk::coop::getPrimaryPlayer());
+        if (primary == nullptr) {
+            CoopAlinkLog.debug("secondary create {} actor 0x{:x}; primary slot empty", phase,
+                               reinterpret_cast<uintptr_t>(this));
+            return;
+        }
+
+        // Co-op: checkpoint P1 while a secondary ALINK is being created; this identifies creation-time singleton damage.
+        CoopAlinkLog.debug(
+            "secondary create {} actor 0x{:x}; p1 0x{:x} proc {} speed {:.3f}/{:.3f} stick {:.3f} "
+            "under frame {:.3f} rate {:.3f} anm 0x{:x} flags 0x{:x}",
+            phase, reinterpret_cast<uintptr_t>(this), reinterpret_cast<uintptr_t>(primary),
+            primary->mProcID, primary->speedF, primary->mNormalSpeed, primary->mStickValue,
+            primary->mUnderFrameCtrl[0].getFrame(), primary->mUnderFrameCtrl[0].getRate(),
+            reinterpret_cast<uintptr_t>(primary->mNowAnmPackUnder[0].getAnmTransform()),
+            primary->attention_info.flags);
+    };
+    coop_log_primary_state("begin");
+#endif
 
     // Stage: City   Room: Entrance   Layer: 0
     BOOL isEnteringLV7 = checkStageName("D_MN07")
@@ -4901,6 +4969,10 @@ int daAlink_c::create() {
                           && current.pos.y > 7500.0f;
 
     if (!bgWaitFlg) {
+#if TARGET_PC
+        // Co-op: secondary prototypes should not rewrite global clothing startup state.
+        if (!coop_secondary) {
+#endif
         #if DEBUG
         if (g_playerKind == 2) {
             dComIfGs_setSelectEquipClothes(dItemNo_WEAR_CASUAL_e);
@@ -4920,13 +4992,25 @@ int daAlink_c::create() {
         if (isEnteringLV7 && checkMagicArmorHeavy()) {
             dComIfGs_setSelectEquipClothes(dItemNo_WEAR_KOKIRI_e);
         }
+#if TARGET_PC
+        }
+#endif
 
+#if TARGET_PC
+        if (coop_secondary) {
+            // Co-op: secondary ALINK prototypes must not replace vanilla player 0 globals.
+            dusk::coop::registerPlayer(dusk::coop::PlayerSlot::Secondary, this);
+        } else {
+#endif
         dComIfGp_setPlayer(0, this);
         dComIfGp_setLinkPlayer(this);
         #if TARGET_PC
         // Co-op: mirror vanilla player 0 into Dusk's sidecar slot registry without changing the singleton path.
         dusk::coop::registerPlayer(dusk::coop::PlayerSlot::Primary, this);
         #endif
+#if TARGET_PC
+        }
+#endif
         fopAcM_setStageLayer(&LEAFDRAW_BASE(this));
 
         if (sceneMode == 7) {
@@ -4963,7 +5047,16 @@ int daAlink_c::create() {
         } else {
             attention_info.position.y = current.pos.y + 150.0f;
         }
+#if TARGET_PC
+        if (coop_secondary) {
+            // Co-op: keep secondary ALINK prototypes out of vanilla lock-on/action attention lists.
+            attention_info.flags = 0;
+        } else {
+#endif
         attention_info.flags = -1;
+#if TARGET_PC
+        }
+#endif
 
         if (!dComIfGp_getEventManager().dataLoaded()) {
             return cPhs_INIT_e;
@@ -4975,6 +5068,9 @@ int daAlink_c::create() {
         if (dComIfG_resLoad(&mPhaseReq, mArcName, mpArcHeap) != cPhs_COMPLEATE_e) {
             return cPhs_INIT_e;
         }
+#if TARGET_PC
+        coop_log_primary_state("after-arc-load");
+#endif
 
         setShieldArcName();
         setOriginalHeap(&mpShieldArcHeap, 0x7000);
@@ -4991,11 +5087,35 @@ int daAlink_c::create() {
         if (!fopAcM_entrySolidHeap(this, daAlink_createHeap, heapSize)) {
             return cPhs_ERROR_e;
         }
+#if TARGET_PC
+        coop_log_primary_state("after-solid-heap");
+#endif
 
         mAttention = dComIfGp_getAttention();
         field_0x317c = dComIfGp_getPlayerCameraID(0);
 
         playerInit();
+#if TARGET_PC
+        if (coop_secondary &&
+            dusk::coop::hasSecondaryAlinkProbeFlag(
+                dusk::coop::SecondaryAlinkProbe_RestorePrimaryModelDataOwner))
+        {
+            daAlink_c* primary = static_cast<daAlink_c*>(dusk::coop::getPrimaryPlayer());
+            if (primary != NULL) {
+                // Co-op: ALINK writes animation matrix calculators onto shared J3DModelData; restore P1 ownership after P2's changeLink().
+                if (primary->checkWolf()) {
+                    primary->changeModelDataDirectWolf(0);
+                } else {
+                    primary->changeModelDataDirect(0);
+                }
+                CoopAlinkLog.debug("secondary create restored primary model data owner p1 0x{:x}",
+                                   reinterpret_cast<uintptr_t>(primary));
+            }
+        }
+#endif
+#if TARGET_PC
+        coop_log_primary_state("after-player-init");
+#endif
         bgWaitFlg = TRUE;
 
         if (checkCanoeStart()) {
@@ -5031,8 +5151,18 @@ int daAlink_c::create() {
     }
 
     bgWaitFlg = FALSE;
+#if TARGET_PC
+    coop_log_primary_state("after-bg-ready");
+#endif
 
+#if TARGET_PC
+    // Co-op: secondary prototypes should not move the single-player restart point.
+    if (!coop_secondary) {
+#endif
     dComIfGs_setRestartRoom(current.pos, shape_angle.y, getStartRoomNo());
+#if TARGET_PC
+    }
+#endif
     field_0x3780 = current.pos;
     mLinkAcch.ClrGndThinCellingOff();
 
@@ -5051,29 +5181,110 @@ int daAlink_c::create() {
         onNoResetFlg2(FLG2_BOAR_SINGLE_BATTLE_2ND);
     }
 
-    J3DAnmTransform* underBck;
-    J3DAnmTransform* upperBck;
-    getUnderUpperAnime(ANM_WAIT, &underBck, &upperBck, 0, 0x2C00);
-    mNowAnmPackUnder[0].setAnmTransform(underBck);
-
-    if (upperBck != NULL) {
-        mNowAnmPackUpper[0].setAnmTransform(upperBck);
+#if TARGET_PC
+    if (coop_secondary &&
+        dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_SkipWaitAnimeBind))
+    {
+        // Co-op: skip secondary wait-animation binding to test animation resource ownership.
+        coop_log_primary_state("skip-wait-anime-bind");
     } else {
-        mNowAnmPackUpper[0].setAnmTransform(underBck);
+#endif
+        J3DAnmTransform* underBck;
+        J3DAnmTransform* upperBck;
+        getUnderUpperAnime(ANM_WAIT, &underBck, &upperBck, 0, 0x2C00);
+        mNowAnmPackUnder[0].setAnmTransform(underBck);
+
+        if (upperBck != NULL) {
+            mNowAnmPackUpper[0].setAnmTransform(upperBck);
+        } else {
+            mNowAnmPackUpper[0].setAnmTransform(underBck);
+        }
+#if TARGET_PC
     }
+#endif
 
-    int midna_prm = setStartProcInit();
+    int midna_prm = 0;
+#if TARGET_PC
+    if (coop_secondary &&
+        dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_SkipStartProcInit))
+    {
+        // Co-op: skip secondary proc init to test whether startup action state corrupts P1 animation.
+        coop_log_primary_state("skip-start-proc-init");
+    } else {
+#endif
+        midna_prm = setStartProcInit();
+#if TARGET_PC
+    }
+#endif
     setSelectEquipItem(FALSE);
+#if TARGET_PC
+    if (coop_secondary &&
+        dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_SkipSetMatrix))
+    {
+        // Co-op: skip secondary matrix setup to test shared model/matrix startup state.
+        coop_log_primary_state("skip-set-matrix");
+    } else {
+#endif
     setMatrix();
+#if TARGET_PC
+    }
+#endif
+#if TARGET_PC
+    if (coop_secondary &&
+        dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_SkipCreateAnimePlay))
+    {
+        // Co-op: skip secondary create-time animation playback to test shared J3DAnmTransform frame mutation.
+        coop_log_primary_state("skip-create-anime-play");
+    } else {
+#endif
     allAnimePlay();
+#if TARGET_PC
+    }
+#endif
+#if TARGET_PC
+    if (coop_secondary &&
+        dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_SkipCreateModelCalc))
+    {
+        // Co-op: skip secondary create-time model calc to test shared model/matrix state after animation playback was ruled out.
+        coop_log_primary_state("skip-create-model-calc");
+    } else {
+#endif
     mpLinkModel->calc();
+#if TARGET_PC
+    }
+#endif
+#if TARGET_PC
+    if (coop_secondary &&
+        dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_SkipFaceTextureAnime))
+    {
+        // Co-op: skip secondary face texture animation to test shared face/material animation state.
+        coop_log_primary_state("skip-face-texture-anime");
+    } else {
+#endif
     playFaceTextureAnime();
+#if TARGET_PC
+    }
+#endif
+#if TARGET_PC
+    coop_log_primary_state("after-anime-init");
+#endif
 
+#if TARGET_PC
+    if (coop_secondary &&
+        dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_SkipItemMatrix))
+    {
+        // Co-op: skip secondary item matrix setup to test equipment attachment/model state.
+        coop_log_primary_state("skip-item-matrix");
+    } else {
+#endif
     if (!checkWolf()) {
         setItemMatrix(0);
     } else {
         setWolfItemMatrix();
     }
+#if TARGET_PC
+    }
+#endif
 
     setBodyPartPos();
     setHangWaterY();
@@ -5081,7 +5292,18 @@ int daAlink_c::create() {
     mTgCyls[0].SetC(current.pos);
     field_0x3454 = field_0x3834.y;
     setAttentionPos();
+#if TARGET_PC
+    if (coop_secondary &&
+        dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_SkipSetItemActor))
+    {
+        // Co-op: skip secondary item actor setup to test item ownership side effects.
+        coop_log_primary_state("skip-set-item-actor");
+    } else {
+#endif
     setItemActor();
+#if TARGET_PC
+    }
+#endif
 
     if ((dComIfGs_getLastSceneMode() & 0x400000) && !checkWolf() && !checkNotHeavyBootsStage() &&
         !isHorseStart && !isEnteringLV7)
@@ -5100,11 +5322,22 @@ int daAlink_c::create() {
     }
 
     #if DEBUG
+#if TARGET_PC
+    // Co-op: avoid registering duplicate Link HIO entries for secondary prototypes.
+    if (!coop_secondary) {
+#endif
     // "Link"
     mpHIO->entryHIO("リンク");
     l_jumpTop = 0.0f;
+#if TARGET_PC
+    }
+#endif
     #endif
 
+#if TARGET_PC
+    // Co-op: primary-only companions and start-side effects should not duplicate for player 2.
+    if (!coop_secondary) {
+#endif
     fopAcM_create(fpcNm_MIDNA_e, midna_prm, &current.pos, fopAcM_GetRoomNo(this), &shape_angle, NULL, -1);
     checkSetNpcTks(&current.pos, fopAcM_GetRoomNo(this), 1);
 
@@ -5121,6 +5354,9 @@ int daAlink_c::create() {
             fopAcM_offSwitch(this, 0x6F);
         }
     }
+#if TARGET_PC
+    }
+#endif
 
     return cPhs_COMPLEATE_e;
 }
@@ -18928,7 +19164,19 @@ int daAlink_c::execute() {
 }
 
 static int daAlink_Execute(daAlink_c* i_this) {
-    return i_this->execute();
+#if TARGET_PC
+    if (dusk::coop::isSecondaryPlayerPrototype(i_this) &&
+        dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_SkipExecute))
+    {
+        // Co-op: full secondary ALINK ticking corrupts primary animation/state; keep this as a render/lifecycle probe.
+        return 1;
+    }
+#endif
+    int result = i_this->execute();
+#if TARGET_PC
+    coopLogPrimaryRuntimeState(i_this);
+#endif
+    return result;
 }
 
 void daAlink_c::setDrawHand() {
@@ -19852,15 +20100,38 @@ int daAlink_c::draw() {
 }
 
 static int daAlink_Draw(daAlink_c* i_this) {
+#if TARGET_PC
+    if (dusk::coop::isSecondaryPlayerPrototype(i_this) &&
+        dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_SkipDraw))
+    {
+        // Co-op: skip secondary ALINK drawing to test whether draw/model-calc state pins P1's visible animation.
+        return 1;
+    }
+#endif
     return i_this->draw();
 }
 
 daAlink_c::~daAlink_c() {
+#if TARGET_PC
+    const bool coop_secondary = dusk::coop::isSecondaryPlayerPrototype(this);
+    // Co-op: secondary prototypes should not clear primary player's global status flags.
+    if (!coop_secondary) {
+#endif
     dComIfGp_clearPlayerStatus0(0, ~0x400030);
     dComIfGp_clearPlayerStatus1(0, 0x7FB7B78);
+#if TARGET_PC
+    }
+#endif
 
     #if DEBUG
+#if TARGET_PC
+    // Co-op: secondary prototypes skip the matching debug HIO entry in create().
+    if (!coop_secondary) {
+#endif
     mpHIO->removeHIO();
+#if TARGET_PC
+    }
+#endif
     #endif
 
     mZ2Link.deleteKantera();
@@ -19892,11 +20163,19 @@ daAlink_c::~daAlink_c() {
     dKy_plight_cut(&mMagneBootsPlight);
 
     #if TARGET_PC
-    // Co-op: clear only the matching sidecar slot before vanilla clears player 0.
-    dusk::coop::unregisterPlayer(dusk::coop::PlayerSlot::Primary, this);
-    #endif
+    if (coop_secondary) {
+        // Co-op: secondary ALINK prototypes never own vanilla player 0 globals.
+        dusk::coop::unregisterPlayer(dusk::coop::PlayerSlot::Secondary, this);
+    } else {
+        // Co-op: clear only the matching sidecar slot before vanilla clears player 0.
+        dusk::coop::unregisterPlayer(dusk::coop::PlayerSlot::Primary, this);
+        dComIfGp_setPlayer(0, NULL);
+        dComIfGp_setLinkPlayer(NULL);
+    }
+#else
     dComIfGp_setPlayer(0, NULL);
     dComIfGp_setLinkPlayer(NULL);
+#endif
 }
 
 static int daAlink_Delete(daAlink_c* i_this) {

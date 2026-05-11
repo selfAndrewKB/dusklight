@@ -3,6 +3,7 @@
 #include "ImGuiMenuTools.hpp"
 #include "d/actor/d_a_alink.h"
 #include "d/d_com_inf_game.h"
+#include "dusk/coop/player_slots.h"
 #include "f_op/f_op_actor_mng.h"
 #include "SSystem/SComponent/c_sxyz.h"
 #include "SSystem/SComponent/c_xyz.h"
@@ -30,6 +31,21 @@ struct ActorSpawnerState {
 
 ActorSpawnerState s_state;
 
+void secondaryAlinkProbeCheckbox(const char* label, dusk::coop::SecondaryAlinkProbeFlag flag) {
+    unsigned int flags = dusk::coop::getSecondaryAlinkProbeFlags();
+    bool enabled = (flags & static_cast<unsigned int>(flag)) != 0;
+    if (!ImGui::Checkbox(label, &enabled)) {
+        return;
+    }
+
+    if (enabled) {
+        flags |= static_cast<unsigned int>(flag);
+    } else {
+        flags &= ~static_cast<unsigned int>(flag);
+    }
+    dusk::coop::setSecondaryAlinkProbeFlags(flags);
+}
+
 }  // namespace
 
 void ImGuiMenuTools::ShowActorSpawner() {
@@ -43,6 +59,75 @@ void ImGuiMenuTools::ShowActorSpawner() {
     }
 
     daAlink_c* player = (daAlink_c*)dComIfGp_getPlayer(0);
+
+    ImGui::SeparatorText("Co-op");
+    bool secondarySlotAvailable = dusk::coop::getPlayer(dusk::coop::PlayerSlot::Secondary) == nullptr;
+    bool canSpawnSecondary = player != nullptr && secondarySlotAvailable;
+    if (!canSpawnSecondary) {
+        ImGui::BeginDisabled();
+    }
+
+    if (ImGui::Button("Spawn Secondary Link Prototype", ImVec2(-1, 0))) {
+        cXyz pos = player->current.pos;
+        pos.x += 120.0f;
+        csXyz angle = player->shape_angle;
+
+        layer_class* savedLayer = fpcLy_CurrentLayer();
+        base_process_class* playScene = fpcM_SearchByName(fpcNm_PLAY_SCENE_e);
+        if (playScene != nullptr) {
+            fpcLy_SetCurrentLayer(&((process_node_class*)playScene)->layer);
+        }
+
+        // Co-op: debug-only spawn path exercises secondary ALINK without overwriting player 0.
+        s_state.lastResult = fopAcM_create(
+            fpcNm_ALINK_e,
+            fopAcM_GetParam(player),
+            &pos,
+            player->current.roomNo,
+            &angle,
+            nullptr,
+            (s8)dusk::coop::kSecondaryPlayerPrototypeArgument
+        );
+        s_state.lastAttempted = 1;
+        s_state.hasResult = true;
+
+        fpcLy_SetCurrentLayer(savedLayer);
+    }
+
+    if (!canSpawnSecondary) {
+        ImGui::EndDisabled();
+    }
+    if (player == nullptr) {
+        ImGui::TextDisabled("Player not available");
+    } else if (!secondarySlotAvailable) {
+        ImGui::TextDisabled("Secondary slot already occupied");
+    }
+
+    if (ImGui::TreeNode("Secondary ALINK probes")) {
+        if (ImGui::SmallButton("Default")) {
+            dusk::coop::setSecondaryAlinkProbeFlags(dusk::coop::kDefaultSecondaryAlinkProbeFlags);
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Clear")) {
+            dusk::coop::setSecondaryAlinkProbeFlags(0);
+        }
+
+        secondaryAlinkProbeCheckbox("Skip execute", dusk::coop::SecondaryAlinkProbe_SkipExecute);
+        secondaryAlinkProbeCheckbox("Skip draw", dusk::coop::SecondaryAlinkProbe_SkipDraw);
+        secondaryAlinkProbeCheckbox("Skip wait animation bind", dusk::coop::SecondaryAlinkProbe_SkipWaitAnimeBind);
+        secondaryAlinkProbeCheckbox("Skip start proc init", dusk::coop::SecondaryAlinkProbe_SkipStartProcInit);
+        secondaryAlinkProbeCheckbox("Skip set matrix", dusk::coop::SecondaryAlinkProbe_SkipSetMatrix);
+        secondaryAlinkProbeCheckbox("Skip create animation play", dusk::coop::SecondaryAlinkProbe_SkipCreateAnimePlay);
+        secondaryAlinkProbeCheckbox("Skip create model calc", dusk::coop::SecondaryAlinkProbe_SkipCreateModelCalc);
+        secondaryAlinkProbeCheckbox("Skip face texture animation", dusk::coop::SecondaryAlinkProbe_SkipFaceTextureAnime);
+        secondaryAlinkProbeCheckbox("Skip item matrix", dusk::coop::SecondaryAlinkProbe_SkipItemMatrix);
+        secondaryAlinkProbeCheckbox("Skip item actor setup", dusk::coop::SecondaryAlinkProbe_SkipSetItemActor);
+        secondaryAlinkProbeCheckbox(
+            "Restore P1 model data owner",
+            dusk::coop::SecondaryAlinkProbe_RestorePrimaryModelDataOwner
+        );
+        ImGui::TreePop();
+    }
 
     ImGui::SeparatorText("Actor");
     ImGui::InputInt("Actor ID", &s_state.actorId);

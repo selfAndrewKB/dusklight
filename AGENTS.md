@@ -13,9 +13,13 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
 - `README.md`: project overview, supported game dumps, source-build entry point.
 - `docs/building.md`: prerequisites, CMake presets, build commands, and run command shape. Read before configuring, building, or validating.
 - `docs/code-conventions.md`: Dusk-specific contribution rules. Read before editing original game/decomp code, especially for `#if TARGET_PC` and Dusk-modified code expectations.
+- `docs/codex-hooks.md`: repo-local Codex hooks and guardrails for session context, broad staging, destructive commands, and co-op why-comments.
 - `docs/co-op-roadmap.md`: co-op roadmap, current code evidence, singleton-touchpoint counts, risks, and first recommended implementation plans.
-- `docs/coop-player-slots-plan.md`: active first co-op milestone: no-behavior-change player slot registry.
-- `docs/coop-input-snapshot-plan.md`: active second co-op milestone: slot-aware input snapshot while preserving primary-player `PAD_1` behavior.
+- `docs/coop-player-slots-plan.md`: completed first co-op milestone: no-behavior-change player slot registry.
+- `docs/coop-input-snapshot-plan.md`: completed second co-op milestone: slot-aware input snapshot while preserving primary-player `PAD_1` behavior.
+- `docs/coop-secondary-player-prototype-plan.md`: diagnostic third co-op milestone: secondary ALINK prototype evidence.
+- `docs/coop-alink-duplication-audit-plan.md`: current next co-op plan: audit ALINK singleton/shared-state hazards before choosing proxy fallback or reattempting duplication.
+- `.codex/config.toml`: Codex hook wiring. Keep hook behavior narrow and documented in `docs/codex-hooks.md`.
 - `files.cmake`: explicit source-file list. Update it when adding C++ source/header files that must be built.
 
 For co-op work, create one focused, self-contained plan in `docs/`, such as `docs/coop-player-slots-plan.md`. Do not put audit details, singleton counts, or long design notes in this file; put them in the roadmap or the active plan.

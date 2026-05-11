@@ -1,6 +1,7 @@
 #include "dusk/coop/player_slots.h"
 
 #include "dusk/logging.h"
+#include "f_op/f_op_actor.h"
 #include "m_Do/m_Do_controller_pad.h"
 
 #include <cstdint>
@@ -12,6 +13,9 @@ aurora::Module CoopLog("dusk::coop");
 
 // Co-op: records actor identity only. Actor lifetime stays owned by the game.
 fopAc_ac_c* s_players[kPlayerSlotCount] = {};
+
+// Co-op: default to the current safe-ish secondary ALINK harness while probes remain explicit in the UI.
+unsigned int s_secondaryAlinkProbeFlags = kDefaultSecondaryAlinkProbeFlags;
 
 constexpr bool isValidSlot(PlayerSlot slot) {
     return slot == PlayerSlot::Primary || slot == PlayerSlot::Secondary;
@@ -78,6 +82,10 @@ bool isPrimaryPlayer(const fopAc_ac_c* actor) {
     return actor != nullptr && actor == getPrimaryPlayer();
 }
 
+bool isSecondaryPlayerPrototype(const fopAc_ac_c* actor) {
+    return actor != nullptr && actor->argument == kSecondaryPlayerPrototypeArgument;
+}
+
 PlayerSlot getSlotForActor(const fopAc_ac_c* actor) {
     if (actor == nullptr) {
         return PlayerSlot::Invalid;
@@ -101,6 +109,18 @@ int getPadForSlot(PlayerSlot slot) {
     default:
         return PAD_1;
     }
+}
+
+unsigned int getSecondaryAlinkProbeFlags() {
+    return s_secondaryAlinkProbeFlags;
+}
+
+void setSecondaryAlinkProbeFlags(unsigned int flags) {
+    s_secondaryAlinkProbeFlags = flags;
+}
+
+bool hasSecondaryAlinkProbeFlag(SecondaryAlinkProbeFlag flag) {
+    return (s_secondaryAlinkProbeFlags & static_cast<unsigned int>(flag)) != 0;
 }
 
 }  // namespace dusk::coop
