@@ -116,6 +116,10 @@ unsigned int getSecondaryAlinkProbeFlags() {
 }
 
 void setSecondaryAlinkProbeFlags(unsigned int flags) {
+    if ((flags & SecondaryAlinkProbe_SkipCreateAnimePlay) != 0) {
+        // Co-op: running secondary model calc without the matching animation playback hit a zero-quaternion assert.
+        flags |= SecondaryAlinkProbe_SkipCreateModelCalc;
+    }
     s_secondaryAlinkProbeFlags = flags;
 }
 

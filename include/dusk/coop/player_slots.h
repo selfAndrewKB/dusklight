@@ -24,6 +24,8 @@ enum SecondaryAlinkProbeFlag : unsigned int {
     SecondaryAlinkProbe_SkipItemMatrix = 1u << 8,
     SecondaryAlinkProbe_SkipSetItemActor = 1u << 9,
     SecondaryAlinkProbe_RestorePrimaryModelDataOwner = 1u << 10,
+    SecondaryAlinkProbe_ScopedDrawModelDataOwner = 1u << 11,
+    SecondaryAlinkProbe_ScopedExecuteModelDataOwner = 1u << 12,
 };
 
 constexpr unsigned int kDefaultSecondaryAlinkProbeFlags =
@@ -31,7 +33,9 @@ constexpr unsigned int kDefaultSecondaryAlinkProbeFlags =
     SecondaryAlinkProbe_SkipDraw |
     SecondaryAlinkProbe_SkipCreateAnimePlay |
     SecondaryAlinkProbe_SkipCreateModelCalc |
-    SecondaryAlinkProbe_RestorePrimaryModelDataOwner;
+    SecondaryAlinkProbe_RestorePrimaryModelDataOwner |
+    SecondaryAlinkProbe_ScopedDrawModelDataOwner |
+    SecondaryAlinkProbe_ScopedExecuteModelDataOwner;
 
 constexpr int kPlayerSlotCount = 2;
 constexpr int kSecondaryPlayerPrototypeArgument = -2;

@@ -242,8 +242,10 @@ Available toggles:
 - Skip secondary `setItemMatrix()` / `setWolfItemMatrix()`.
 - Skip secondary `setItemActor()`.
 - Restore player 1's shared ALINK model-data owner after secondary `playerInit()` / `changeLink()`.
+- Scope shared ALINK model-data ownership to secondary only during secondary draw, then restore player 1 immediately afterward.
+- Scope shared ALINK model-data ownership to secondary only during secondary execute, then restore player 1 immediately afterward.
 
-Current default bits preserve the latest cautious harness: skip secondary `execute()`, `draw()`, create-time `allAnimePlay()`, create-time `mpLinkModel->calc()`, and restore player 1's shared model-data owner after secondary initialization.
+Current default bits preserve the latest cautious harness: skip secondary `execute()`, `draw()`, create-time `allAnimePlay()`, create-time `mpLinkModel->calc()`, restore player 1's shared model-data owner after secondary initialization, and keep scoped draw/execute ownership ready for deliberate follow-up tests.
 
 The latest manual toggle sweep ruled out the remaining late create-time candidates. With the cautious default bits still enabled, skipping secondary face texture animation, item matrix setup, item actor setup, set matrix, and wait animation binding did not fix player 1's visible animation lock. Skipping `setStartProcInit()` crashed and is treated as structural, not an optional side effect.
 
@@ -265,6 +267,71 @@ Expected manual check:
 4. The secondary actor is expected to be invisible or non-rendering for this diagnostic.
 5. Move, stop, attack, and shield/block with player 1.
 6. Confirm player 1's visible animation remains correct with `Restore P1 model data owner` checked.
+
+First visible-P2 draw test result:
+
+- User tested on 2026-05-11 with `Skip draw` unchecked while the cautious defaults still skipped secondary create-time `allAnimePlay()` and `mpLinkModel->calc()`.
+- Player 2 remained invisible, but secondary `draw()` returned `1`.
+- The `draw-owner` logs showed the scoped owner swap working: before secondary install, shared body model data still pointed at player 1's matrix calculators; after secondary install it pointed at player 2's calculators; after draw, it was restored to player 1.
+- This means the current invisibility is probably caused by leaving secondary create-time animation/model setup skipped, not by the draw wrapper failing to run.
+
+Second visible-P2 draw test result:
+
+- User tested with `Skip draw` unchecked and `Skip create model calc` unchecked while `Skip create animation play` remained checked.
+- Player 2 remained invisible.
+- MSVC debug asserted in `J3DModelData::calc()` through `MTXQuat(): zero-value quaternion`. Pressing Ignore allowed the game to continue.
+- Treat that flag combination as invalid: secondary model calc needs the matching create-time animation playback. The probe flags now normalize so `Skip create animation play` also implies `Skip create model calc`; the UI also clears `Skip create animation play` when `Skip create model calc` is unchecked.
+
+Third visible-P2 draw test result:
+
+- User tested with both create-time animation playback and create-time model calc restored.
+- Player 2 still did not appear, and MSVC debug again asserted in `MTXQuat(): zero-value quaternion`.
+- The create log reached `after-anime-init`, but there were no useful follow-up `draw-test` lines in the supplied excerpt, so the failure is still happening during or immediately around secondary create-time setup rather than being explained by the draw wrapper alone.
+- Code review found a concrete ordering problem: the earlier mitigation restores player 1's shared `J3DModelData` calculator ownership immediately after secondary `playerInit()`, but secondary create later calls `allAnimePlay()` and `mpLinkModel->calc()`. Those calls therefore run while shared model data points back at player 1.
+- The current patch scopes shared model-data ownership back to player 2 only for that late create-time animation/model setup, then restores player 1 immediately afterward. This mirrors the proven draw-time ownership discipline.
+
+Fourth visible-P2 draw test result:
+
+- User retested with `Skip create model calc` and `Skip draw` off, with the create-time and draw-time ownership scopes in place.
+- Player 2 visibly appeared.
+- The create log showed:
+  - `secondary create installed secondary model data owner for anime/model setup`
+  - `secondary create restored primary model data owner after anime/model setup`
+- The draw logs again showed the expected P1 -> P2 -> P1 matrix-calculator ownership handoff around secondary draw.
+- Player 1 continued through normal-looking idle, walk/run, attack, and other proc transitions afterward. The supplied runtime logs do not show the earlier visible-animation lock returning.
+- The user noted the immediately prior invisible/asserting test may not have been rebuilt correctly, so treat the successful rebuilt run as the current authority.
+
+Current visible-P2 conclusion:
+
+- A secondary ALINK can now create and render visibly without reintroducing the original player 1 animation lock, as long as shared `J3DModelData` matrix-calculator ownership is scoped:
+  - restore player 1 after secondary `playerInit()` / `changeLink()`;
+  - temporarily give ownership back to player 2 for secondary create-time animation/model setup;
+  - temporarily give ownership back to player 2 for secondary draw, then restore player 1 immediately afterward.
+- The next audit should move from "make P2 visible" to "which minimal secondary execution/input pieces can be reintroduced without breaking that ownership discipline?"
+
+## Current Execute Probe
+
+The next diagnostic keeps `Skip execute` checked by default, but adds a separate `Scoped execute model data owner` toggle. When `Skip execute` is unchecked with that scoped-owner toggle still enabled, secondary ALINK `execute()` runs once per frame under temporary player 2 model-data ownership, then restores player 1 immediately afterward.
+
+Searchable logs:
+
+- `secondary execute before ...`
+- `secondary execute after ...`
+
+These are sampled like the existing primary runtime logs: they emit on secondary proc/animation pointer changes and every 30 samples otherwise. The intent is to answer the next narrow question without opening a broad control path yet:
+
+- Does secondary ALINK advance its own runtime state at all?
+- Does its base animation frame/rate move?
+- Does player 1 remain visually and behaviorally clean once secondary execute is admitted under explicit ownership scoping?
+
+Manual test sequence:
+
+1. Start from the current visible-P2 harness.
+2. Spawn the secondary prototype and confirm both actors are visible and player 1 still behaves normally.
+3. Leave `Scoped execute model data owner` checked.
+4. Uncheck `Skip execute`.
+5. Observe whether player 2 remains stable/visible and whether player 1 regresses.
+6. Capture `secondary execute` and `primary runtime` logs together so proc/animation movement can be compared directly.
 
 ## Non-Goals
 

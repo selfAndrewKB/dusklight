@@ -43,6 +43,13 @@ void secondaryAlinkProbeCheckbox(const char* label, dusk::coop::SecondaryAlinkPr
     } else {
         flags &= ~static_cast<unsigned int>(flag);
     }
+    if (flag == dusk::coop::SecondaryAlinkProbe_SkipCreateModelCalc && !enabled) {
+        // Co-op: this test combo needs animation playback restored before model calc can safely run.
+        flags &= ~static_cast<unsigned int>(dusk::coop::SecondaryAlinkProbe_SkipCreateAnimePlay);
+    } else if (flag == dusk::coop::SecondaryAlinkProbe_SkipCreateAnimePlay && enabled) {
+        // Co-op: skipping animation playback leaves secondary model calc with invalid startup pose data.
+        flags |= static_cast<unsigned int>(dusk::coop::SecondaryAlinkProbe_SkipCreateModelCalc);
+    }
     dusk::coop::setSecondaryAlinkProbeFlags(flags);
 }
 
@@ -125,6 +132,14 @@ void ImGuiMenuTools::ShowActorSpawner() {
         secondaryAlinkProbeCheckbox(
             "Restore P1 model data owner",
             dusk::coop::SecondaryAlinkProbe_RestorePrimaryModelDataOwner
+        );
+        secondaryAlinkProbeCheckbox(
+            "Scoped draw model data owner",
+            dusk::coop::SecondaryAlinkProbe_ScopedDrawModelDataOwner
+        );
+        secondaryAlinkProbeCheckbox(
+            "Scoped execute model data owner",
+            dusk::coop::SecondaryAlinkProbe_ScopedExecuteModelDataOwner
         );
         ImGui::TreePop();
     }

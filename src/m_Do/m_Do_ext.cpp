@@ -22,6 +22,7 @@
 #include "m_Do/m_Do_ext.h"
 #include "m_Do/m_Do_main.h"
 #include "m_Do/m_Do_mtx.h"
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include "dusk/logging.h"
@@ -30,6 +31,12 @@
 u8 mDoExt::CurrentHeapAdjustVerbose;
 u8 mDoExt::HeapAdjustVerbose;
 u8 mDoExt::HeapAdjustQuiet;
+
+#if TARGET_PC
+namespace {
+aurora::Module CoopMtxLog("dusk::coop.mtx");
+}
+#endif
 
 static void mDoExt_setJ3DData(Mtx mtx, const J3DTransformInfo* transformInfo, u16 param_2) {
     bool local_28;
@@ -1195,6 +1202,17 @@ void mDoExt_MtxCalcAnmBlendTblOld::calc() {
     } else if (jntNo == modelData->getJointNum() - 1) {
         mOldFrame->onOldFrameFlg();
     }
+#if TARGET_PC
+    if (quat3.x == 0.0f && quat3.y == 0.0f && quat3.z == 0.0f && quat3.w == 0.0f) {
+        // Co-op: identify zero-quaternion ALINK prototype failures before MTXQuat asserts.
+        CoopMtxLog.debug(
+            "anm-blend-old zero quat modelUser 0x{:x} joint {} oldFlg {} oldRate {:.3f} start {} end {}",
+            j3dSys.getModel()->getUserArea(), static_cast<unsigned int>(jntNo),
+            static_cast<unsigned int>(mOldFrame->getOldFrameFlg()), mOldFrame->getOldFrameRate(),
+            static_cast<unsigned int>(mOldFrame->getOldFrameStartJoint()),
+            static_cast<unsigned int>(mOldFrame->getOldFrameEndJoint()));
+    }
+#endif
     Mtx mtx;
     mDoMtx_quat(mtx, &quat3);
     mDoExt_setJ3DData(mtx, &info1, jntNo);

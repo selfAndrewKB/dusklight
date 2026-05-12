@@ -61,6 +61,7 @@ Do not resize `dComIfG_play_c` or mass-replace player singleton helpers in this 
 13. Temporarily skip only secondary create-time `allAnimePlay()`. If this fixes player 1's visible animation, the next audit target is shared `J3DAnmTransform` frame mutation.
 14. Temporarily skip secondary create-time `mpLinkModel->calc()`. If this fixes player 1's visible animation, the next audit target is shared model/matrix state during secondary model calculation.
 15. Replace one-off rebuild probes with Actor Spawner runtime toggles so combinations can be tested without rebuilding after every skipped call.
+16. Add a scoped secondary `execute()` probe that temporarily installs player 2's shared model-data ownership only while the execute call runs, restores player 1 immediately afterward, and samples secondary proc/animation state for comparison with the existing primary runtime logs.
 
 ## Progress
 
@@ -87,6 +88,7 @@ Do not resize `dComIfG_play_c` or mass-replace player singleton helpers in this 
 - [x] Build and manually attempt the create-time `allAnimePlay()`-skipped secondary ALINK diagnostic.
 - [x] Build and manually attempt the create-time `mpLinkModel->calc()`-skipped secondary ALINK diagnostic.
 - [ ] Build and manually attempt the runtime-toggle secondary ALINK diagnostics.
+- [ ] Build and manually attempt the scoped secondary execute diagnostic.
 
 ## Decisions
 
@@ -168,6 +170,11 @@ Validation performed:
 - User built and spawned the prototype with `Restore P1 model data owner` enabled in the default probe set.
 - Player 1's animation lock was fixed.
 - Interpretation: secondary `changeLink()` / `changeModelDataDirect()` was installing secondary-owned matrix calculators onto shared Link model data. Restoring player 1 ownership after secondary initialization is the first confirmed mitigation for ALINK duplication.
+- User rebuilt and spawned the visible-secondary prototype with create-time model calc and draw enabled, plus the scoped ownership handoffs around secondary create-time animation/model setup and secondary draw.
+- Player 2 visibly appeared. The logs showed the secondary create-time owner install/restore pair and the draw-time P1 -> P2 -> P1 owner swap behaving as intended.
+- Player 1 continued through normal-looking idle, movement, and attack-related proc transitions afterward, with no report that the earlier visible-animation lock returned.
+- Interpretation: visible secondary ALINK rendering is now proven viable under explicit shared `J3DModelData` ownership scoping. The next question is not whether a second ALINK can render, but which minimal secondary execution and input paths can be restored without disturbing the primary actor or reintroducing shared-state corruption.
+- The current next probe keeps `Skip execute` enabled by default, but adds `Scoped execute model data owner` so a deliberate manual test can re-enable secondary runtime while preserving the proven ownership discipline and producing paired `secondary execute` / `primary runtime` evidence.
 
 ## Recovery Notes
 

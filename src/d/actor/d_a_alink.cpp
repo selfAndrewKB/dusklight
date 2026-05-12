@@ -104,6 +104,95 @@ void coopLogPrimaryRuntimeState(daAlink_c* player) {
         player->mStickValue, player->mUnderFrameCtrl[0].getFrame(),
         player->mUnderFrameCtrl[0].getRate(), anm, player->attention_info.flags);
 }
+
+void coopLogSecondaryExecuteState(const char* phase, daAlink_c* player) {
+    static u16 s_prev_proc = daAlink_c::PROC_MAX;
+    static uintptr_t s_prev_anm = 0;
+    static int s_sample = 0;
+
+    if (!dusk::coop::isSecondaryPlayerPrototype(player)) {
+        s_prev_proc = daAlink_c::PROC_MAX;
+        s_prev_anm = 0;
+        s_sample = 0;
+        return;
+    }
+
+    const uintptr_t anm = reinterpret_cast<uintptr_t>(player->mNowAnmPackUnder[0].getAnmTransform());
+    const bool changed = player->mProcID != s_prev_proc || anm != s_prev_anm;
+    s_sample++;
+    if (!changed && (s_sample % 30) != 0) {
+        return;
+    }
+
+    s_prev_proc = player->mProcID;
+    s_prev_anm = anm;
+
+    // Co-op: sample P2 only while the execute probe is live, to catch the first runtime ownership regression.
+    CoopAlinkLog.debug(
+        "secondary execute {} actor 0x{:x} proc {} speed {:.3f}/{:.3f} stick {:.3f} "
+        "under frame {:.3f} rate {:.3f} anm 0x{:x} flags 0x{:x}",
+        phase, reinterpret_cast<uintptr_t>(player), player->mProcID, player->speedF, player->mNormalSpeed,
+        player->mStickValue, player->mUnderFrameCtrl[0].getFrame(),
+        player->mUnderFrameCtrl[0].getRate(), anm, player->attention_info.flags);
+}
+
+void coopInstallModelDataOwner(daAlink_c* player) {
+    if (player->checkWolf()) {
+        player->changeModelDataDirectWolf(0);
+    } else {
+        player->changeModelDataDirect(0);
+    }
+}
+
+void coopLogModelDataOwner(const char* phase, daAlink_c* player) {
+    if (player == nullptr || player->mpLinkModel == nullptr) {
+        CoopAlinkLog.debug("draw-owner {} actor empty", phase);
+        return;
+    }
+
+    J3DModelData* bodyData = player->mpLinkModel->getModelData();
+    J3DMtxCalc* mtx0 = nullptr;
+    J3DMtxCalc* mtx1 = nullptr;
+    J3DMtxCalc* mtx2 = nullptr;
+    uintptr_t cb0 = 0;
+    uintptr_t cb1 = 0;
+    uintptr_t cb2 = 0;
+    u16 j0 = 0;
+    u16 j1 = player->checkWolf() ? 3 : 1;
+    u16 j2 = player->checkWolf() ? 15 : 16;
+
+    if (bodyData != nullptr) {
+        J3DJoint* joint0 = bodyData->getJointNodePointer(j0);
+        J3DJoint* joint1 = bodyData->getJointNodePointer(j1);
+        J3DJoint* joint2 = bodyData->getJointNodePointer(j2);
+        if (joint0 != nullptr) {
+            mtx0 = joint0->getMtxCalc();
+            cb0 = reinterpret_cast<uintptr_t>(joint0->getCallBack());
+        }
+        if (joint1 != nullptr) {
+            mtx1 = joint1->getMtxCalc();
+            cb1 = reinterpret_cast<uintptr_t>(joint1->getCallBack());
+        }
+        if (joint2 != nullptr) {
+            mtx2 = joint2->getMtxCalc();
+            cb2 = reinterpret_cast<uintptr_t>(joint2->getCallBack());
+        }
+    }
+
+    J3DModelData* faceData = player->mpLinkFaceModel != nullptr ? player->mpLinkFaceModel->getModelData() : nullptr;
+    J3DModelData* hatData = player->mpLinkHatModel != nullptr ? player->mpLinkHatModel->getModelData() : nullptr;
+    CoopAlinkLog.debug(
+        "draw-owner {} actor 0x{:x} slot {} bodyData 0x{:x} faceData 0x{:x} hatData 0x{:x} "
+        "modelUser 0x{:x} ownerUnder 0x{:x} ownerUpper 0x{:x} joints {}/{}/{} mtx 0x{:x}/0x{:x}/0x{:x} "
+        "cb 0x{:x}/0x{:x}/0x{:x}",
+        phase, reinterpret_cast<uintptr_t>(player),
+        static_cast<int>(dusk::coop::getSlotForActor(player)), reinterpret_cast<uintptr_t>(bodyData),
+        reinterpret_cast<uintptr_t>(faceData), reinterpret_cast<uintptr_t>(hatData),
+        player->mpLinkModel->getUserArea(), reinterpret_cast<uintptr_t>(player->field_0x1f20),
+        reinterpret_cast<uintptr_t>(player->field_0x1f24), j0, j1, j2,
+        reinterpret_cast<uintptr_t>(mtx0), reinterpret_cast<uintptr_t>(mtx1), reinterpret_cast<uintptr_t>(mtx2),
+        cb0, cb1, cb2);
+}
 }
 #endif
 
@@ -2348,6 +2437,18 @@ int daAlink_c::jointControll(int i_jointNo) {
         } else {
             spC = field_0x2060->getOldFrameQuaternion(i_jointNo);
         }
+
+#if TARGET_PC
+        if (dusk::coop::isSecondaryPlayerPrototype(this) &&
+            spC->x == 0.0f && spC->y == 0.0f && spC->z == 0.0f && spC->w == 0.0f)
+        {
+            // Co-op: distinguish secondary ALINK joint-callback zero quats from matrix-calculator failures.
+            CoopAlinkLog.debug(
+                "joint-control zero quat actor 0x{:x} joint {} flags {} oldFlg {} oldRate {:.3f}",
+                reinterpret_cast<uintptr_t>(this), i_jointNo, var_r27,
+                field_0x2060->getOldFrameFlg(), field_0x2060->getOldFrameRate());
+        }
+#endif
 
         mDoMtx_stack_c::transS(rootTrans.mTranslate.x, rootTrans.mTranslate.y, rootTrans.mTranslate.z);
         mDoMtx_stack_c::quatM(&sp20);
@@ -5103,11 +5204,7 @@ int daAlink_c::create() {
             daAlink_c* primary = static_cast<daAlink_c*>(dusk::coop::getPrimaryPlayer());
             if (primary != NULL) {
                 // Co-op: ALINK writes animation matrix calculators onto shared J3DModelData; restore P1 ownership after P2's changeLink().
-                if (primary->checkWolf()) {
-                    primary->changeModelDataDirectWolf(0);
-                } else {
-                    primary->changeModelDataDirect(0);
-                }
+                coopInstallModelDataOwner(primary);
                 CoopAlinkLog.debug("secondary create restored primary model data owner p1 0x{:x}",
                                    reinterpret_cast<uintptr_t>(primary));
             }
@@ -5230,6 +5327,19 @@ int daAlink_c::create() {
     }
 #endif
 #if TARGET_PC
+    daAlink_c* coop_create_anim_primary = NULL;
+    if (coop_secondary &&
+        dusk::coop::hasSecondaryAlinkProbeFlag(
+            dusk::coop::SecondaryAlinkProbe_RestorePrimaryModelDataOwner))
+    {
+        coop_create_anim_primary = static_cast<daAlink_c*>(dusk::coop::getPrimaryPlayer());
+        // Co-op: P2's startup animation/model calc must use P2's shared model-data calculators before P1 is restored.
+        coopInstallModelDataOwner(this);
+        CoopAlinkLog.debug("secondary create installed secondary model data owner for anime/model setup actor 0x{:x}",
+                           reinterpret_cast<uintptr_t>(this));
+    }
+#endif
+#if TARGET_PC
     if (coop_secondary &&
         dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_SkipCreateAnimePlay))
     {
@@ -5251,6 +5361,12 @@ int daAlink_c::create() {
 #endif
     mpLinkModel->calc();
 #if TARGET_PC
+    }
+    if (coop_create_anim_primary != NULL) {
+        // Co-op: return shared ALINK body model data to P1 immediately after P2 startup animation/model setup.
+        coopInstallModelDataOwner(coop_create_anim_primary);
+        CoopAlinkLog.debug("secondary create restored primary model data owner after anime/model setup p1 0x{:x}",
+                           reinterpret_cast<uintptr_t>(coop_create_anim_primary));
     }
 #endif
 #if TARGET_PC
@@ -19171,6 +19287,22 @@ static int daAlink_Execute(daAlink_c* i_this) {
         // Co-op: full secondary ALINK ticking corrupts primary animation/state; keep this as a render/lifecycle probe.
         return 1;
     }
+
+    if (dusk::coop::isSecondaryPlayerPrototype(i_this) &&
+        dusk::coop::hasSecondaryAlinkProbeFlag(
+            dusk::coop::SecondaryAlinkProbe_ScopedExecuteModelDataOwner))
+    {
+        daAlink_c* primary = static_cast<daAlink_c*>(dusk::coop::getPrimaryPlayer());
+        coopLogSecondaryExecuteState("before", i_this);
+        coopInstallModelDataOwner(i_this);
+        const int result = i_this->execute();
+        coopLogSecondaryExecuteState("after", i_this);
+        if (primary != nullptr) {
+            // Co-op: secondary execute touches shared Link model data, so return ownership to P1 immediately.
+            coopInstallModelDataOwner(primary);
+        }
+        return result;
+    }
 #endif
     int result = i_this->execute();
 #if TARGET_PC
@@ -20106,6 +20238,45 @@ static int daAlink_Draw(daAlink_c* i_this) {
     {
         // Co-op: skip secondary ALINK drawing to test whether draw/model-calc state pins P1's visible animation.
         return 1;
+    }
+    if (dusk::coop::isSecondaryPlayerPrototype(i_this) &&
+        dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_ScopedDrawModelDataOwner))
+    {
+        static daAlink_c* s_loggedSecondary = nullptr;
+        static int s_loggedDraws = 0;
+        if (s_loggedSecondary != i_this) {
+            s_loggedSecondary = i_this;
+            s_loggedDraws = 0;
+        }
+        const bool shouldLog = s_loggedDraws < 3;
+        s_loggedDraws++;
+
+        daAlink_c* primary = static_cast<daAlink_c*>(dusk::coop::getPrimaryPlayer());
+        // Co-op: shared J3DModelData can only point at one ALINK's matrix calculators at a time; scope P2 ownership to P2 draw.
+        if (shouldLog) {
+            CoopAlinkLog.debug("draw-test begin secondary 0x{:x} primary 0x{:x}",
+                               reinterpret_cast<uintptr_t>(i_this), reinterpret_cast<uintptr_t>(primary));
+            coopLogModelDataOwner("before-secondary-install:p1", primary);
+            coopLogModelDataOwner("before-secondary-install:p2", i_this);
+        }
+        coopInstallModelDataOwner(i_this);
+        if (shouldLog) {
+            coopLogModelDataOwner("after-secondary-install:p2", i_this);
+        }
+        int result = i_this->draw();
+        if (shouldLog) {
+            coopLogModelDataOwner("after-secondary-draw:p2", i_this);
+        }
+        if (primary != nullptr) {
+            coopInstallModelDataOwner(primary);
+            if (shouldLog) {
+                coopLogModelDataOwner("after-primary-restore:p1", primary);
+            }
+        }
+        if (shouldLog) {
+            CoopAlinkLog.debug("draw-test end secondary 0x{:x} result {}", reinterpret_cast<uintptr_t>(i_this), result);
+        }
+        return result;
     }
 #endif
     return i_this->draw();
