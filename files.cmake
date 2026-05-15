@@ -1415,10 +1415,12 @@ set(DUSK_FILES
         include/dusk/config.hpp
         include/dusk/coop/input.h
         include/dusk/coop/player_slots.h
+        include/dusk/diagnostics.h
         include/dusk/dvd_asset.hpp
         include/dusk/scope_guard.hpp
         src/dusk/coop/player_slots.cpp
         src/dusk/coop/input.cpp
+        src/dusk/diagnostics.cpp
         src/dusk/dvd_asset.cpp
         src/d/actor/d_a_alink_dusk.cpp
         src/dusk/asserts.cpp

@@ -4,6 +4,8 @@
 #include "d/actor/d_a_alink.h"
 #include "d/d_com_inf_game.h"
 #include "dusk/coop/player_slots.h"
+#include "dusk/diagnostics.h"
+#include "dusk/io.hpp"
 #include "f_op/f_op_actor_mng.h"
 #include "SSystem/SComponent/c_sxyz.h"
 #include "SSystem/SComponent/c_xyz.h"
@@ -108,6 +110,18 @@ void ImGuiMenuTools::ShowActorSpawner() {
         ImGui::TextDisabled("Player not available");
     } else if (!secondarySlotAvailable) {
         ImGui::TextDisabled("Secondary slot already occupied");
+    }
+
+    bool diagnosticsEnabled = dusk::diagnostics::isSecondaryAlinkActionMirrorProfileEnabled();
+    if (ImGui::Checkbox("Record action mirror diagnostics", &diagnosticsEnabled)) {
+        dusk::diagnostics::setSecondaryAlinkActionMirrorProfileEnabled(diagnosticsEnabled);
+    }
+    if (diagnosticsEnabled) {
+        if (ImGui::SmallButton("Flush diagnostics")) {
+            dusk::diagnostics::flush("manual-ui");
+        }
+        ImGui::TextWrapped("Output: %s",
+            dusk::io::fs_path_to_string(dusk::diagnostics::getOutputPath()).c_str());
     }
 
     if (ImGui::TreeNode("Secondary ALINK probes")) {

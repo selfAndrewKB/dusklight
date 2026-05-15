@@ -54,6 +54,7 @@
 #if TARGET_PC
 #include "dusk/coop/input.h"
 #include "dusk/coop/player_slots.h"
+#include "dusk/diagnostics.h"
 #include "dusk/logging.h"
 #endif
 #include "dusk/frame_interpolation.h"
@@ -134,6 +135,92 @@ void coopLogSecondaryExecuteState(const char* phase, daAlink_c* player) {
         phase, reinterpret_cast<uintptr_t>(player), player->mProcID, player->speedF, player->mNormalSpeed,
         player->mStickValue, player->mUnderFrameCtrl[0].getFrame(),
         player->mUnderFrameCtrl[0].getRate(), anm, player->attention_info.flags);
+}
+
+void coopLogSecondaryActionMirrorState(const char* phase, daAlink_c* player) {
+    static u32 s_prev_mask = 0xffffffff;
+    static uintptr_t s_prev_target = UINTPTR_MAX;
+    static u8 s_prev_r_status = 0xff;
+
+    if (!dusk::coop::isSecondaryPlayerPrototype(player)) {
+        s_prev_mask = 0xffffffff;
+        s_prev_target = UINTPTR_MAX;
+        s_prev_r_status = 0xff;
+        return;
+    }
+
+    const dusk::coop::PlayerInputState p1_input = dusk::coop::readLocalInput(dusk::coop::PlayerSlot::Primary);
+    const dusk::coop::PlayerInputState p2_input = dusk::coop::readLocalInput(dusk::coop::PlayerSlot::Secondary);
+    const uintptr_t target = reinterpret_cast<uintptr_t>(player->mTargetedActor);
+    const u8 r_status = dComIfGp_getRStatus();
+    const u8 btn_r = static_cast<u8>(daAlink_c::BTN_R);
+    const bool p1_hold_r_button = (p1_input.holdButtons & PAD_TRIGGER_R) != 0;
+    const bool p1_hold_l_button = (p1_input.holdButtons & PAD_TRIGGER_L) != 0;
+    const bool p1_hold_z_button = (p1_input.holdButtons & PAD_TRIGGER_Z) != 0;
+    const bool p2_hold_r_button = (p2_input.holdButtons & PAD_TRIGGER_R) != 0;
+    const bool p2_hold_l_button = (p2_input.holdButtons & PAD_TRIGGER_L) != 0;
+    const bool p2_hold_z_button = (p2_input.holdButtons & PAD_TRIGGER_Z) != 0;
+    u32 mask = 0;
+    mask |= player->checkInputOnR() ? 1u << 0 : 0;
+    mask |= player->checkAttentionLock() ? 1u << 1 : 0;
+    mask |= (player->mItemButton & btn_r) != 0 ? 1u << 2 : 0;
+    mask |= (player->mItemTrigger & btn_r) != 0 ? 1u << 3 : 0;
+    mask |= p1_input.holdLockR != 0 ? 1u << 4 : 0;
+    mask |= p1_input.triggerLockR != 0 ? 1u << 5 : 0;
+    mask |= p2_input.holdLockR != 0 ? 1u << 6 : 0;
+    mask |= p2_input.triggerLockR != 0 ? 1u << 7 : 0;
+    mask |= p1_hold_r_button ? 1u << 8 : 0;
+    mask |= p1_hold_l_button ? 1u << 9 : 0;
+    mask |= p1_hold_z_button ? 1u << 10 : 0;
+    mask |= p2_hold_r_button ? 1u << 11 : 0;
+    mask |= p2_hold_l_button ? 1u << 12 : 0;
+    mask |= p2_hold_z_button ? 1u << 13 : 0;
+
+    if (mask == s_prev_mask && target == s_prev_target && r_status == s_prev_r_status) {
+        return;
+    }
+
+    s_prev_mask = mask;
+    s_prev_target = target;
+    s_prev_r_status = r_status;
+
+    // Co-op: compare raw P1/P2 input to P2's derived R/attention state to locate target/shield mirroring.
+    CoopAlinkLog.debug(
+        "secondary action-mirror {} actor 0x{:x} proc {} inputR {} atnLock {} target 0x{:x} "
+        "itemBtnR {} itemTrigR {} p1LockR {} p1TrigLockR {} p2LockR {} p2TrigLockR {} "
+        "p1BtnR/L/Z {}/{}/{} p2BtnR/L/Z {}/{}/{} rStatus {}",
+        phase, reinterpret_cast<uintptr_t>(player), static_cast<unsigned int>(player->mProcID),
+        static_cast<int>(player->checkInputOnR()), static_cast<int>(player->checkAttentionLock()), target,
+        static_cast<int>((player->mItemButton & btn_r) != 0),
+        static_cast<int>((player->mItemTrigger & btn_r) != 0),
+        static_cast<int>(p1_input.holdLockR != 0), static_cast<int>(p1_input.triggerLockR != 0),
+        static_cast<int>(p2_input.holdLockR != 0), static_cast<int>(p2_input.triggerLockR != 0),
+        static_cast<int>(p1_hold_r_button), static_cast<int>(p1_hold_l_button), static_cast<int>(p1_hold_z_button),
+        static_cast<int>(p2_hold_r_button), static_cast<int>(p2_hold_l_button), static_cast<int>(p2_hold_z_button),
+        static_cast<unsigned int>(r_status));
+
+    dusk::diagnostics::SecondaryAlinkState diag{};
+    diag.actor = reinterpret_cast<uintptr_t>(player);
+    diag.target = target;
+    diag.anim = reinterpret_cast<uintptr_t>(player->mNowAnmPackUnder[0].getAnmTransform());
+    diag.modelUser = player->mpLinkModel != nullptr ? player->mpLinkModel->getUserArea() : 0;
+    diag.ownerUnder = reinterpret_cast<uintptr_t>(player->field_0x1f20);
+    diag.ownerUpper = reinterpret_cast<uintptr_t>(player->field_0x1f24);
+    diag.proc = player->mProcID;
+    diag.attentionFlags = player->attention_info.flags;
+    diag.rawMask = mask;
+    diag.rStatus = r_status;
+    diag.speedF = player->speedF;
+    diag.normalSpeed = player->mNormalSpeed;
+    diag.stickValue = player->mStickValue;
+    diag.underFrame = player->mUnderFrameCtrl[0].getFrame();
+    diag.underRate = player->mUnderFrameCtrl[0].getRate();
+    diag.inputR = player->checkInputOnR();
+    diag.attentionLock = player->checkAttentionLock();
+    diag.itemButtonR = (player->mItemButton & btn_r) != 0;
+    diag.itemTriggerR = (player->mItemTrigger & btn_r) != 0;
+    // Co-op: keep the structured recorder fed by the same narrow action-mirror probe as the human log.
+    dusk::diagnostics::recordSecondaryAlinkState(phase, diag);
 }
 
 void coopInstallModelDataOwner(daAlink_c* player) {
@@ -19294,9 +19381,11 @@ static int daAlink_Execute(daAlink_c* i_this) {
     {
         daAlink_c* primary = static_cast<daAlink_c*>(dusk::coop::getPrimaryPlayer());
         coopLogSecondaryExecuteState("before", i_this);
+        coopLogSecondaryActionMirrorState("before", i_this);
         coopInstallModelDataOwner(i_this);
         const int result = i_this->execute();
         coopLogSecondaryExecuteState("after", i_this);
+        coopLogSecondaryActionMirrorState("after", i_this);
         if (primary != nullptr) {
             // Co-op: secondary execute touches shared Link model data, so return ownership to P1 immediately.
             coopInstallModelDataOwner(primary);

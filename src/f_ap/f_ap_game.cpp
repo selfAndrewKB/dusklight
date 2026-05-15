@@ -15,6 +15,7 @@
 #include "d/d_model.h"
 #include "d/d_tresure.h"
 #include "dusk/achievements.h"
+#include "dusk/diagnostics.h"
 #include "dusk/frame_interpolation.h"
 #include "dusk/livesplit.h"
 #include "dusk/logging.h"
@@ -836,6 +837,8 @@ void fapGm_Execute() {
 
     cCt_Counter(0);
 #ifdef TARGET_PC
+    // Co-op: capture structured diagnostics after game state advances so manual flushes include the latest frame.
+    dusk::diagnostics::tick(sExecCount);
     dusk::speedrun::onGameFrame();
     dusk::AchievementSystem::get().tick();
 #endif

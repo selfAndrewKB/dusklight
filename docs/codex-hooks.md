@@ -21,7 +21,8 @@ The hooks are guardrails, not a replacement for judgment. They exist to preserve
 - Block broad agent-issued staging commands such as `git add -A` and `git add .`.
 - Block obviously destructive shell commands such as `git reset --hard`, forceful `git clean`, recursive `Remove-Item`, and `rm -rf`.
 - Block co-op patches to original/decomp code when the patch lacks a `Co-op:` why-comment.
-- After supported edit/check tools run, add focused review context for C++ edits, original/decomp edits, docs-map drift, new source files that may need `files.cmake`, and real `git diff --check` whitespace failures.
+- Remind sessions and post-edit reviews to match local C++ style, including qualified class enum references in file-scope helpers and explicit fmt/MSVC casts for small integer, enum, `BOOL`, and bool-ish log arguments.
+- After supported edit/check tools run, add focused review context for C++ edits, original/decomp edits, docs-map drift, new source files that may need `files.cmake`, fmt/MSVC logging hazards, and real `git diff --check` whitespace failures.
 
 ## Files
 

@@ -8,6 +8,8 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
 - Prefer Dusk's existing debug output paths for observability. Dusk-owned code can use `aurora::Module` via `dusk/logging.h`; original debug prints often use `OS_REPORT`, routed by `src/dusk/OSReport.cpp`. Avoid per-frame log spam unless a plan calls for gated or sampled tracing.
 - The user handles CMake/Visual Studio builds unless they explicitly ask Codex to run one. Codex should still use lightweight checks such as `git diff --check` and source inspection.
 - Use detailed commit bodies for meaningful co-op checkpoints. Record the intent, the concrete runtime finding or code hazard addressed, and what was or was not manually validated so later sessions do not have to reconstruct the story from diffs alone.
+- Match local C++ style exactly. In early file-scope helpers, qualify class enum members such as `daAlink_c::BTN_R`; do not assume unqualified member names are visible outside member-function scope.
+- When logging through `aurora::Module` / fmt on MSVC, cast small integer, enum, `BOOL`, and bool-ish expressions to ordinary `int` / `unsigned int` as needed. Avoid clever format arguments that trip fmt compile-time checks.
 
 ## Repository Map
 
@@ -16,6 +18,7 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
 - `docs/code-conventions.md`: Dusk-specific contribution rules. Read before editing original game/decomp code, especially for `#if TARGET_PC` and Dusk-modified code expectations.
 - `docs/codex-hooks.md`: repo-local Codex hooks and guardrails for session context, broad staging, destructive commands, and co-op why-comments.
 - `docs/co-op-roadmap.md`: co-op roadmap, current code evidence, singleton-touchpoint counts, risks, and first recommended implementation plans.
+- `docs/dusk-ai-diagnostics.md`: planned AI-friendly diagnostics recorder shape: profiles, ring buffer, JSONL artifacts, session/role metadata, provider schemas, and stable actor identity.
 - `docs/coop-player-slots-plan.md`: completed first co-op milestone: no-behavior-change player slot registry.
 - `docs/coop-input-snapshot-plan.md`: completed second co-op milestone: slot-aware input snapshot while preserving primary-player `PAD_1` behavior.
 - `docs/coop-secondary-player-prototype-plan.md`: diagnostic third co-op milestone: secondary ALINK prototype evidence.

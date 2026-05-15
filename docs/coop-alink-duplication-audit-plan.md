@@ -333,6 +333,64 @@ Manual test sequence:
 5. Observe whether player 2 remains stable/visible and whether player 1 regresses.
 6. Capture `secondary execute` and `primary runtime` logs together so proc/animation movement can be compared directly.
 
+First scoped-execute result:
+
+- User tested on 2026-05-12 with the visible-P2 harness, then unchecked `Skip execute` after the secondary actor had spawned.
+- Player 2 remained visible and began playing idle animations correctly.
+- Player 2 also performed the same target/shield-raise animation when player 1 activated it.
+- Interpretation: secondary ALINK execute is now partially viable under scoped model-data ownership. The immediate remaining coupling is likely input/action ownership or shared player status for target/shield actions, not basic create/draw animation ownership.
+- Next question: does secondary execute read primary controller/action state directly, or does a global target/shield status bit drive both actors?
+
+Next narrow audit target:
+
+1. Inspect shield/target action paths in `d_a_alink.cpp`.
+2. Classify each relevant read/write as direct controller input, global player status, attention/camera state, or current-actor state.
+3. Add the smallest log or toggle that distinguishes "P2 reads P1 input" from "P2 mirrors a shared action/status bit".
+4. Do not route real P2 input until the mirror source is identified.
+
+Current target/shield mirror diagnostic:
+
+- `setStickData()` already uses `dusk::coop::readInputForActor(this)` for ALINK stick and item button snapshots, including `BTN_R`.
+- The next suspect is therefore either a remaining hard-coded `PAD_1` path near target/shield behavior, or global attention/UI status such as `checkAttentionLock()` / `dComIfGp_getRStatus()`.
+- The scoped execute probe now emits `secondary action-mirror ...` logs whenever P2's relevant action state changes.
+- Each line compares P2's derived ALINK state with raw P1/P2 lock and trigger input:
+  - `inputR`: P2 `checkInputOnR()`.
+  - `atnLock`: P2 `checkAttentionLock()`.
+  - `itemBtnR` / `itemTrigR`: P2's ALINK item button state.
+  - `p1LockR` / `p1TrigLockR`: raw primary slot lock-R input.
+  - `p2LockR` / `p2TrigLockR`: raw secondary slot lock-R input.
+  - `p1BtnR/L/Z` and `p2BtnR/L/Z`: raw held trigger-button bits.
+  - `rStatus`: global R-button status.
+
+The first manual run only produced the clean baseline line, so the diagnostic was widened to include raw held R/L/Z button bits in addition to lock-R. This should catch the actual P1 shield/target activation even if it does not travel through `getHoldLockR()`.
+
+The action-mirror diagnostic now has an optional structured recorder. In the Actor Spawner's co-op section, enable `Record action mirror diagnostics`, reproduce the scoped-execute test, then press `Flush diagnostics`. Dusk writes JSON artifacts under the config path's `diagnostics/` directory:
+
+- `latest/manifest.json`, `latest/latest.json`, and `latest/events.jsonl`.
+- `sessions/<session-id>/local/manifest.json`, `latest.json`, and `events.jsonl`.
+
+The recorder captures `scene.current`, `render.stats`, `player.slots`, `input.pad`, `coop.probes`, and `alink.secondary` using a stable event envelope. V1 still uses actor pointers as metadata rather than stable actor IDs, so do not use pointer values as long-lived identity across separate captures.
+
+How to read the next result:
+
+- If `p2HoldR` is false but `itemBtnR` or `inputR` becomes true, P2 is still receiving P1 input somewhere in ALINK's input path.
+- If `p2HoldR` and `itemBtnR` stay false but `atnLock`, `target`, or `rStatus` changes with P1, the mirror is likely shared attention/status state.
+- If P2 only mirrors when both `p2HoldR` and P2 derived state become true, then input routing is probably behaving and the remaining issue is that both actors are intentionally seeing the same world/attention context.
+
+Structured diagnostic result:
+
+- The 2026-05-15 captures show P1's target/shield input changing while P2 raw input remains zero.
+- During the same window, P2's `inputR`, `itemBtnR`, `itemTrigR`, `target`, and `rStatus` stay false/zero, but P2 `checkAttentionLock()` flips true.
+- `checkAttentionLock()` is an inline wrapper around `mAttention->Lockon()`, and ALINK initializes `mAttention` from the global `dComIfGp_getAttention()` object. This confirms the target/shield mirror is shared attention state, not raw P2 input leakage.
+- Do not "fix" this by forcing secondary `checkAttentionLock()` false by default. That would hide the coupling we need to understand for real co-op state decoupling. A secondary-only isolation toggle is acceptable only as an explicitly named diagnostic control if a later test needs to quarantine this symptom.
+
+Next narrow audit target:
+
+1. Add `attention.state` diagnostics around the global attention object: lock-on state, lock-on target, action/check-object lists if available, and the current player slot/actor context that sampled it.
+2. Audit ALINK reads of `checkAttentionLock()`, `mTargetedActor`, `mAttention`, and global player status around target/shield, guard, side-step, and attention movement.
+3. Classify each callsite as "must become per-player", "global camera/UI state", or "safe shared world query".
+4. Preserve the visible shield mirror as a known symptom until a real per-player attention/status path exists.
+
 ## Non-Goals
 
 - Do not build a full proxy/replica Link actor as the next default path.

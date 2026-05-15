@@ -88,7 +88,7 @@ Do not resize `dComIfG_play_c` or mass-replace player singleton helpers in this 
 - [x] Build and manually attempt the create-time `allAnimePlay()`-skipped secondary ALINK diagnostic.
 - [x] Build and manually attempt the create-time `mpLinkModel->calc()`-skipped secondary ALINK diagnostic.
 - [ ] Build and manually attempt the runtime-toggle secondary ALINK diagnostics.
-- [ ] Build and manually attempt the scoped secondary execute diagnostic.
+- [x] Build and manually attempt the scoped secondary execute diagnostic.
 
 ## Decisions
 
@@ -175,6 +175,10 @@ Validation performed:
 - Player 1 continued through normal-looking idle, movement, and attack-related proc transitions afterward, with no report that the earlier visible-animation lock returned.
 - Interpretation: visible secondary ALINK rendering is now proven viable under explicit shared `J3DModelData` ownership scoping. The next question is not whether a second ALINK can render, but which minimal secondary execution and input paths can be restored without disturbing the primary actor or reintroducing shared-state corruption.
 - The current next probe keeps `Skip execute` enabled by default, but adds `Scoped execute model data owner` so a deliberate manual test can re-enable secondary runtime while preserving the proven ownership discipline and producing paired `secondary execute` / `primary runtime` evidence.
+- User tested the scoped secondary execute probe by spawning player 2 first, then unchecking `Skip execute`.
+- Player 2 remained visible, began playing idle animations correctly, and mirrored player 1's target/shield-raise animation when activated.
+- Interpretation: scoped secondary execute admits at least idle animation runtime without the original player 1 animation lock. The next suspected hazard is shared input/action/status ownership for targeting or shield state.
+- Added a follow-up `secondary action-mirror` diagnostic under the scoped execute probe. It compares P2's `checkInputOnR()`, attention lock, target actor, item R state, raw P1/P2 lock-R input, and global R status so the next manual run can distinguish P1 input leakage from shared attention/status mirroring.
 
 ## Recovery Notes
 
