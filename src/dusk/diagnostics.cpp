@@ -31,15 +31,29 @@ constexpr int kManifestVersion = 1;
 constexpr const char* kProfileSecondaryAlinkActionMirror = "coop.secondary_alink.action_mirror";
 constexpr size_t kRingBufferMaxEvents = 3600;
 constexpr u32 kLatestWriteMinFrameInterval = 15;
+constexpr u64 kBudgetWindowUs = 60ull * 1000ull * 1000ull;
 
 aurora::Module DiagnosticsLog("dusk::diagnostics");
 
 struct Provider {
     const char* name;
     int schemaVersion;
+    const char* costClass;
     int sampleEveryFrames;
     bool emitOnChange;
+    int maxEventsPerMinute;
+    size_t maxPayloadBytes;
     json (*collect)();
+};
+
+struct ProviderStats {
+    u64 eventsWritten = 0;
+    u64 bytesWritten = 0;
+    u64 eventsThrottled = 0;
+    u64 payloadsOversized = 0;
+    u64 windowStartUs = 0;
+    int windowEvents = 0;
+    bool throttleMarkerWritten = false;
 };
 
 struct State {
@@ -53,6 +67,7 @@ struct State {
     std::deque<json> ring;
     json latest;
     std::unordered_map<std::string, json> lastEmittedData;
+    std::unordered_map<std::string, ProviderStats> providerStats;
     bool latestDirty = false;
     bool latestWriteInitialized = false;
     u32 lastLatestWriteFrame = 0;
@@ -113,6 +128,7 @@ void clearFile(const std::filesystem::path& path) {
 }
 
 json buildManifest();
+json collectDiagnosticsStats();
 
 void ensureInitialized() {
     if (s_state.initialized || ConfigPath.empty()) {
@@ -156,16 +172,6 @@ json makeEnvelope(const char* provider, int schemaVersion, const char* kind, con
     };
 }
 
-void storeEvent(const json& event) {
-    s_state.ring.push_back(event);
-    while (s_state.ring.size() > kRingBufferMaxEvents) {
-        s_state.ring.pop_front();
-    }
-
-    appendJsonLine(s_state.latestDir / "events.jsonl", event);
-    appendJsonLine(s_state.sessionDir / "events.jsonl", event);
-}
-
 void updateProviderLatest(const char* provider, const json& data) {
     if (!s_state.latest.is_object()) {
         s_state.latest = json::object();
@@ -186,6 +192,261 @@ bool shouldEmitProviderEvent(const char* provider, const json& data) {
 
     s_state.lastEmittedData[provider] = data;
     return true;
+}
+
+const Provider* findProvider(const char* name);
+json eventKeyForProvider(const char* provider, const json& data);
+
+void storeEventDirect(const json& event) {
+    s_state.ring.push_back(event);
+    while (s_state.ring.size() > kRingBufferMaxEvents) {
+        s_state.ring.pop_front();
+    }
+
+    appendJsonLine(s_state.latestDir / "events.jsonl", event);
+    appendJsonLine(s_state.sessionDir / "events.jsonl", event);
+}
+
+void storeEvent(const json& event) {
+    storeEventDirect(event);
+}
+
+void recordProviderWrite(const char* provider, size_t bytes) {
+    ProviderStats& stats = s_state.providerStats[provider];
+    stats.eventsWritten++;
+    stats.bytesWritten += bytes;
+}
+
+void recordProviderThrottle(const char* provider, const Provider& config, const char* reason,
+                            size_t payloadBytes) {
+    ProviderStats& stats = s_state.providerStats[provider];
+    stats.eventsThrottled++;
+    if (stats.throttleMarkerWritten) {
+        return;
+    }
+
+    stats.throttleMarkerWritten = true;
+    json data = {
+        {"schema_version", 1},
+        {"provider", provider},
+        {"reason", reason},
+        {"max_events_per_minute", config.maxEventsPerMinute},
+        {"max_payload_bytes", config.maxPayloadBytes},
+        {"payload_bytes", payloadBytes},
+    };
+    const json event = makeEnvelope("diagnostics.throttled", 1, "marker", data);
+    storeEventDirect(event);
+    recordProviderWrite("diagnostics.throttled", event.dump().size());
+}
+
+bool emitProviderEvent(const Provider& provider, const char* kind, const json& data) {
+    const u64 now = monotonicTimeUs();
+    ProviderStats& stats = s_state.providerStats[provider.name];
+    if (stats.windowStartUs == 0 || now - stats.windowStartUs >= kBudgetWindowUs) {
+        stats.windowStartUs = now;
+        stats.windowEvents = 0;
+        stats.throttleMarkerWritten = false;
+    }
+
+    const json event = makeEnvelope(provider.name, provider.schemaVersion, kind, data);
+    const std::string serialized = event.dump();
+    if (provider.maxPayloadBytes > 0 && serialized.size() > provider.maxPayloadBytes) {
+        stats.payloadsOversized++;
+        recordProviderThrottle(provider.name, provider, "payload-too-large", serialized.size());
+        return false;
+    }
+
+    if (provider.maxEventsPerMinute > 0 && stats.windowEvents >= provider.maxEventsPerMinute) {
+        recordProviderThrottle(provider.name, provider, "event-budget-exhausted", serialized.size());
+        return false;
+    }
+
+    stats.windowEvents++;
+    storeEventDirect(event);
+    recordProviderWrite(provider.name, serialized.size());
+    return true;
+}
+
+json actorIdentityEventData(const json& data) {
+    json eventData = {
+        {"actor_uid", nullptr},
+        {"ptr", data.value("ptr", "0x0")},
+        {"stable_actor_uid_deferred", data.value("stable_actor_uid_deferred", true)},
+    };
+    if (data.contains("profile")) {
+        eventData["profile"] = data["profile"];
+    }
+    if (data.contains("id")) {
+        eventData["id"] = data["id"];
+    }
+    if (data.contains("room")) {
+        eventData["room"] = data["room"];
+    }
+    if (data.contains("argument")) {
+        eventData["argument"] = data["argument"];
+    }
+    if (data.contains("attention_flags")) {
+        eventData["attention_flags"] = data["attention_flags"];
+    }
+    return eventData;
+}
+
+json playerSlotsEventKey(const json& data) {
+    json slots = json::array();
+    if (data.contains("slots") && data["slots"].is_array()) {
+        for (const json& slot : data["slots"]) {
+            json slotData = {
+                {"slot", slot.value("slot", -1)},
+                {"actor_uid", nullptr},
+                {"ptr", slot.value("ptr", "0x0")},
+                {"stable_actor_uid_deferred", slot.value("stable_actor_uid_deferred", true)},
+            };
+            if (slot.contains("profile")) {
+                slotData["profile"] = slot["profile"];
+            }
+            if (slot.contains("room")) {
+                slotData["room"] = slot["room"];
+            }
+            if (slot.contains("argument")) {
+                slotData["argument"] = slot["argument"];
+            }
+            slots.push_back(slotData);
+        }
+    }
+
+    return {
+        {"schema_version", data.value("schema_version", 1)},
+        {"slots", slots},
+    };
+}
+
+int stickZone(const json& input) {
+    const double value = input.value("stick_value", 0.0);
+    if (value < 0.15) {
+        return 0;
+    }
+    if (value < 0.55) {
+        return 1;
+    }
+    if (value < 0.90) {
+        return 2;
+    }
+    return 3;
+}
+
+json inputPadEventKey(const json& data) {
+    auto inputEvent = [](const json& input) {
+        return json{
+            {"trigger_buttons", input.value("trigger_buttons", 0)},
+            {"hold_buttons", input.value("hold_buttons", 0)},
+            {"trigger_lock_r", input.value("trigger_lock_r", 0)},
+            {"hold_lock_r", input.value("hold_lock_r", 0)},
+            {"hold_r", input.value("hold_r", false)},
+            {"hold_l", input.value("hold_l", false)},
+            {"hold_z", input.value("hold_z", false)},
+            {"stick_zone", stickZone(input)},
+        };
+    };
+
+    return {
+        {"schema_version", data.value("schema_version", 1)},
+        {"p1", inputEvent(data.value("p1", json::object()))},
+        {"p2", inputEvent(data.value("p2", json::object()))},
+    };
+}
+
+json renderStatsEventKey(const json& data) {
+    return {
+        {"schema_version", data.value("schema_version", 1)},
+        {"backend", data.value("backend", 0)},
+        {"queued_pipelines", data.value("queued_pipelines", 0)},
+        {"created_pipelines", data.value("created_pipelines", 0)},
+    };
+}
+
+json attentionListEventKey(const json& list) {
+    json eventList = json::array();
+    if (!list.is_array()) {
+        return eventList;
+    }
+
+    for (const json& entry : list) {
+        eventList.push_back({
+            {"index", entry.value("index", -1)},
+            {"pid", entry.value("pid", -1)},
+            {"type", entry.value("type", 0)},
+            {"actor", actorIdentityEventData(entry.value("actor", json::object()))},
+        });
+    }
+    return eventList;
+}
+
+json attentionStateEventKey(const json& data) {
+    return {
+        {"schema_version", data.value("schema_version", 1)},
+        {"available", data.value("available", false)},
+        {"ptr", data.value("ptr", "0x0")},
+        {"owner", actorIdentityEventData(data.value("owner", json::object()))},
+        {"pad_no", data.value("pad_no", 0)},
+        {"player_attention_flags", data.value("player_attention_flags", 0)},
+        {"flags", data.value("flags", 0)},
+        {"lockon_truth", data.value("lockon_truth", false)},
+        {"lockon", data.value("lockon", false)},
+        {"lock_edge", data.value("lock_edge", false)},
+        {"lock_target_pid", data.value("lock_target_pid", -1)},
+        {"target_actor_pid", data.value("target_actor_pid", -1)},
+        {"lockon_count", data.value("lockon_count", 0)},
+        {"action_count", data.value("action_count", 0)},
+        {"check_object_count", data.value("check_object_count", 0)},
+        {"attn_status", data.value("attn_status", 0)},
+        {"lockon_target_0", actorIdentityEventData(data.value("lockon_target_0", json::object()))},
+        {"action_target_0", actorIdentityEventData(data.value("action_target_0", json::object()))},
+        {"check_object_target_0", actorIdentityEventData(data.value("check_object_target_0", json::object()))},
+        {"lockon_list_active", attentionListEventKey(data.value("lockon_list_active", json::array()))},
+        {"action_list_active", attentionListEventKey(data.value("action_list_active", json::array()))},
+        {"check_object_list_active", attentionListEventKey(data.value("check_object_list_active", json::array()))},
+    };
+}
+
+json alinkSecondaryEventKey(const json& data) {
+    return {
+        {"schema_version", data.value("schema_version", 1)},
+        {"available", data.value("available", false)},
+        {"actor", data.value("actor", "0x0")},
+        {"proc", data.value("proc", 0)},
+        {"anim", data.value("anim", "0x0")},
+        {"attention_flags", data.value("attention_flags", 0)},
+        {"input_r", data.value("input_r", false)},
+        {"attention_lock", data.value("attention_lock", false)},
+        {"target", data.value("target", "0x0")},
+        {"item_button_r", data.value("item_button_r", false)},
+        {"item_trigger_r", data.value("item_trigger_r", false)},
+        {"raw_mask", data.value("raw_mask", 0)},
+        {"r_status", data.value("r_status", 0)},
+        {"model_user", data.value("model_user", "0x0")},
+        {"owner_under", data.value("owner_under", "0x0")},
+        {"owner_upper", data.value("owner_upper", "0x0")},
+    };
+}
+
+json eventKeyForProvider(const char* provider, const json& data) {
+    const std::string name = provider != nullptr ? provider : "";
+    if (name == "player.slots") {
+        return playerSlotsEventKey(data);
+    }
+    if (name == "input.pad") {
+        return inputPadEventKey(data);
+    }
+    if (name == "render.stats") {
+        return renderStatsEventKey(data);
+    }
+    if (name == "attention.state") {
+        return attentionStateEventKey(data);
+    }
+    if (name == "alink.secondary") {
+        return alinkSecondaryEventKey(data);
+    }
+    return data;
 }
 
 json collectSceneCurrent() {
@@ -245,6 +506,92 @@ json collectPlayerSlots() {
         {"schema_version", 1},
         {"slots", slots},
     };
+}
+
+json actorSummary(const fopAc_ac_c* actor) {
+    json data = {
+        {"actor_uid", nullptr},
+        {"ptr", ptrString(reinterpret_cast<uintptr_t>(actor))},
+        {"stable_actor_uid_deferred", true},
+    };
+    if (actor == nullptr) {
+        return data;
+    }
+
+    data["profile"] = static_cast<int>(fopAcM_GetProfName(actor));
+    data["id"] = static_cast<int>(fopAcM_GetID(actor));
+    data["room"] = static_cast<int>(fopAcM_GetRoomNo(actor));
+    data["argument"] = static_cast<int>(actor->argument);
+    data["attention_flags"] = actor->attention_info.flags;
+    data["pos"] = {actor->current.pos.x, actor->current.pos.y, actor->current.pos.z};
+    data["angle_y"] = static_cast<int>(actor->shape_angle.y);
+    return data;
+}
+
+json attentionListEntry(dAttList_c& entry) {
+    fopAc_ac_c* actor = entry.getActor();
+    return {
+        {"pid", static_cast<int>(entry.getPid())},
+        {"type", entry.mType},
+        {"angle", static_cast<int>(entry.mAngle.Val())},
+        {"weight", entry.mWeight},
+        {"distance", entry.mDistance},
+        {"actor", actorSummary(actor)},
+    };
+}
+
+json attentionListSummary(dAttList_c* entries, int capacity) {
+    json list = json::array();
+    for (int i = 0; i < capacity; i++) {
+        if (entries[i].getPid() == -1 && entries[i].getActor() == nullptr) {
+            continue;
+        }
+        json entry = attentionListEntry(entries[i]);
+        entry["index"] = i;
+        list.push_back(entry);
+    }
+    return list;
+}
+
+json collectAttentionState() {
+    dAttention_c* attention = dComIfGp_getAttention();
+    json data = {
+        {"schema_version", 1},
+        {"available", attention != nullptr},
+    };
+    if (attention == nullptr) {
+        return data;
+    }
+
+    data["ptr"] = ptrString(reinterpret_cast<uintptr_t>(attention));
+    data["owner"] = actorSummary(attention->mpPlayer);
+    data["pad_no"] = attention->mPadNo;
+    data["player_attention_flags"] = attention->mPlayerAttentionFlags;
+    data["flags"] = attention->mFlags;
+    data["lockon_truth"] = attention->LockonTruth();
+    data["lockon"] = attention->Lockon();
+    data["lock_edge"] = attention->LockEdge();
+    data["lock_target_pid"] = static_cast<int>(attention->mLockTargetID);
+    data["target_actor_pid"] = static_cast<int>(attention->mTargetActorID);
+    data["lockon_count"] = attention->GetLockonCount();
+    data["lockon_offset"] = attention->mLockOnOffset;
+    data["action_count"] = attention->GetActionCount();
+    data["action_offset"] = attention->mActionOffset;
+    data["check_object_count"] = attention->GetCheckObjectCount();
+    data["check_object_offset"] = attention->mCheckObjectOffset;
+    data["attn_status"] = static_cast<unsigned int>(attention->mAttnStatus);
+    data["attn_block_timer"] = attention->mAttnBlockTimer;
+    data["lockon_target_0"] = actorSummary(attention->LockonTarget(0));
+    data["action_target_0"] = actorSummary(attention->ActionTarget(0));
+    data["check_object_target_0"] = actorSummary(attention->CheckObjectTarget(0));
+
+    data["lockon_list_capacity"] = 8;
+    data["lockon_list_active"] = attentionListSummary(attention->mLockOnList, 8);
+    data["action_list_capacity"] = 4;
+    data["action_list_active"] = attentionListSummary(attention->mActionList, 4);
+    data["check_object_list_capacity"] = 4;
+    data["check_object_list_active"] = attentionListSummary(attention->mCheckObjectList, 4);
+    return data;
 }
 
 json inputForSlot(coop::PlayerSlot slot) {
@@ -315,13 +662,52 @@ json collectAlinkSecondary() {
 }
 
 Provider s_providers[] = {
-    {"scene.current", 1, 30, true, collectSceneCurrent},
-    {"render.stats", 1, 30, true, collectRenderStats},
-    {"player.slots", 1, 1, true, collectPlayerSlots},
-    {"input.pad", 1, 1, true, collectInputPad},
-    {"coop.probes", 1, 30, true, collectCoopProbes},
-    {"alink.secondary", 1, 1, true, collectAlinkSecondary},
+    {"scene.current", 1, "cheap", 30, true, 20, 4096, collectSceneCurrent},
+    {"render.stats", 1, "cheap", 30, true, 20, 4096, collectRenderStats},
+    {"player.slots", 1, "cheap", 1, true, 120, 8192, collectPlayerSlots},
+    {"input.pad", 1, "cheap", 1, true, 120, 4096, collectInputPad},
+    {"attention.state", 1, "medium", 5, true, 60, 12288, collectAttentionState},
+    {"coop.probes", 1, "cheap", 30, true, 20, 4096, collectCoopProbes},
+    {"alink.secondary", 1, "cheap", 1, true, 120, 8192, collectAlinkSecondary},
 };
+
+const Provider* findProvider(const char* name) {
+    for (const Provider& provider : s_providers) {
+        if (std::string(provider.name) == name) {
+            return &provider;
+        }
+    }
+    return nullptr;
+}
+
+json collectDiagnosticsStats() {
+    json providers = json::object();
+    for (const Provider& provider : s_providers) {
+        const ProviderStats& stats = s_state.providerStats[provider.name];
+        providers[provider.name] = {
+            {"events_written", stats.eventsWritten},
+            {"bytes_written", stats.bytesWritten},
+            {"events_throttled", stats.eventsThrottled},
+            {"payloads_oversized", stats.payloadsOversized},
+            {"window_events", stats.windowEvents},
+            {"max_events_per_minute", provider.maxEventsPerMinute},
+            {"max_payload_bytes", provider.maxPayloadBytes},
+        };
+    }
+
+    const ProviderStats& throttledStats = s_state.providerStats["diagnostics.throttled"];
+    providers["diagnostics.throttled"] = {
+        {"events_written", throttledStats.eventsWritten},
+        {"bytes_written", throttledStats.bytesWritten},
+    };
+
+    return {
+        {"schema_version", 1},
+        {"events_buffered", s_state.ring.size()},
+        {"events_buffer_max", kRingBufferMaxEvents},
+        {"providers", providers},
+    };
+}
 
 json buildManifest() {
     json providers = json::array();
@@ -329,8 +715,11 @@ json buildManifest() {
         providers.push_back({
             {"name", provider.name},
             {"schema_version", provider.schemaVersion},
+            {"cost_class", provider.costClass},
             {"sample_every_frames", provider.sampleEveryFrames},
             {"emit_on_change", provider.emitOnChange},
+            {"max_events_per_minute", provider.maxEventsPerMinute},
+            {"max_payload_bytes", provider.maxPayloadBytes},
         });
     }
 
@@ -347,6 +736,8 @@ json buildManifest() {
 }
 
 void updateLatestFile() {
+    json providers = s_state.latest.is_object() ? s_state.latest : json::object();
+    providers["diagnostics.stats"] = collectDiagnosticsStats();
     json latest = {
         {"event_version", kEventVersion},
         {"session_id", s_state.sessionId},
@@ -354,7 +745,7 @@ void updateLatestFile() {
         {"frame", s_state.lastFrame},
         {"time_us", monotonicTimeUs()},
         {"profile", kProfileSecondaryAlinkActionMirror},
-        {"providers", s_state.latest},
+        {"providers", providers},
     };
 
     writeJsonFile(s_state.latestDir / "latest.json", latest);
@@ -417,11 +808,12 @@ void tick(u32 frame) {
 
         json data = provider.collect();
         updateProviderLatest(provider.name, data);
-        if (provider.emitOnChange && !shouldEmitProviderEvent(provider.name, data)) {
+        json eventKey = eventKeyForProvider(provider.name, data);
+        if (provider.emitOnChange && !shouldEmitProviderEvent(provider.name, eventKey)) {
             continue;
         }
 
-        storeEvent(makeEnvelope(provider.name, provider.schemaVersion, "snapshot", data));
+        emitProviderEvent(provider, "snapshot", data);
     }
     updateLatestFileIfDue(false);
 }
@@ -439,7 +831,9 @@ void flush(const char* reason) {
         {"reason", reason != nullptr ? reason : "manual"},
         {"buffered_events", s_state.ring.size()},
     };
-    storeEvent(makeEnvelope("diagnostics.flush", 1, "flush", data));
+    json event = makeEnvelope("diagnostics.flush", 1, "flush", data);
+    storeEventDirect(event);
+    recordProviderWrite("diagnostics.flush", event.dump().size());
     updateLatestFileIfDue(true);
 }
 
@@ -458,14 +852,18 @@ void recordSecondaryAlinkState(const char* phase, const SecondaryAlinkState& sta
     json data = collectAlinkSecondary();
     data["phase"] = phase != nullptr ? phase : "";
     updateProviderLatest("alink.secondary", data);
-    json comparableData = data;
-    comparableData.erase("phase");
-    if (!shouldEmitProviderEvent("alink.secondary", comparableData)) {
+    json eventKey = eventKeyForProvider("alink.secondary", data);
+    if (!shouldEmitProviderEvent("alink.secondary", eventKey)) {
         updateLatestFileIfDue(false);
         return;
     }
 
-    storeEvent(makeEnvelope("alink.secondary", 1, "change", data));
+    const Provider* provider = findProvider("alink.secondary");
+    if (provider != nullptr) {
+        emitProviderEvent(*provider, "change", data);
+    } else {
+        storeEvent(makeEnvelope("alink.secondary", 1, "change", data));
+    }
     updateLatestFileIfDue(false);
 }
 

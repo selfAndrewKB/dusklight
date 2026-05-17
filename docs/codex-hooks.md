@@ -22,6 +22,7 @@ The hooks are guardrails, not a replacement for judgment. They exist to preserve
 - Block obviously destructive shell commands such as `git reset --hard`, forceful `git clean`, recursive `Remove-Item`, and `rm -rf`.
 - Block co-op patches to original/decomp code when the patch lacks a `Co-op:` why-comment.
 - Remind sessions and post-edit reviews to match local C++ style, including qualified class enum references in file-scope helpers and explicit fmt/MSVC casts for small integer, enum, `BOOL`, and bool-ish log arguments.
+- Remind diagnostics-provider edits to keep `events.jsonl` bounded: semantic-change events, no empty/default spam, no frame-churn fields unless the profile specifically tests them, sensible cadence, and lean events versus richer `latest.json`.
 - After supported edit/check tools run, add focused review context for C++ edits, original/decomp edits, docs-map drift, new source files that may need `files.cmake`, fmt/MSVC logging hazards, and real `git diff --check` whitespace failures.
 
 ## Files
@@ -30,6 +31,7 @@ The hooks are guardrails, not a replacement for judgment. They exist to preserve
 - `.codex/hooks/session_context.ps1`: adds short co-op context at session start.
 - `.codex/hooks/pre_tool_use_policy.ps1`: blocks risky shell/edit operations before they run.
 - `.codex/hooks/post_tool_use_review.ps1`: adds post-edit review reminders and forces attention on `git diff --check` whitespace failures.
+  - Also watches diagnostics provider edits and reminds Codex to apply the bounded-output checklist before adding new JSONL-producing data.
 
 ## Limitations
 

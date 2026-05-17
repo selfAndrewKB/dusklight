@@ -245,7 +245,7 @@ Available toggles:
 - Scope shared ALINK model-data ownership to secondary only during secondary draw, then restore player 1 immediately afterward.
 - Scope shared ALINK model-data ownership to secondary only during secondary execute, then restore player 1 immediately afterward.
 
-Current default bits preserve the latest cautious harness: skip secondary `execute()`, `draw()`, create-time `allAnimePlay()`, create-time `mpLinkModel->calc()`, restore player 1's shared model-data owner after secondary initialization, and keep scoped draw/execute ownership ready for deliberate follow-up tests.
+Current default bits preserve the latest visible idle-P2 harness: skip secondary `execute()`; restore player 1's shared model-data owner after secondary initialization; and keep scoped draw/execute ownership ready for deliberate follow-up tests. Secondary create-time `allAnimePlay()`, create-time `mpLinkModel->calc()`, and `draw()` are enabled by default now that scoped model-data ownership makes the prototype visible without reintroducing the original player 1 animation lock. Re-enable the create-time skips or `Skip draw` only for isolation tests.
 
 The latest manual toggle sweep ruled out the remaining late create-time candidates. With the cautious default bits still enabled, skipping secondary face texture animation, item matrix setup, item actor setup, set matrix, and wait animation binding did not fix player 1's visible animation lock. Skipping `setStartProcInit()` crashed and is treated as structural, not an optional side effect.
 
@@ -264,7 +264,7 @@ Expected manual check:
 1. Build with Visual Studio MSVC.
 2. Confirm player 1 animates normally before spawning the prototype.
 3. Spawn `Spawn Secondary Link Prototype`.
-4. The secondary actor is expected to be invisible or non-rendering for this diagnostic.
+4. The secondary actor is expected to be visible with the current default harness.
 5. Move, stop, attack, and shield/block with player 1.
 6. Confirm player 1's visible animation remains correct with `Restore P1 model data owner` checked.
 

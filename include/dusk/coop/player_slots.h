@@ -30,9 +30,6 @@ enum SecondaryAlinkProbeFlag : unsigned int {
 
 constexpr unsigned int kDefaultSecondaryAlinkProbeFlags =
     SecondaryAlinkProbe_SkipExecute |
-    SecondaryAlinkProbe_SkipDraw |
-    SecondaryAlinkProbe_SkipCreateAnimePlay |
-    SecondaryAlinkProbe_SkipCreateModelCalc |
     SecondaryAlinkProbe_RestorePrimaryModelDataOwner |
     SecondaryAlinkProbe_ScopedDrawModelDataOwner |
     SecondaryAlinkProbe_ScopedExecuteModelDataOwner;

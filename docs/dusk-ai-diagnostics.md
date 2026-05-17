@@ -183,10 +183,14 @@ Each provider should declare:
 - Cost class: `cheap`, `medium`, or `walks_tree`.
 - Default sample cadence.
 - Whether it supports change detection.
+- A maximum JSONL event rate for the active profile.
+- A maximum event payload size for the active profile.
 
 Profiles choose providers and can override cadence per provider. Do not make profile sampling all-or-nothing; `render.stats` and process-tree traversal do not cost the same.
 
-Change detection may be provider-owned, profile-enabled, or both. Decide this explicitly during implementation. The likely default is: providers expose a stable digest or previous-value comparison when cheap; profiles choose whether to emit change events.
+Change detection is based on provider event keys, not the full latest snapshot. Providers may collect rich state with exact positions, stick angles, animation frames, render buffer sizes, distances, weights, timers, and other continuous values for `latest.json`. They then project that state down to a semantic event key for deciding whether to append to `events.jsonl`. When an event is emitted, the JSONL payload may still include the richer continuous fields as context; those fields just must not drive emission by themselves. This keeps `latest.json` useful as the current truth and keeps JSONL from growing just because Link moved a fraction of a unit, a stick angle drifted by a few degrees, or backend buffer usage changed when the window focus changed.
+
+The recorder should enforce output budgets centrally as a safety fuse, not as the normal noise-control mechanism. If a provider changes too often, `latest.json` should still receive the newest state, but `events.jsonl` should throttle that provider and emit at most one `diagnostics.throttled` marker per budget window. A budget hit during an ordinary capture usually means the provider's event projection is too broad.
 
 ## Extensibility Roadmap
 
@@ -205,7 +209,7 @@ Keep profiles task-shaped. A profile should answer one question, such as `coop.s
 
 The target architecture is broad observability with bounded output:
 
-- Cheap providers may sample every frame but should emit only on change.
+- Cheap providers may sample every frame for `latest.json`, but should emit JSONL only on semantic changes or explicit low-rate samples.
 - Medium providers should sample at low cadence or on explicit markers.
 - Tree-walking providers should be manual, low-rate, or scoped to a known actor/profile.
 - Every provider should include `schema_version` and stable namespaces from this document.
@@ -290,8 +294,10 @@ The smallest useful implementation starts with:
 - `input.pad`: raw pad state and current co-op input snapshot for player slots 0 and 1.
 - `coop.probes`: current secondary ALINK probe flags.
 - `alink.secondary`: the secondary ALINK state already being investigated: proc, animation frame/rate, relevant input/action bits, and model-data ownership summary.
+- `attention.state`: global attention owner, flags, lock truth, targets, counts, and lock/action/check lists with actor metadata.
+- `diagnostics.stats`: recorder health in `latest.json`, including per-provider event counts, byte counts, throttles, payload oversize counts, current budget-window counts, and configured provider budgets.
 
-Leave process-tree, heap, attention-list, OSReport sink, and debug-viewer providers for follow-up unless the first implementation needs them to answer the current ALINK question.
+Leave process-tree, heap, OSReport sink, and debug-viewer providers for follow-up unless the first implementation needs them to answer the current ALINK question.
 
 ## First Co-op Profile
 
@@ -306,9 +312,15 @@ First profile candidate:
     {"name": "render.stats", "sample_every_frames": 30},
     {"name": "player.slots", "sample_every_frames": 1, "emit_on_change": true},
     {"name": "input.pad", "sample_every_frames": 1, "emit_on_change": true},
+    {"name": "attention.state", "sample_every_frames": 5, "emit_on_change": true},
     {"name": "coop.probes", "sample_every_frames": 30, "emit_on_change": true},
     {"name": "alink.secondary", "sample_every_frames": 1, "emit_on_change": true}
   ],
+  "budgets": {
+    "scene.current": {"max_events_per_minute": 20, "max_payload_bytes": 4096},
+    "attention.state": {"max_events_per_minute": 60, "max_payload_bytes": 12288},
+    "alink.secondary": {"max_events_per_minute": 120, "max_payload_bytes": 8192}
+  },
   "flush_triggers": [
     "assertion",
     "alink.secondary.known_bad_state",
@@ -332,15 +344,18 @@ Implemented:
 - Per-session `events.jsonl` is append-only. The convenience `diagnostics/latest/events.jsonl` is reset when a new session starts so captures from previous runs do not mix with the newest manifest.
 - `latest.json` is overwritten when provider state changes, throttled to avoid per-frame writes, and manual flush forces a write with the newest provider data.
 - `manifest.json` records profile, role, provider schema versions, sample cadence, `emit_on_change`, the Dusk log path, and the current stable-actor-ID limitation.
-- Provider snapshots refresh the in-memory latest state on their cadence, but only append to `events.jsonl` when the provider payload changes. This keeps the JSONL stream useful for AI review instead of recording identical per-frame state.
+- Provider snapshots refresh the in-memory latest state on their cadence, but only append to `events.jsonl` when the provider's semantic event key changes. Full latest payloads can contain continuous values. JSONL events may include those exact values as context during a meaningful update, but exact player position, stick angle, animation frame, render buffer sizes, attention weights/distances, and timers are not allowed to create events on their own unless a focused profile explicitly asks for that.
+- Provider emission is budgeted centrally as an airbag. Every provider declares a cost class, max JSONL events per minute, and max event payload bytes. When a provider exhausts its event or payload budget, the recorder still updates `latest.json`, suppresses extra JSONL events, and emits one `diagnostics.throttled` marker for that provider/window. Normal providers should avoid hitting these limits through narrower event projection.
+- `diagnostics.stats` is written into `latest.json` as recorder health, not as a normal spam-prone JSONL provider. It reports buffered event count and per-provider written/throttled/oversized counts plus active budgets.
 - The ring buffer keeps the latest 3600 emitted events in memory and is flushed through the same event path.
 - Actor Spawner exposes `Record action mirror diagnostics`, `Flush diagnostics`, and the active output path near the secondary ALINK controls.
 - The existing ALINK action-mirror helper now also feeds `alink.secondary` structured state whenever it emits the human-readable `secondary action-mirror` log. Its `"phase"` field is informational; identical state is not re-emitted just because the helper saw a new before/after phase.
+- `attention.state` records the shared `dAttention_c` object directly: owner actor, pad number, flags, lock truth, lock/action/check counts and offsets, primary targets, and active lock/action/check list entries with actor metadata. It samples every five frames and intentionally omits empty list slots plus noisy list weights/distances in this profile. This exists because the current shield/target mirror evidence points at shared attention state, not P2 raw input leakage.
 
 Still deferred:
 
 - Stable actor UIDs. V1 records pointers as metadata and marks `stable_actor_uid_deferred`.
-- Process tree, heap, attention-list, OSReport sink, and debug-viewer providers.
+- Process tree, heap, OSReport sink, and debug-viewer providers.
 - Automatic assertion/heap/desync flush triggers.
 - Live MCP or process introspection.
 
