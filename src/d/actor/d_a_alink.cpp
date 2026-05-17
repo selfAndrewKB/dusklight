@@ -106,6 +106,62 @@ void coopLogPrimaryRuntimeState(daAlink_c* player) {
         player->mUnderFrameCtrl[0].getRate(), anm, player->attention_info.flags);
 }
 
+void populateCoopSecondaryAlinkState(const char* phase, daAlink_c* player,
+                                     dusk::diagnostics::SecondaryAlinkState* diag) {
+    const u8 btn_r = static_cast<u8>(daAlink_c::BTN_R);
+    // Co-op: keep the execute-fed locomotion snapshot comparable with the action-mirror snapshot.
+    const dusk::coop::PlayerInputState p1_input = dusk::coop::readLocalInput(dusk::coop::PlayerSlot::Primary);
+    const dusk::coop::PlayerInputState p2_input = dusk::coop::readLocalInput(dusk::coop::PlayerSlot::Secondary);
+    const bool p1_hold_r_button = (p1_input.holdButtons & PAD_TRIGGER_R) != 0;
+    const bool p1_hold_l_button = (p1_input.holdButtons & PAD_TRIGGER_L) != 0;
+    const bool p1_hold_z_button = (p1_input.holdButtons & PAD_TRIGGER_Z) != 0;
+    const bool p2_hold_r_button = (p2_input.holdButtons & PAD_TRIGGER_R) != 0;
+    const bool p2_hold_l_button = (p2_input.holdButtons & PAD_TRIGGER_L) != 0;
+    const bool p2_hold_z_button = (p2_input.holdButtons & PAD_TRIGGER_Z) != 0;
+
+    diag->phase = phase;
+    diag->actor = reinterpret_cast<uintptr_t>(player);
+    diag->target = reinterpret_cast<uintptr_t>(player->mTargetedActor);
+    diag->anim = reinterpret_cast<uintptr_t>(player->mNowAnmPackUnder[0].getAnmTransform());
+    diag->modelUser = player->mpLinkModel != nullptr ? player->mpLinkModel->getUserArea() : 0;
+    diag->ownerUnder = reinterpret_cast<uintptr_t>(player->field_0x1f20);
+    diag->ownerUpper = reinterpret_cast<uintptr_t>(player->field_0x1f24);
+    diag->proc = player->mProcID;
+    diag->stickAngle = player->mStickAngle;
+    diag->moveAngle = player->mMoveAngle;
+    diag->currentAngleY = player->current.angle.y;
+    diag->shapeAngleY = player->shape_angle.y;
+    diag->attentionFlags = player->attention_info.flags;
+    diag->rawMask |= player->checkInputOnR() ? 1u << 0 : 0;
+    diag->rawMask |= player->checkAttentionLock() ? 1u << 1 : 0;
+    diag->rawMask |= (player->mItemButton & btn_r) != 0 ? 1u << 2 : 0;
+    diag->rawMask |= (player->mItemTrigger & btn_r) != 0 ? 1u << 3 : 0;
+    diag->rawMask |= p1_input.holdLockR != 0 ? 1u << 4 : 0;
+    diag->rawMask |= p1_input.triggerLockR != 0 ? 1u << 5 : 0;
+    diag->rawMask |= p2_input.holdLockR != 0 ? 1u << 6 : 0;
+    diag->rawMask |= p2_input.triggerLockR != 0 ? 1u << 7 : 0;
+    diag->rawMask |= p1_hold_r_button ? 1u << 8 : 0;
+    diag->rawMask |= p1_hold_l_button ? 1u << 9 : 0;
+    diag->rawMask |= p1_hold_z_button ? 1u << 10 : 0;
+    diag->rawMask |= p2_hold_r_button ? 1u << 11 : 0;
+    diag->rawMask |= p2_hold_l_button ? 1u << 12 : 0;
+    diag->rawMask |= p2_hold_z_button ? 1u << 13 : 0;
+    diag->rStatus = dComIfGp_getRStatus();
+    diag->speedF = player->speedF;
+    diag->normalSpeed = player->mNormalSpeed;
+    diag->stickValue = player->mStickValue;
+    diag->moveValue = player->mMoveValue;
+    diag->posX = player->current.pos.x;
+    diag->posY = player->current.pos.y;
+    diag->posZ = player->current.pos.z;
+    diag->underFrame = player->mUnderFrameCtrl[0].getFrame();
+    diag->underRate = player->mUnderFrameCtrl[0].getRate();
+    diag->inputR = player->checkInputOnR();
+    diag->attentionLock = player->checkAttentionLock();
+    diag->itemButtonR = (player->mItemButton & btn_r) != 0;
+    diag->itemTriggerR = (player->mItemTrigger & btn_r) != 0;
+}
+
 void coopLogSecondaryExecuteState(const char* phase, daAlink_c* player) {
     static u16 s_prev_proc = daAlink_c::PROC_MAX;
     static uintptr_t s_prev_anm = 0;
@@ -135,6 +191,11 @@ void coopLogSecondaryExecuteState(const char* phase, daAlink_c* player) {
         phase, reinterpret_cast<uintptr_t>(player), player->mProcID, player->speedF, player->mNormalSpeed,
         player->mStickValue, player->mUnderFrameCtrl[0].getFrame(),
         player->mUnderFrameCtrl[0].getRate(), anm, player->attention_info.flags);
+
+    dusk::diagnostics::SecondaryAlinkState diag{};
+    populateCoopSecondaryAlinkState(phase, player, &diag);
+    // Co-op: keep latest diagnostics tied to P2 execute, so locomotion tests do not depend on R/attention changes.
+    dusk::diagnostics::recordSecondaryAlinkState(phase, diag);
 }
 
 void coopLogSecondaryActionMirrorState(const char* phase, daAlink_c* player) {
@@ -200,27 +261,20 @@ void coopLogSecondaryActionMirrorState(const char* phase, daAlink_c* player) {
         static_cast<unsigned int>(r_status));
 
     dusk::diagnostics::SecondaryAlinkState diag{};
-    diag.actor = reinterpret_cast<uintptr_t>(player);
-    diag.target = target;
-    diag.anim = reinterpret_cast<uintptr_t>(player->mNowAnmPackUnder[0].getAnmTransform());
-    diag.modelUser = player->mpLinkModel != nullptr ? player->mpLinkModel->getUserArea() : 0;
-    diag.ownerUnder = reinterpret_cast<uintptr_t>(player->field_0x1f20);
-    diag.ownerUpper = reinterpret_cast<uintptr_t>(player->field_0x1f24);
-    diag.proc = player->mProcID;
-    diag.attentionFlags = player->attention_info.flags;
+    populateCoopSecondaryAlinkState(phase, player, &diag);
     diag.rawMask = mask;
-    diag.rStatus = r_status;
-    diag.speedF = player->speedF;
-    diag.normalSpeed = player->mNormalSpeed;
-    diag.stickValue = player->mStickValue;
-    diag.underFrame = player->mUnderFrameCtrl[0].getFrame();
-    diag.underRate = player->mUnderFrameCtrl[0].getRate();
-    diag.inputR = player->checkInputOnR();
-    diag.attentionLock = player->checkAttentionLock();
-    diag.itemButtonR = (player->mItemButton & btn_r) != 0;
-    diag.itemTriggerR = (player->mItemTrigger & btn_r) != 0;
     // Co-op: keep the structured recorder fed by the same narrow action-mirror probe as the human log.
     dusk::diagnostics::recordSecondaryAlinkState(phase, diag);
+}
+
+BOOL checkCoopAttentionLock(daAlink_c* player) {
+    if (dusk::coop::isSecondaryPlayerPrototype(player) &&
+        dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_IgnoreSharedAttentionLock))
+    {
+        return FALSE;
+    }
+
+    return player->mAttention->Lockon();
 }
 
 void coopInstallModelDataOwner(daAlink_c* player) {
@@ -10171,6 +10225,15 @@ void daAlink_c::setAtnList() {
     }
 
     mZ2Link.setMarkState(var_r30);
+}
+
+BOOL daAlink_c::checkAttentionLock() {
+#if TARGET_PC
+    // Co-op: secondary ALINK prototypes should not mirror P1's shared dAttention_c lock state.
+    return checkCoopAttentionLock(this);
+#else
+    return mAttention->Lockon();
+#endif
 }
 
 void daAlink_c::setRStatus(u8 i_status) {

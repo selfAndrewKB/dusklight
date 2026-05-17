@@ -155,6 +155,10 @@ void ImGuiMenuTools::ShowActorSpawner() {
             "Scoped execute model data owner",
             dusk::coop::SecondaryAlinkProbe_ScopedExecuteModelDataOwner
         );
+        secondaryAlinkProbeCheckbox(
+            "Ignore shared attention lock",
+            dusk::coop::SecondaryAlinkProbe_IgnoreSharedAttentionLock
+        );
         ImGui::TreePop();
     }
 

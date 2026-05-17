@@ -197,7 +197,7 @@ The recorder should enforce output budgets centrally as a safety fuse, not as th
 The recorder is intentionally small but should grow through provider/profile additions, not one-off logs. The next useful expansion is a set of reusable provider families:
 
 - `attention.state`: global attention lock state, current lock-on/action/check targets, and enough actor metadata to tell which player slot is observing the global attention object.
-- `player.status`: selected `dComIfGp` player status bits, R/Z/attention UI status, health/magic/rupee/item state, and any slot-specific replacement once the state becomes decoupled.
+- `player.status`: selected `dComIfGp` player status bits, R/Z/A/Do/UI button status, camera attention status, and secondary ALINK mirror hints. This is the next implemented provider for separating clean P2 input from shared player/attention state before any behavior fix.
 - `actor.lifecycle`: create/delete/register/unregister events with future stable actor UIDs, profile names, rooms, arguments, and parent/process-tree relationships.
 - `actor.processes`: low-rate or manual process-tree summaries derived from the same data used by `ImGuiProcessOverlay`.
 - `camera.state`: active camera IDs, eye/center/up/FOV, mode, and target actor metadata.
@@ -216,6 +216,18 @@ The target architecture is broad observability with bounded output:
 - Actor-heavy providers should wait for stable actor UIDs before they become authoritative.
 
 This keeps the recorder extensible enough for future co-op systems without turning it into a permanent log-spam machine.
+
+## Current Implementation Notes
+
+- The secondary ALINK action-mirror profile writes structured artifacts under Dusk's runtime diagnostics path, including `manifest.json`, `latest.json`, and append-only `events.jsonl`.
+- `latest.json` is the rich current-state surface. It may include exact positions, stick values, animation frames, render buffer sizes, attention list weights/distances, and other context that would be too noisy as event keys.
+- `events.jsonl` is the semantic timeline. Providers should project their latest data into a smaller event key so standing still, window-focus buffer churn, animation frame advancement, or tiny stick/position drift does not emit new events by itself.
+- `input.pad` event keys should use semantic gameplay input rather than the full raw hold bitfield. Exact raw values belong in payload/latest, but controller-specific high bits and noisy held item bits should not make JSONL grow during ordinary movement.
+- `attention.state` and `player.status` are complementary. `attention.state` describes the shared `dAttention_c` object; `player.status` describes selected shared `dComIfGp` player/button/camera status that ALINK uses around shield, lock-on, actions, and UI prompts.
+- Current evidence says the P2 shield/attention mirror is not P2 input leakage: P2 input remains clean while shared attention/status facts change. Use these providers to identify which state needs per-player decoupling instead of forcing secondary ALINK to ignore attention as a blind workaround.
+- The secondary ALINK harness now has an explicit `Ignore shared attention lock` probe. Captures should compare `attention.state.lockon` against `alink.secondary.attention_lock`: if global lock stays true while secondary attention lock stays false, the probe is doing its job and remaining mirroring belongs to another shared status path.
+- The user confirmed the probe stops P2 from mirroring P1's shield/target pose. Treat this as a confirmed singleton-decoupling lesson: `dAttention_c` may remain the global P1/camera/HUD attention object for now, but secondary ALINK must not interpret `dAttention_c::Lockon()` as its own per-player gameplay lock state.
+- The user confirmed P2 controller input works: P2 movement, rolling, and a basic combat swing worked from controller 2. The next failures were item/action ownership, with fishing hook visible state appearing on P1 and boomerang catch/availability routing back to P1.
 
 ## Provider Namespaces
 
@@ -345,6 +357,7 @@ Implemented:
 - `latest.json` is overwritten when provider state changes, throttled to avoid per-frame writes, and manual flush forces a write with the newest provider data.
 - `manifest.json` records profile, role, provider schema versions, sample cadence, `emit_on_change`, the Dusk log path, and the current stable-actor-ID limitation.
 - Provider snapshots refresh the in-memory latest state on their cadence, but only append to `events.jsonl` when the provider's semantic event key changes. Full latest payloads can contain continuous values. JSONL events may include those exact values as context during a meaningful update, but exact player position, stick angle, animation frame, render buffer sizes, attention weights/distances, and timers are not allowed to create events on their own unless a focused profile explicitly asks for that.
+- Raw controller bitfields should be treated the same way: keep them in `latest.json` and event payloads for forensic detail, but do not let the full raw value drive event emission unless a focused input-device test needs it.
 - Provider emission is budgeted centrally as an airbag. Every provider declares a cost class, max JSONL events per minute, and max event payload bytes. When a provider exhausts its event or payload budget, the recorder still updates `latest.json`, suppresses extra JSONL events, and emits one `diagnostics.throttled` marker for that provider/window. Normal providers should avoid hitting these limits through narrower event projection.
 - `diagnostics.stats` is written into `latest.json` as recorder health, not as a normal spam-prone JSONL provider. It reports buffered event count and per-provider written/throttled/oversized counts plus active budgets.
 - The ring buffer keeps the latest 3600 emitted events in memory and is flushed through the same event path.

@@ -10,6 +10,9 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
 - Use detailed commit bodies for meaningful co-op checkpoints. Record the intent, the concrete runtime finding or code hazard addressed, and what was or was not manually validated so later sessions do not have to reconstruct the story from diffs alone.
 - Match local C++ style exactly. In early file-scope helpers, qualify class enum members such as `daAlink_c::BTN_R`; do not assume unqualified member names are visible outside member-function scope.
 - When logging through `aurora::Module` / fmt on MSVC, cast small integer, enum, `BOOL`, and bool-ish expressions to ordinary `int` / `unsigned int` as needed. Avoid clever format arguments that trip fmt compile-time checks.
+- For secondary ALINK shield/attention bugs, do not treat clean P2 input as proof that state is decoupled. Current evidence points at shared attention/player-status state, so capture status facts before adding behavior fixes.
+- `checkAttentionLock()` is the first confirmed singleton hazard: P2 stopped mirroring P1's shield/target pose once secondary ALINK ignored the shared `dAttention_c::Lockon()` result. Future fixes should turn that into per-player attention semantics, not remove global attention from P1 camera/HUD/story uses.
+- Diagnostics must keep `latest.json` rich and `events.jsonl` semantic. Continuous values may appear in latest snapshots or emitted payload context, but they should not drive JSONL events unless the profile is explicitly testing frame-level churn.
 
 ## Repository Map
 
@@ -22,7 +25,9 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
 - `docs/coop-player-slots-plan.md`: completed first co-op milestone: no-behavior-change player slot registry.
 - `docs/coop-input-snapshot-plan.md`: completed second co-op milestone: slot-aware input snapshot while preserving primary-player `PAD_1` behavior.
 - `docs/coop-secondary-player-prototype-plan.md`: diagnostic third co-op milestone: secondary ALINK prototype evidence.
-- `docs/coop-alink-duplication-audit-plan.md`: current next co-op plan: audit ALINK singleton/shared-state hazards before choosing proxy fallback or reattempting duplication.
+- `docs/coop-alink-duplication-audit-plan.md`: completed first ALINK duplication audit phase: confirmed model-data and attention singleton hazards plus the visible-P2 containment harness.
+- `docs/coop-secondary-alink-input-routing-plan.md`: completed secondary ALINK input-routing milestone: P2 moves from controller 2 and basic rolling/combat swing works.
+- `docs/coop-secondary-alink-item-ownership-plan.md`: current active co-op plan: classify and fix the first P2 item/action ownership hazards, starting with boomerang and fishing hook evidence.
 - `.codex/config.toml`: Codex hook wiring. Keep hook behavior narrow and documented in `docs/codex-hooks.md`.
 - `files.cmake`: explicit source-file list. Update it when adding C++ source/header files that must be built.
 

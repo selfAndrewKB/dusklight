@@ -3469,7 +3469,7 @@ public:
     BOOL checkSmallUpperGuardAnime() const { return checkUpperAnime(dRes_ID_ALANM_BCK_ATDEFS_e); }
     BOOL checkFmChainGrabAnime() const { return checkUpperAnime(dRes_ID_ALANM_BCK_CHAIN_e) || checkUpperAnime(dRes_ID_ALANM_BCK_WL_CHAIN_e); }
 
-    BOOL checkAttentionLock() { return mAttention->Lockon(); }
+    BOOL checkAttentionLock();
 
     bool checkUpperAnime(u16 i_resIdx) const { return mUpperAnmHeap[UPPER_2].getIdx() == i_resIdx; }
     bool checkUnderAnime(u16 i_resIdx) const { return mUnderAnmHeap[UNDER_2].getIdx() == i_resIdx; }

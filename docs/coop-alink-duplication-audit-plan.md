@@ -1,6 +1,8 @@
 # Co-op ALINK Duplication Audit Plan
 
-This plan is the next co-op decision point after the secondary ALINK prototype. The goal is not to build player 2 from scratch by default. The goal is to understand, document, and isolate the singleton/shared-state hazards that prevent a second `daAlink_c` from being safely instantiated.
+This plan is now the completed first phase of the ALINK duplication audit. The active next milestone is `docs/coop-secondary-alink-input-routing-plan.md`.
+
+The original goal was not to build player 2 from scratch by default. The goal was to understand, document, and isolate the singleton/shared-state hazards that prevent a second `daAlink_c` from being safely instantiated.
 
 ## Purpose
 
@@ -9,6 +11,23 @@ The project still prefers reusing ALINK if that can be made safe. Rebuilding Lin
 The current evidence says: spawning a second ALINK blindly is unsafe. It does not say that ALINK duplication is impossible.
 
 This audit exists to find exactly which systems must become slot-aware, split per actor, or protected as primary-only before another serious second-ALINK attempt.
+
+## Phase 1 Outcome
+
+Phase 1 is complete enough to hand off to the next milestone.
+
+Confirmed:
+
+- A secondary ALINK can spawn, register as sidecar slot 1, create, render, and execute under containment.
+- P1's original animation lock was caused by shared `J3DModelData` matrix-calculator ownership installed by `changeModelDataDirect()` / `changeModelDataDirectWolf()`.
+- Scoped model-data ownership around secondary create-time animation/model setup, draw, and execute prevents that P1 animation regression in the tested harness.
+- P2 shield/target pose mirroring was caused by secondary `checkAttentionLock()` reading the shared global `dAttention_c::Lockon()` state, not by P2 receiving P1 input.
+- `Ignore shared attention lock` quarantines that symptom for secondary ALINK prototypes.
+- The diagnostics recorder can now capture the relevant facts through `input.pad`, `attention.state`, `player.status`, `coop.probes`, and `alink.secondary`.
+
+Next active work:
+
+- `docs/coop-secondary-alink-input-routing-plan.md`: route the secondary ALINK prototype toward controller 2 for basic locomotion under the known containment fixes.
 
 ## Current Runtime Evidence
 
@@ -190,19 +209,24 @@ Use this pattern again when a secondary ALINK bug appears:
 
 ## Next Specific Work
 
-1. Audit `changeModelDataDirect()` and `changeModelDataDirectWolf()` fully.
+1. Use the `player.status` diagnostics provider with `attention.state`, `input.pad`, and `alink.secondary` to classify shield/attention mirroring as shared status, shared attention, or an ALINK-local derived state.
+   - The specific question is whether secondary ALINK observes P1's shield/lock state through `dComIfGp` button/player/camera status or through the global `dAttention_c` object.
+   - Do not force secondary `checkAttentionLock()` false as a default fix. That hides the state-coupling problem instead of deciding which state should become per-player.
+2. Audit ALINK reads and writes around attention/status once the capture identifies the changing fields.
+   - Start with `checkAttentionLock()`, `mAttention`, `mTargetedActor`, `dComIfGp_getRStatus()`, `dComIfGp_getZStatus()`, `dComIfGp_getDoStatus()`, guard/shield procs, side-step/attention movement, and button-prompt status paths.
+3. Audit `changeModelDataDirect()` and `changeModelDataDirectWolf()` fully.
    - Classify every write as actor-local, shared `J3DModelData`, shared material/shape, callback, or user-area ownership.
    - Decide whether secondary ALINK should avoid installing those writes, install then restore P1, or use isolated model data later.
-2. Audit ALINK material/texture animator ownership.
+4. Audit ALINK material/texture animator ownership.
    - Start with `entryTexMtxAnimator`, `entryTexNoAnimator`, `entryTevRegAnimator`, and matching removal calls in `d_a_alink.cpp` and included ALINK files.
    - Record which ones target shared Link body/face/hat/sword model data.
-3. Add logs or toggles only for the next specific suspected ownership write.
+5. Add logs or toggles only for the next specific suspected ownership write.
    - Do not add a broad "skip everything" mode.
    - Keep `Skip execute`, `Skip draw`, and `Restore P1 model data owner` as the default containment harness.
-4. Once shared model-data ownership is mapped, test whether secondary draw can be re-enabled with P1 ownership restored.
+6. Once shared model-data ownership is mapped, test whether secondary draw can be re-enabled with P1 ownership restored.
    - Expected risk: secondary draw may steal model-data owner again or mutate material animators.
    - If it breaks, inspect draw-time `modelDraw(...)`, `modelCalc(...)`, material animator entry/removal, and `J3DModel::setUserArea(...)` paths.
-5. Only after draw is understood, test a narrow secondary execute slice.
+7. Only after draw is understood, test a narrow secondary execute slice.
    - Start with logs around proc changes and animation setters.
    - Do not route P2 input yet unless the create/draw ownership path stays stable.
 
@@ -244,8 +268,13 @@ Available toggles:
 - Restore player 1's shared ALINK model-data owner after secondary `playerInit()` / `changeLink()`.
 - Scope shared ALINK model-data ownership to secondary only during secondary draw, then restore player 1 immediately afterward.
 - Scope shared ALINK model-data ownership to secondary only during secondary execute, then restore player 1 immediately afterward.
+- Ignore the shared `dAttention_c::Lockon()` result for secondary ALINK prototypes.
 
-Current default bits preserve the latest visible idle-P2 harness: skip secondary `execute()`; restore player 1's shared model-data owner after secondary initialization; and keep scoped draw/execute ownership ready for deliberate follow-up tests. Secondary create-time `allAnimePlay()`, create-time `mpLinkModel->calc()`, and `draw()` are enabled by default now that scoped model-data ownership makes the prototype visible without reintroducing the original player 1 animation lock. Re-enable the create-time skips or `Skip draw` only for isolation tests.
+Current default bits preserve the latest visible idle-P2 harness: skip secondary `execute()`; restore player 1's shared model-data owner after secondary initialization; keep scoped draw/execute ownership ready for deliberate follow-up tests; and suppress secondary reads of the shared global attention lock. Secondary create-time `allAnimePlay()`, create-time `mpLinkModel->calc()`, and `draw()` are enabled by default now that scoped model-data ownership makes the prototype visible without reintroducing the original player 1 animation lock. Re-enable the create-time skips, `Skip draw`, or raw shared attention lock only for isolation tests.
+
+The latest diagnostics capture showed P2 input stayed clean while `dAttention_c::Lockon()` and `dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_121` moved with P1 attention state. The new `Ignore shared attention lock` probe makes `daAlink_c::checkAttentionLock()` return false only for secondary ALINK prototypes when the flag is enabled. This is a diagnostic containment step, not the final co-op design: the durable fix still needs a per-player attention/status model rather than making secondary ALINK permanently blind to all attention.
+
+The user confirmed that with `Ignore shared attention lock` enabled, P2 no longer mirrors P1's shield/target pose. This makes `checkAttentionLock()` the first confirmed singleton hazard that should graduate from a raw global read into a per-player semantic helper. The important distinction is not "remove global attention everywhere"; it is "do not let secondary ALINK consume P1's global attention lock as P2's own gameplay lock." P1/global attention can still drive camera/HUD/story state while P2 eventually receives a slot-local attention answer.
 
 The latest manual toggle sweep ruled out the remaining late create-time candidates. With the cautious default bits still enabled, skipping secondary face texture animation, item matrix setup, item actor setup, set matrix, and wait animation binding did not fix player 1's visible animation lock. Skipping `setStartProcInit()` crashed and is treated as structural, not an optional side effect.
 
@@ -369,7 +398,7 @@ The action-mirror diagnostic now has an optional structured recorder. In the Act
 - `latest/manifest.json`, `latest/latest.json`, and `latest/events.jsonl`.
 - `sessions/<session-id>/local/manifest.json`, `latest.json`, and `events.jsonl`.
 
-The recorder captures `scene.current`, `render.stats`, `player.slots`, `input.pad`, `coop.probes`, and `alink.secondary` using a stable event envelope. V1 still uses actor pointers as metadata rather than stable actor IDs, so do not use pointer values as long-lived identity across separate captures.
+The recorder captures `scene.current`, `render.stats`, `player.slots`, `input.pad`, `attention.state`, `player.status`, `coop.probes`, and `alink.secondary` using a stable event envelope. V1 still uses actor pointers as metadata rather than stable actor IDs, so do not use pointer values as long-lived identity across separate captures.
 
 How to read the next result:
 
@@ -381,15 +410,19 @@ Structured diagnostic result:
 
 - The 2026-05-15 captures show P1's target/shield input changing while P2 raw input remains zero.
 - During the same window, P2's `inputR`, `itemBtnR`, `itemTrigR`, `target`, and `rStatus` stay false/zero, but P2 `checkAttentionLock()` flips true.
-- `checkAttentionLock()` is an inline wrapper around `mAttention->Lockon()`, and ALINK initializes `mAttention` from the global `dComIfGp_getAttention()` object. This confirms the target/shield mirror is shared attention state, not raw P2 input leakage.
-- Do not "fix" this by forcing secondary `checkAttentionLock()` false by default. That would hide the coupling we need to understand for real co-op state decoupling. A secondary-only isolation toggle is acceptable only as an explicitly named diagnostic control if a later test needs to quarantine this symptom.
+- `checkAttentionLock()` originally wrapped `mAttention->Lockon()` directly, and ALINK initializes `mAttention` from the global `dComIfGp_getAttention()` object. This confirms the target/shield mirror is shared attention state, not raw P2 input leakage.
+- The `Ignore shared attention lock` default probe now quarantines this symptom for secondary ALINK only, while `attention.state` and `player.status` still expose the global P1-owned state in captures. Treat it as containment for the visible-P2 harness, not as the final per-player attention design.
 
 Next narrow audit target:
 
-1. Add `attention.state` diagnostics around the global attention object: lock-on state, lock-on target, action/check-object lists if available, and the current player slot/actor context that sampled it.
+1. Promote the confirmed `checkAttentionLock()` finding into a small per-player attention helper plan.
+   - Keep P1 behavior identical.
+   - Keep global `dAttention_c` as the P1/camera/HUD object until a later plan deliberately changes it.
+   - Replace the temporary secondary-only false result with a named semantic helper once the next callsite classification is clear.
 2. Audit ALINK reads of `checkAttentionLock()`, `mTargetedActor`, `mAttention`, and global player status around target/shield, guard, side-step, and attention movement.
 3. Classify each callsite as "must become per-player", "global camera/UI state", or "safe shared world query".
-4. Preserve the visible shield mirror as a known symptom until a real per-player attention/status path exists.
+4. If a second callsite shares the same semantic need, introduce the helper there. Do not mass-replace every attention/global-status read.
+5. Inspect remaining changed `player.status` fields only if a P2 symptom persists after the attention-lock isolation.
 
 ## Non-Goals
 

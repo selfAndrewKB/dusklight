@@ -8,6 +8,7 @@
 namespace dusk::diagnostics {
 
 struct SecondaryAlinkState {
+    const char* phase = nullptr;
     uintptr_t actor = 0;
     uintptr_t target = 0;
     uintptr_t anim = 0;
@@ -15,12 +16,20 @@ struct SecondaryAlinkState {
     uintptr_t ownerUnder = 0;
     uintptr_t ownerUpper = 0;
     u16 proc = 0;
+    s16 stickAngle = 0;
+    s16 moveAngle = 0;
+    s16 currentAngleY = 0;
+    s16 shapeAngleY = 0;
     u32 attentionFlags = 0;
     u32 rawMask = 0;
     u8 rStatus = 0;
     f32 speedF = 0.0f;
     f32 normalSpeed = 0.0f;
     f32 stickValue = 0.0f;
+    f32 moveValue = 0.0f;
+    f32 posX = 0.0f;
+    f32 posY = 0.0f;
+    f32 posZ = 0.0f;
     f32 underFrame = 0.0f;
     f32 underRate = 0.0f;
     bool inputR = false;

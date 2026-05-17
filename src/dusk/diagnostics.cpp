@@ -334,11 +334,16 @@ int stickZone(const json& input) {
     return 3;
 }
 
+unsigned int gameplayButtonMask(unsigned int buttons) {
+    return buttons & (PAD_BUTTON_A | PAD_BUTTON_B | PAD_BUTTON_X | PAD_BUTTON_Y | PAD_TRIGGER_Z |
+                      PAD_TRIGGER_L | PAD_TRIGGER_R | PAD_BUTTON_START);
+}
+
 json inputPadEventKey(const json& data) {
     auto inputEvent = [](const json& input) {
+        const unsigned int triggerButtons = input.value("trigger_buttons", 0u);
         return json{
-            {"trigger_buttons", input.value("trigger_buttons", 0)},
-            {"hold_buttons", input.value("hold_buttons", 0)},
+            {"trigger_buttons", gameplayButtonMask(triggerButtons)},
             {"trigger_lock_r", input.value("trigger_lock_r", 0)},
             {"hold_lock_r", input.value("hold_lock_r", 0)},
             {"hold_r", input.value("hold_r", false)},
@@ -408,12 +413,29 @@ json attentionStateEventKey(const json& data) {
     };
 }
 
+json playerStatusEventKey(const json& data) {
+    return {
+        {"schema_version", data.value("schema_version", 1)},
+        {"button_status", data.value("button_status", json::object())},
+        {"button_status_force", data.value("button_status_force", json::object())},
+        {"player_status_words", data.value("player_status_words", json::array())},
+        {"camera_attention_status", data.value("camera_attention_status", json::array())},
+        {"attention_lock", data.value("attention_lock", false)},
+        {"attention_flags", data.value("attention_flags", 0)},
+        {"secondary_attention_lock", data.value("secondary_attention_lock", false)},
+        {"secondary_raw_mask", data.value("secondary_raw_mask", 0)},
+    };
+}
+
 json alinkSecondaryEventKey(const json& data) {
     return {
         {"schema_version", data.value("schema_version", 1)},
         {"available", data.value("available", false)},
         {"actor", data.value("actor", "0x0")},
         {"proc", data.value("proc", 0)},
+        {"stick_active", data.value("stick_active", false)},
+        {"move_active", data.value("move_active", false)},
+        {"speed_active", data.value("speed_active", false)},
         {"anim", data.value("anim", "0x0")},
         {"attention_flags", data.value("attention_flags", 0)},
         {"input_r", data.value("input_r", false)},
@@ -442,6 +464,9 @@ json eventKeyForProvider(const char* provider, const json& data) {
     }
     if (name == "attention.state") {
         return attentionStateEventKey(data);
+    }
+    if (name == "player.status") {
+        return playerStatusEventKey(data);
     }
     if (name == "alink.secondary") {
         return alinkSecondaryEventKey(data);
@@ -594,6 +619,80 @@ json collectAttentionState() {
     return data;
 }
 
+json collectButtonStatus() {
+    return {
+        {"message", static_cast<unsigned int>(dComIfGp_getMesgStatus())},
+        {"r", static_cast<unsigned int>(dComIfGp_getRStatus())},
+        {"a", static_cast<unsigned int>(dComIfGp_getAStatus())},
+        {"do", static_cast<unsigned int>(dComIfGp_getDoStatus())},
+        {"z", static_cast<unsigned int>(dComIfGp_getZStatus())},
+        {"three_d", static_cast<unsigned int>(dComIfGp_get3DStatus())},
+        {"c_stick", static_cast<unsigned int>(dComIfGp_getCStickStatus())},
+        {"s_button", static_cast<unsigned int>(dComIfGp_getSButtonStatus())},
+        {"x", static_cast<unsigned int>(dComIfGp_getXStatus())},
+        {"y", static_cast<unsigned int>(dComIfGp_getYStatus())},
+    };
+}
+
+json collectButtonStatusForce() {
+    return {
+        {"r", static_cast<unsigned int>(dComIfGp_getRStatusForce())},
+        {"a", static_cast<unsigned int>(dComIfGp_getAStatusForce())},
+        {"do", static_cast<unsigned int>(dComIfGp_getDoStatusForce())},
+        {"z", static_cast<unsigned int>(dComIfGp_getZStatusForce())},
+        {"three_d", static_cast<unsigned int>(dComIfGp_get3DStatusForce())},
+        {"c_stick", static_cast<unsigned int>(dComIfGp_getCStickStatusForce())},
+        {"s_button", static_cast<unsigned int>(dComIfGp_getSButtonStatusForce())},
+        {"x", static_cast<unsigned int>(dComIfGp_getXStatusForce())},
+        {"y", static_cast<unsigned int>(dComIfGp_getYStatusForce())},
+    };
+}
+
+json collectPlayerStatusWords() {
+    json words = json::array();
+    for (int i = 0; i < 4; i++) {
+        words.push_back(static_cast<unsigned int>(g_dComIfG_gameInfo.play.mPlayerStatus[0][i]));
+    }
+    return words;
+}
+
+json collectCameraAttentionStatus() {
+    json statuses = json::array();
+    statuses.push_back(static_cast<unsigned int>(dComIfGp_getCameraAttentionStatus(0)));
+    return statuses;
+}
+
+json collectPlayerStatus() {
+    dAttention_c* attention = dComIfGp_getAttention();
+    json data = {
+        {"schema_version", 1},
+        {"button_status", collectButtonStatus()},
+        {"button_status_force", collectButtonStatusForce()},
+        {"player_status_words", collectPlayerStatusWords()},
+        {"camera_attention_status", collectCameraAttentionStatus()},
+        {"attention_lock", attention != nullptr ? static_cast<bool>(attention->Lockon()) : false},
+        {"attention_flags", attention != nullptr ? static_cast<unsigned int>(attention->mFlags) : 0},
+        {"secondary_available", s_state.hasSecondaryAlinkState},
+    };
+
+    if (s_state.hasSecondaryAlinkState) {
+        const SecondaryAlinkState& state = s_state.secondaryAlinkState;
+        data["secondary_actor"] = ptrString(state.actor);
+        data["secondary_proc"] = static_cast<unsigned int>(state.proc);
+        data["secondary_attention_lock"] = static_cast<bool>(state.attentionLock);
+        data["secondary_input_r"] = static_cast<bool>(state.inputR);
+        data["secondary_item_button_r"] = static_cast<bool>(state.itemButtonR);
+        data["secondary_item_trigger_r"] = static_cast<bool>(state.itemTriggerR);
+        data["secondary_raw_mask"] = static_cast<unsigned int>(state.rawMask);
+        data["secondary_target"] = ptrString(state.target);
+    } else {
+        data["secondary_attention_lock"] = false;
+        data["secondary_raw_mask"] = 0;
+    }
+
+    return data;
+}
+
 json inputForSlot(coop::PlayerSlot slot) {
     const coop::PlayerInputState input = coop::readLocalInput(slot);
     return {
@@ -626,6 +725,7 @@ json collectCoopProbes() {
         {"restore_primary_model_data_owner", coop::hasSecondaryAlinkProbeFlag(coop::SecondaryAlinkProbe_RestorePrimaryModelDataOwner)},
         {"scoped_draw_model_data_owner", coop::hasSecondaryAlinkProbeFlag(coop::SecondaryAlinkProbe_ScopedDrawModelDataOwner)},
         {"scoped_execute_model_data_owner", coop::hasSecondaryAlinkProbeFlag(coop::SecondaryAlinkProbe_ScopedExecuteModelDataOwner)},
+        {"ignore_shared_attention_lock", coop::hasSecondaryAlinkProbeFlag(coop::SecondaryAlinkProbe_IgnoreSharedAttentionLock)},
     };
 }
 
@@ -639,11 +739,21 @@ json collectAlinkSecondary() {
         return data;
     }
 
+    data["phase"] = state.phase != nullptr ? state.phase : "";
     data["actor"] = ptrString(state.actor);
     data["proc"] = static_cast<unsigned int>(state.proc);
     data["speed_f"] = state.speedF;
     data["normal_speed"] = state.normalSpeed;
     data["stick_value"] = state.stickValue;
+    data["move_value"] = state.moveValue;
+    data["stick_angle"] = static_cast<int>(state.stickAngle);
+    data["move_angle"] = static_cast<int>(state.moveAngle);
+    data["current_angle_y"] = static_cast<int>(state.currentAngleY);
+    data["shape_angle_y"] = static_cast<int>(state.shapeAngleY);
+    data["pos"] = {state.posX, state.posY, state.posZ};
+    data["stick_active"] = state.stickValue > 0.05f;
+    data["move_active"] = state.moveValue > 0.05f;
+    data["speed_active"] = state.speedF > 0.05f || state.speedF < -0.05f;
     data["under_frame"] = state.underFrame;
     data["under_rate"] = state.underRate;
     data["anim"] = ptrString(state.anim);
@@ -667,6 +777,7 @@ Provider s_providers[] = {
     {"player.slots", 1, "cheap", 1, true, 120, 8192, collectPlayerSlots},
     {"input.pad", 1, "cheap", 1, true, 120, 4096, collectInputPad},
     {"attention.state", 1, "medium", 5, true, 60, 12288, collectAttentionState},
+    {"player.status", 1, "cheap", 1, true, 120, 8192, collectPlayerStatus},
     {"coop.probes", 1, "cheap", 30, true, 20, 4096, collectCoopProbes},
     {"alink.secondary", 1, "cheap", 1, true, 120, 8192, collectAlinkSecondary},
 };

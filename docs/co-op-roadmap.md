@@ -57,7 +57,9 @@ The first secondary ALINK prototype is documented in `docs/coop-secondary-player
 
 Runtime evidence showed that secondary ALINK attention could be gated successfully, and that player 1 still enters `PROC_MOVE` with valid input after the secondary exists. The visible animation lock was fixed by restoring player 1's shared ALINK model-data ownership after secondary `playerInit()` / `changeLink()`. This confirms the main culprit was shared `J3DModelData` matrix-calculator ownership, not controller input, attention, action-proc selection, or late create-time animation/model calls.
 
-The next plan is `docs/coop-alink-duplication-audit-plan.md`. Do not pivot to a full proxy/replica Link as the default architecture until that audit has classified the relevant singleton callsites and animation/model ownership hazards. A proxy remains a fallback or temporary diagnostic tool, not the preferred plan by default.
+The follow-up duplication audit is documented in `docs/coop-alink-duplication-audit-plan.md`. It confirmed scoped model-data ownership and shared attention lock as the first major singleton hazards. The input-routing milestone in `docs/coop-secondary-alink-input-routing-plan.md` then confirmed that secondary ALINK can consume controller 2 input for movement, rolling, and a basic combat swing.
+
+The current plan is `docs/coop-secondary-alink-item-ownership-plan.md`. Fishing hook and boomerang tests show the next blocker is item/action ownership: visible held-item state, return/catch state, and item availability still route through P1/global state in some item paths. A proxy remains a fallback or temporary diagnostic tool, not the preferred plan by default.
 
 ## Design Principles
 
