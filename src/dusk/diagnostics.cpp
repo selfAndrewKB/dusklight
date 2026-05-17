@@ -3,6 +3,7 @@
 #include "aurora/gfx.h"
 #include "d/actor/d_a_alink.h"
 #include "d/d_com_inf_game.h"
+#include "d/d_item.h"
 #include "dusk/coop/input.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/dusk.h"
@@ -440,6 +441,17 @@ json playerStatusEventKey(const json& data) {
 }
 
 json alinkSecondaryEventKey(const json& data) {
+    const json copyRod = data.value("copy_rod", json::object());
+    json copyRodKey = {
+        {"active", copyRod.value("active", false)},
+    };
+    if (copyRodKey["active"].get<bool>()) {
+        copyRodKey["actor"] = copyRod.value("actor", "0x0");
+        copyRodKey["control_actor"] = copyRod.value("control_actor", "0x0");
+        copyRodKey["camera_actor"] = copyRod.value("camera_actor", "0x0");
+        copyRodKey["top_use"] = copyRod.value("top_use", false);
+    }
+
     return {
         {"schema_version", data.value("schema_version", 1)},
         {"available", data.value("available", false)},
@@ -451,10 +463,7 @@ json alinkSecondaryEventKey(const json& data) {
         {"item_actor_id", data.value("item_actor_id", 0)},
         {"item_actor_name", data.value("item_actor_name", 0)},
         {"throw_boomerang_actor", data.value("throw_boomerang_actor", "0x0")},
-        {"copy_rod_actor", data.value("copy_rod_actor", "0x0")},
-        {"copy_rod_control_actor", data.value("copy_rod_control_actor", "0x0")},
-        {"copy_rod_camera_actor", data.value("copy_rod_camera_actor", "0x0")},
-        {"copy_rod_top_use", data.value("copy_rod_top_use", false)},
+        {"copy_rod", copyRodKey},
         {"item_button", data.value("item_button", 0)},
         {"item_trigger", data.value("item_trigger", 0)},
         {"use_button_flags", data.value("use_button_flags", 0)},
@@ -476,6 +485,8 @@ json alinkSecondaryEventKey(const json& data) {
 
 const char* alinkProcName(u16 proc) {
     switch (proc) {
+    case daAlink_c::PROC_SERVICE_WAIT:
+        return "PROC_SERVICE_WAIT";
     case daAlink_c::PROC_WAIT:
         return "PROC_WAIT";
     case daAlink_c::PROC_MOVE:
@@ -484,16 +495,30 @@ const char* alinkProcName(u16 proc) {
         return "PROC_ATN_MOVE";
     case daAlink_c::PROC_ATN_ACTOR_WAIT:
         return "PROC_ATN_ACTOR_WAIT";
+    case daAlink_c::PROC_ATN_ACTOR_MOVE:
+        return "PROC_ATN_ACTOR_MOVE";
     case daAlink_c::PROC_FRONT_ROLL:
         return "PROC_FRONT_ROLL";
     case daAlink_c::PROC_CUT_NORMAL:
         return "PROC_CUT_NORMAL";
+    case daAlink_c::PROC_BOW_SUBJECT:
+        return "PROC_BOW_SUBJECT";
+    case daAlink_c::PROC_BOW_MOVE:
+        return "PROC_BOW_MOVE";
     case daAlink_c::PROC_BOOMERANG_SUBJECT:
         return "PROC_BOOMERANG_SUBJECT";
     case daAlink_c::PROC_BOOMERANG_MOVE:
         return "PROC_BOOMERANG_MOVE";
     case daAlink_c::PROC_BOOMERANG_CATCH:
         return "PROC_BOOMERANG_CATCH";
+    case daAlink_c::PROC_COPY_ROD_SUBJECT:
+        return "PROC_COPY_ROD_SUBJECT";
+    case daAlink_c::PROC_COPY_ROD_MOVE:
+        return "PROC_COPY_ROD_MOVE";
+    case daAlink_c::PROC_COPY_ROD_SWING:
+        return "PROC_COPY_ROD_SWING";
+    case daAlink_c::PROC_COPY_ROD_REVIVE:
+        return "PROC_COPY_ROD_REVIVE";
     case daAlink_c::PROC_CANOE_ROD_GRAB:
         return "PROC_CANOE_ROD_GRAB";
     case daAlink_c::PROC_CANOE_FISHING_WAIT:
@@ -792,7 +817,7 @@ json collectCoopProbes() {
 json collectAlinkSecondary() {
     const SecondaryAlinkState& state = s_state.secondaryAlinkState;
     json data = {
-        {"schema_version", 2},
+        {"schema_version", 3},
         {"available", s_state.hasSecondaryAlinkState},
     };
     if (!s_state.hasSecondaryAlinkState) {
@@ -809,10 +834,18 @@ json collectAlinkSecondary() {
     data["item_actor_id"] = static_cast<int>(state.itemActorId);
     data["item_actor_name"] = static_cast<int>(state.itemActorName);
     data["throw_boomerang_actor"] = ptrString(state.throwBoomerangActor);
-    data["copy_rod_actor"] = ptrString(state.copyRodActor);
-    data["copy_rod_control_actor"] = ptrString(state.copyRodControlActor);
-    data["copy_rod_camera_actor"] = ptrString(state.copyRodCameraActor);
-    data["copy_rod_top_use"] = state.copyRodTopUse;
+    const bool copyRodActive = state.copyRodActor != 0 || state.copyRodControlActor != 0 ||
+                               state.copyRodCameraActor != 0 || state.copyRodTopUse ||
+                               state.equipItem == dItemNo_COPY_ROD_e;
+    data["copy_rod"] = {
+        {"active", copyRodActive},
+    };
+    if (copyRodActive) {
+        data["copy_rod"]["actor"] = ptrString(state.copyRodActor);
+        data["copy_rod"]["control_actor"] = ptrString(state.copyRodControlActor);
+        data["copy_rod"]["camera_actor"] = ptrString(state.copyRodCameraActor);
+        data["copy_rod"]["top_use"] = state.copyRodTopUse;
+    }
     data["item_button"] = static_cast<unsigned int>(state.itemButton);
     data["item_trigger"] = static_cast<unsigned int>(state.itemTrigger);
     data["use_button_flags"] = static_cast<unsigned int>(state.useButtonFlags);

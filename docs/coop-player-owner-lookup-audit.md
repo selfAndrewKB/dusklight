@@ -15,6 +15,7 @@ The goal is not to replace every global player lookup. The goal is to identify c
 - Boomerang proved the return/catch/availability pattern. `daBoomerang_c` owned actor state through P2's `mThrowBoomerangAcKeep`, but still asked global P1 for held matrices, aim/catch position, speed/range, lock state, and `returnBoomerang()`.
 - Fishing rod is the second proof target. `daAlink_c::checkFishingRodGrab(actor)` already defines whether a rod actor belongs to a given ALINK through `mItemAcKeep`, so the first safe owner resolver can use that relationship without inventing new ownership state.
 - Dominion Rod follows the same item-actor ownership rule in two phases: the held CROD actor is in `mItemAcKeep`, and the thrown copy-rod ball is in `mCopyRodAcKeep`.
+- Arrow/bow confirms the projectile variant of the same pattern. The arrow starts in the owning ALINK's `mItemAcKeep`, then must preserve that owner after the keep is cleared for the shot; otherwise flight origin, held-arrow matrix, owner HIO values, and hit sounds all fall back to P1.
 
 ## Audit Table
 
@@ -22,7 +23,7 @@ The goal is not to replace every global player lookup. The goal is to identify c
 | --- | --- | ---: | --- | --- |
 | Boomerang | `src/d/actor/d_a_boomerang.cpp` | 1 fallback after fix | `mThrowBoomerangAcKeep` | Fixed locally; P2 return/rethrow validated, P1 still works |
 | Fishing rod/hook | `src/d/actor/d_a_mg_rod.cpp` | 93 | `mItemAcKeep` via `checkFishingRodGrab(actor)` | Fixed first owner clusters; hand attachment, cast recovery, and simultaneous P1/P2 rod use validated |
-| Arrow/bow | `src/d/actor/d_a_arrow.cpp` | 9 | likely item/projectile owner; needs audit | Not started |
+| Arrow/bow | `src/d/actor/d_a_arrow.cpp` | 1 fallback after fix | `mItemAcKeep` plus preserved spawned-arrow owner | Fixed locally; P2 no longer forces P1 first-person, arrows fire from each owner, sound validated |
 | Dominion Rod | `src/d/actor/d_a_crod.cpp` | 2 fallback sites after fix | `mItemAcKeep` / `mCopyRodAcKeep` | Fixed first owner cluster; P2 throw/return validated |
 | Bombs | `src/d/actor/d_a_nbomb.cpp` | 16 | item/grab/carry ownership likely mixed with world collision | Not started |
 | Spinner | `src/d/actor/d_a_spinner.cpp` | 9 | likely player action actor; needs audit | Not started |

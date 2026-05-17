@@ -59,6 +59,9 @@ public:
     void setBombArrowExplode() { field_0x950 = 0; }
     bool checkBombArrow() const { return mArrowType == true; }
     u32 getHitAcID() { return mHitAcID; }
+    // Co-op: preserve the ALINK slot that spawned this arrow after the item keep is cleared.
+    void setOwner(fopAc_ac_c* i_actor) { field_0xa08.setData(i_actor); }
+    fopAc_ac_c* getOwner() const { return field_0xa08.getActor(); }
 
     BOOL checkWait() { return fopAcM_GetParam(this) == 0; }
 
@@ -74,27 +77,35 @@ public:
     void deleteArrow() { field_0x93f = 1; }
 
     static fopAc_ac_c* makeArrow(fopAc_ac_c* i_actor, u16 param_1) {
-        return (fopAc_ac_c*)fopAcM_fastCreate(fpcNm_ARROW_e,
-                                              param_1 << 8,
-                                              &i_actor->current.pos,
-                                              fopAcM_GetRoomNo(i_actor),
-                                              NULL,
-                                              NULL,
-                                              -1,
-                                              NULL,
-                                              NULL);
+        fopAc_ac_c* arrow = (fopAc_ac_c*)fopAcM_fastCreate(fpcNm_ARROW_e,
+                                                           param_1 << 8,
+                                                           &i_actor->current.pos,
+                                                           fopAcM_GetRoomNo(i_actor),
+                                                           NULL,
+                                                           NULL,
+                                                           -1,
+                                                           NULL,
+                                                           NULL);
+        if (arrow != NULL) {
+            static_cast<daArrow_c*>(arrow)->setOwner(i_actor);
+        }
+        return arrow;
     }
 
     static fopAc_ac_c* makeSlingStone(fopAc_ac_c* i_actor, cXyz* i_pos) {
-        return (fopAc_ac_c*)fopAcM_fastCreate(fpcNm_ARROW_e,
-                                              0x401,
-                                              i_pos,
-                                              fopAcM_GetRoomNo(i_actor),
-                                              NULL,
-                                              NULL,
-                                              -1,
-                                              NULL,
-                                              NULL);
+        fopAc_ac_c* stone = (fopAc_ac_c*)fopAcM_fastCreate(fpcNm_ARROW_e,
+                                                           0x401,
+                                                           i_pos,
+                                                           fopAcM_GetRoomNo(i_actor),
+                                                           NULL,
+                                                           NULL,
+                                                           -1,
+                                                           NULL,
+                                                           NULL);
+        if (stone != NULL) {
+            static_cast<daArrow_c*>(stone)->setOwner(i_actor);
+        }
+        return stone;
     }
 
     BOOL changeActorControll() {

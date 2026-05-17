@@ -230,6 +230,8 @@ This keeps the recorder extensible enough for future co-op systems without turni
 - The user confirmed P2 controller input works: P2 movement, rolling, and a basic combat swing worked from controller 2. The next failures were item/action ownership, with fishing hook visible state appearing on P1 and boomerang catch/availability routing back to P1.
 - `alink.secondary` records item ownership context for those failures: equipped item, selected item slot, item actor keep pointer/id/name, thrown boomerang actor keep, copy-rod actor keep, ALINK item button/trigger masks, and use-button flags. These fields should stay in payload/latest and only drive JSONL events when item ownership facts actually change.
 - For the fishing rod pass, the generic item actor id/name is enough to confirm whether secondary ALINK kept an `MG_ROD` actor before adding a rod-specific provider. Add a focused `fishing.rod` provider only if the next question requires rod internals such as action, kind, hook position, line state, or rod owner mismatch.
+- `alink.secondary.copy_rod` is a nested block. During bow, spinner, or other item tests, `copy_rod.active: false` means the schema is present but no copy-rod activity was recorded; copy-rod actor/control/camera details are only expanded when that block is active.
+- Bow/arrow validation showed `alink.secondary.proc_name` and item ownership fields are enough to distinguish ALINK entering bow state from the arrow actor still consulting global P1. Add an arrow-specific provider only if later failures require arrow flight internals rather than owner resolution.
 
 ## Provider Namespaces
 

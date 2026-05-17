@@ -26,6 +26,8 @@ Keep P2 basic input working while classifying and fixing the first item/action o
 - Broader item/weapon candidates are tracked in `docs/coop-player-owner-lookup-audit.md` so future fixes can classify owner-specific lookups without rediscovering the boomerang/fishing pattern each time.
 - Dominion Rod showed the same characteristics as the boomerang. The first CROD patch routes held/thrown CROD actor matrix, light/top-use, speed/return, control-hit, catch/return, and draw visibility checks through the ALINK slot that owns either `mItemAcKeep` or `mCopyRodAcKeep`. User validation confirmed this fixes P2 Dominion Rod behavior.
 - `alink.secondary` now includes copy-rod control/camera actor pointers and top-use state so future item fixes leave structured evidence behind even when the symptom and fix are already understood.
+- Bow/arrow showed the projectile version of the same owner problem. P2 could enter the bow proc, but global player status forced P1 first-person camera and `daArrow_c` used global P1 for held matrix, shot origin, HIO values, and hit sounds. The local arrow patch stores the spawning ALINK owner on the arrow actor, routes owner-specific arrow work through that owner, and skips setting global bow/sling camera status for secondary ALINK prototypes. User validation confirmed P2 no longer forces P1 first-person, arrows fire from each owning player, and sound follows the shot correctly.
+- `alink.secondary.copy_rod` is now gated to actual copy-rod context. If it appears as `active: false` during bow or other item tests, that means the schema is present but no copy-rod activity was recorded.
 - The remaining failures are item/action ownership failures, not the original "can P2 receive input?" problem.
 
 ## Working Assumptions
@@ -72,6 +74,8 @@ Keep P2 basic input working while classifying and fixing the first item/action o
 - [x] Pick the next item/weapon owner-lookup target from `docs/coop-player-owner-lookup-audit.md`.
 - [x] Land first Dominion Rod owner-routing patch.
 - [x] Validate Dominion Rod owner-scoped throw/return behavior.
+- [x] Land first bow/arrow owner-routing patch.
+- [x] Validate P2 bow shots use P2 origin without forcing P1 first-person.
 - [ ] Pick the next item/weapon owner-lookup target from `docs/coop-player-owner-lookup-audit.md`.
 
 ## Test Plan
@@ -95,6 +99,7 @@ Expected next big win:
 - Boomerang has reached this win for return/catch and availability restoration.
 - Fishing rod has reached this win for visible hand attachment and owner-routed rod input/cast recovery, including simultaneous P1/P2 use.
 - Dominion Rod has reached this win for the first copy-rod actor ownership cluster.
+- Bow/arrow has reached this win for shot origin, held-arrow matrix, owner HIO values, and hit sounds.
 
 Failure conditions:
 

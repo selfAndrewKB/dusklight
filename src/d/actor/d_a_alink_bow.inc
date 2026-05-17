@@ -143,6 +143,13 @@ void daAlink_c::deleteArrow() {
 }
 
 void daAlink_c::setBowOrSlingStatus() {
+#if TARGET_PC
+    // Co-op: secondary bow use must not flip the global P1 camera/status bits before cameras are per-player.
+    if (dusk::coop::isSecondaryPlayerPrototype(this)) {
+        return;
+    }
+#endif
+
     if (mEquipItem == dItemNo_PACHINKO_e) {
         dComIfGp_setPlayerStatus0(0, 0x40);
     } else {

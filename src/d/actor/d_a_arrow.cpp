@@ -19,7 +19,28 @@
 #include "d/actor/d_a_hozelda.h"
 #if TARGET_PC
 #include "dusk/achievements.h"
+#include "dusk/coop/player_slots.h"
 #endif
+
+// Co-op: arrows are owned by the ALINK slot that created or still keeps them, not always global P1.
+static daAlink_c* daArrow_getOwner(daArrow_c* i_arrow) {
+    fopAc_ac_c* owner = i_arrow->getOwner();
+    if (owner != NULL && fopAcM_GetName(owner) == fpcNm_ALINK_e) {
+        return static_cast<daAlink_c*>(owner);
+    }
+
+#if TARGET_PC
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        fopAc_ac_c* actor = dusk::coop::getPlayer(static_cast<dusk::coop::PlayerSlot>(i));
+        daAlink_c* player = static_cast<daAlink_c*>(actor);
+        if (player != NULL && player->mItemAcKeep.getActor() == i_arrow) {
+            return player;
+        }
+    }
+#endif
+
+    return daAlink_getAlinkActorClass();
+}
 
 int daArrow_c::createHeap() {
     J3DModelData* model_data;
@@ -212,7 +233,7 @@ int daArrow_c::setArrowWaterNextPos(cXyz* i_start, cXyz* i_end) {
 }
 
 void daArrow_c::setArrowAt(f32 param_0) {
-    daAlink_c* player = daAlink_getAlinkActorClass();
+    daAlink_c* player = daArrow_getOwner(this);
 
     f32 radius;
     if (mArrowType == 4) {
@@ -265,7 +286,7 @@ void daArrow_c::setArrowAt(f32 param_0) {
 }
 
 void daArrow_c::arrowShooting() {
-    daAlink_c* link = daAlink_getAlinkActorClass();
+    daAlink_c* link = daArrow_getOwner(this);
 
     field_0x950 = link->getBombArrowFlyExplodeTime();
 
@@ -296,7 +317,7 @@ void daArrow_c::arrowShooting() {
     speed.y = field_0x99c * cM_ssin(current.angle.x);
     speed.z = cos * (field_0x99c * cM_scos(current.angle.y));
 
-    daPy_py_c* player = daPy_getPlayerActorClass();
+    daPy_py_c* player = link;
     if (player->checkHorseRide()) {
         daHorse_c* horse = dComIfGp_getHorseActor();
         cMtx_YrotS(*calc_mtx, horse->shape_angle.y);
@@ -412,7 +433,7 @@ void daArrow_c::setKeepMatrix() {
         }
     } else {
         mDoMtx_stack_c::YrotS(-0x8000);
-        mDoMtx_stack_c::revConcat(daAlink_getAlinkActorClass()->getLeftItemMatrix());
+        mDoMtx_stack_c::revConcat(daArrow_getOwner(this)->getLeftItemMatrix());
     }
     mpModel->setBaseTRMtx(mDoMtx_stack_c::get());
     mDoMtx_multVecZero(mpModel->getBaseTRMtx(), &current.pos);
@@ -485,7 +506,7 @@ int daArrow_c::procWait() {
         tevStr.TevColor.g = 0;
         tevStr.TevColor.b = 0;
 
-        daAlink_c* link = daAlink_getAlinkActorClass();
+        daAlink_c* link = daArrow_getOwner(this);
         if (mArrowType == 1) {
             field_0x688.SetAtAtp(0);
             if (!link->checkCanoeSlider()) {
@@ -766,7 +787,7 @@ int daArrow_c::procMove() {
             dComIfG_Bgsp().ArrowStickCallBack(field_0x56c, this, field_0x56c.GetCross());
         }
 
-        daAlink_getAlinkActorClass()->itemHitSE(se_id, dKy_pol_sound_get(&field_0x56c) & 0xff, &mSoundObjArrow);
+        daArrow_getOwner(this)->itemHitSE(se_id, dKy_pol_sound_get(&field_0x56c) & 0xff, &mSoundObjArrow);
     } else {
         if (field_0x945 != 0) {
             if (bVar14) {
@@ -1080,7 +1101,7 @@ int daArrow_c::draw() {
     static const GXColorS10 tmpColor = {0x00, 0x00, 0x00, 0x00};
     J3DGXColorS10 color = tmpColor;
 
-    daAlink_c* link = daAlink_getAlinkActorClass();
+    daAlink_c* link = daArrow_getOwner(this);
     if (fopAcM_GetParam(this) == 0 && field_0x940 != 0) {
         setKeepMatrix();
         field_0x940 = 0;
@@ -1092,7 +1113,7 @@ int daArrow_c::draw() {
             color.g = link->getFreezeG();
             color.b = link->getFreezeB();
         } else {
-            s16 explode_time = daAlink_getAlinkActorClass()->getBombExplodeTime();
+            s16 explode_time = link->getBombExplodeTime();
             f32 r;
 
             if (field_0x950 > explode_time >> 1) {
@@ -1173,7 +1194,7 @@ cPhs_Step daArrow_c::create() {
     field_0x7cc.Set(l_coSphSrc);
     field_0x7cc.SetStts(&field_0x64c);
 
-    daAlink_c* player = daAlink_getAlinkActorClass();
+    daAlink_c* player = daArrow_getOwner(this);
     if (mArrowType == 4) {
         setNormalMatrix();
         player->getArrowFlyData(&mFlyMax, &field_0x99c, 0);

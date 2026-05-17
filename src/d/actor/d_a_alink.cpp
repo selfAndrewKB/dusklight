@@ -176,7 +176,10 @@ void populateCoopSecondaryAlinkState(const char* phase, daAlink_c* player,
     diag->attentionLock = player->checkAttentionLock();
     diag->itemButtonR = (player->mItemButton & btn_r) != 0;
     diag->itemTriggerR = (player->mItemTrigger & btn_r) != 0;
-    diag->copyRodTopUse = player->checkCopyRodTopUse();
+    // Co-op: keep copy-rod diagnostics quiet unless this secondary state is actually copy-rod related.
+    diag->copyRodTopUse = (diag->copyRodActor != 0 || diag->copyRodControlActor != 0 ||
+                           diag->copyRodCameraActor != 0 || player->mEquipItem == dItemNo_COPY_ROD_e) &&
+                          player->checkCopyRodTopUse();
 }
 
 void coopLogSecondaryExecuteState(const char* phase, daAlink_c* player) {
