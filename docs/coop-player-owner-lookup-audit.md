@@ -14,6 +14,7 @@ The goal is not to replace every global player lookup. The goal is to identify c
 
 - Boomerang proved the return/catch/availability pattern. `daBoomerang_c` owned actor state through P2's `mThrowBoomerangAcKeep`, but still asked global P1 for held matrices, aim/catch position, speed/range, lock state, and `returnBoomerang()`.
 - Fishing rod is the second proof target. `daAlink_c::checkFishingRodGrab(actor)` already defines whether a rod actor belongs to a given ALINK through `mItemAcKeep`, so the first safe owner resolver can use that relationship without inventing new ownership state.
+- Dominion Rod follows the same item-actor ownership rule in two phases: the held CROD actor is in `mItemAcKeep`, and the thrown copy-rod ball is in `mCopyRodAcKeep`.
 
 ## Audit Table
 
@@ -22,7 +23,7 @@ The goal is not to replace every global player lookup. The goal is to identify c
 | Boomerang | `src/d/actor/d_a_boomerang.cpp` | 1 fallback after fix | `mThrowBoomerangAcKeep` | Fixed locally; P2 return/rethrow validated, P1 still works |
 | Fishing rod/hook | `src/d/actor/d_a_mg_rod.cpp` | 93 | `mItemAcKeep` via `checkFishingRodGrab(actor)` | Fixed first owner clusters; hand attachment, cast recovery, and simultaneous P1/P2 rod use validated |
 | Arrow/bow | `src/d/actor/d_a_arrow.cpp` | 9 | likely item/projectile owner; needs audit | Not started |
-| Dominion Rod | `src/d/actor/d_a_crod.cpp` | 8 | `mItemAcKeep` / `mCopyRodAcKeep` | Not started |
+| Dominion Rod | `src/d/actor/d_a_crod.cpp` | 2 fallback sites after fix | `mItemAcKeep` / `mCopyRodAcKeep` | Fixed first owner cluster; P2 throw/return validated |
 | Bombs | `src/d/actor/d_a_nbomb.cpp` | 16 | item/grab/carry ownership likely mixed with world collision | Not started |
 | Spinner | `src/d/actor/d_a_spinner.cpp` | 9 | likely player action actor; needs audit | Not started |
 
@@ -37,4 +38,4 @@ The goal is not to replace every global player lookup. The goal is to identify c
 
 ## Diagnostics Notes
 
-`alink.secondary` records the currently kept item actor pointer, item actor id/name, thrown boomerang actor, copy-rod actor, equipped item, selected item slot, item button/trigger masks, and use-button flags. Add actor-specific providers only after this generic item ownership snapshot cannot answer the next question.
+`alink.secondary` records the currently kept item actor pointer, item actor id/name, thrown boomerang actor, copy-rod actor, copy-rod control/camera actors, equipped item, selected item slot, item button/trigger masks, and use-button flags. Add actor-specific providers only after this generic item ownership snapshot cannot answer the next question.

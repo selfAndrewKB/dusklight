@@ -18,6 +18,8 @@ struct SecondaryAlinkState {
     uintptr_t itemActor = 0;
     uintptr_t throwBoomerangActor = 0;
     uintptr_t copyRodActor = 0;
+    uintptr_t copyRodControlActor = 0;
+    uintptr_t copyRodCameraActor = 0;
     int itemActorId = 0;
     s16 itemActorName = 0;
     u16 proc = 0;
@@ -47,6 +49,7 @@ struct SecondaryAlinkState {
     bool attentionLock = false;
     bool itemButtonR = false;
     bool itemTriggerR = false;
+    bool copyRodTopUse = false;
 };
 
 void setSecondaryAlinkActionMirrorProfileEnabled(bool enabled);

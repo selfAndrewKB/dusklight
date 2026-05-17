@@ -24,6 +24,8 @@ Keep P2 basic input working while classifying and fixing the first item/action o
 - First fishing test result: the rod appeared in P2's hand and P2 could cast it, which confirms the hand attachment owner path. After casting, P2 got stuck and rod control followed P1's controller, exposing a second owner-specific path: `MG_ROD` samples raw `PAD_1` into its rod stick/substick/reel fields and those values feed ALINK fishing control.
 - The second fishing patch routes the bobber rod input fields and immediate owner arm/cast callbacks through the owning ALINK slot. User validation confirmed P2 regained control after casting, and P1/P2 can use fishing rods simultaneously. Camera/HUD/minigame policy remains intentionally untouched.
 - Broader item/weapon candidates are tracked in `docs/coop-player-owner-lookup-audit.md` so future fixes can classify owner-specific lookups without rediscovering the boomerang/fishing pattern each time.
+- Dominion Rod showed the same characteristics as the boomerang. The first CROD patch routes held/thrown CROD actor matrix, light/top-use, speed/return, control-hit, catch/return, and draw visibility checks through the ALINK slot that owns either `mItemAcKeep` or `mCopyRodAcKeep`. User validation confirmed this fixes P2 Dominion Rod behavior.
+- `alink.secondary` now includes copy-rod control/camera actor pointers and top-use state so future item fixes leave structured evidence behind even when the symptom and fix are already understood.
 - The remaining failures are item/action ownership failures, not the original "can P2 receive input?" problem.
 
 ## Working Assumptions
@@ -67,6 +69,9 @@ Keep P2 basic input working while classifying and fixing the first item/action o
 - [x] Add reusable owner-lookup audit lane for item/weapon actors.
 - [x] Validate fishing rod owner-scoped hand attachment.
 - [x] Validate fishing rod owner-scoped input/cast recovery.
+- [x] Pick the next item/weapon owner-lookup target from `docs/coop-player-owner-lookup-audit.md`.
+- [x] Land first Dominion Rod owner-routing patch.
+- [x] Validate Dominion Rod owner-scoped throw/return behavior.
 - [ ] Pick the next item/weapon owner-lookup target from `docs/coop-player-owner-lookup-audit.md`.
 
 ## Test Plan
@@ -87,8 +92,9 @@ Manual test sequence:
 Expected next big win:
 
 - One P2-owned item no longer redirects visible held state, return/catch state, or availability restoration to P1.
-- Boomerang has reached this win for return/catch and availability restoration. Fishing hook/rod is the next focused item family for visible hand attachment.
-- Fishing rod has also reached this win for visible hand attachment and owner-routed rod input/cast recovery, including simultaneous P1/P2 use.
+- Boomerang has reached this win for return/catch and availability restoration.
+- Fishing rod has reached this win for visible hand attachment and owner-routed rod input/cast recovery, including simultaneous P1/P2 use.
+- Dominion Rod has reached this win for the first copy-rod actor ownership cluster.
 
 Failure conditions:
 

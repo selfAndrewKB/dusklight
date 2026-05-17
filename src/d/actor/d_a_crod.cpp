@@ -10,6 +10,7 @@
 #include "d/actor/d_a_alink.h"
 #include "d/actor/d_a_cstaF.h"
 #include "d/actor/d_a_cstatue.h"
+#include "dusk/coop/player_slots.h"
 
 #define RES_CROD_BALL_BMD 0x22
 #define RES_CROD_BALL_BRK 0x40
@@ -30,6 +31,21 @@ static u8 const lit_3759[12] = {
 };
 
 static const Vec l_localRodPos = {81.0f, -12.5f, -12.0f};
+
+// Co-op: CROD can be the held Dominion Rod item actor or the thrown copy-rod actor.
+// Ask the owning ALINK slot before consulting player item state.
+static daAlink_c* daCrod_getOwner(daCrod_c* i_this) {
+    const fpc_ProcID actor_id = fopAcM_GetID(i_this);
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        fopAc_ac_c* actor = dusk::coop::getPlayer(static_cast<dusk::coop::PlayerSlot>(i));
+        daAlink_c* player = static_cast<daAlink_c*>(actor);
+        if (player != NULL && (player->getCopyRodActor() == i_this || player->getItemID() == actor_id)) {
+            return player;
+        }
+    }
+
+    return daAlink_getAlinkActorClass();
+}
 
 int daCrod_c::createHeap() {
     J3DModelData* model_data =
@@ -101,7 +117,7 @@ int daCrod_c::create() {
 
     fopAcM_setStageLayer(this);
 
-    daAlink_c* alink = daAlink_getAlinkActorClass();
+    daAlink_c* alink = daCrod_getOwner(this);
     if (alink->getCopyRodMtx()) {
         mDoMtx_multVec(alink->getCopyRodMtx(), &l_localRodPos, &current.pos);
     }
@@ -170,12 +186,12 @@ void daCrod_c::setReturn() {
     }
 
     fopAcM_SetParam(this, 5);
-    speedF = daAlink_getAlinkActorClass()->getCopyRodBallReturnSpeed();
+    speedF = daCrod_getOwner(this)->getCopyRodBallReturnSpeed();
     mControllActorKeep.clearData();
 }
 
 void daCrod_c::setLightPower() {
-    if (daAlink_getAlinkActorClass()->checkCopyRodTopUse()) {
+    if (daCrod_getOwner(this)->checkCopyRodTopUse()) {
         mLight.mPow = 300.0f;
         mLight.mFluctuation = 50.0f;
     } else {
@@ -185,7 +201,7 @@ void daCrod_c::setLightPower() {
 }
 
 int daCrod_c::execute() {
-    daAlink_c* player = daAlink_getAlinkActorClass();
+    daAlink_c* player = daCrod_getOwner(this);
 
     if (fopAcM_GetParam(this) == 6) {
         if (player->getIronBallCenterPos() != NULL) {
@@ -332,7 +348,7 @@ int daCrod_c::execute() {
                     mDoMtx_multVec(player->getCopyRodMtx(), &l_localRodPos, &current.pos);
                 }
 
-                if (daAlink_getAlinkActorClass()->checkCopyRodTopUse()) {
+                if (player->checkCopyRodTopUse()) {
                     fopAcM_seStartLevel(this, Z2SE_AL_COPYROD_WAIT,
                                         fopAcM_GetParam(this) == 1 ? 1 : 0);
                 }
@@ -361,7 +377,7 @@ static int daCrod_Execute(daCrod_c* i_this) {
 
 int daCrod_c::draw() {
     if (fopAcM_GetParam(this) == 6 ||
-        (!daAlink_getAlinkActorClass()->checkCopyRodTopUse() && field_0x732 == 0))
+        (!daCrod_getOwner(this)->checkCopyRodTopUse() && field_0x732 == 0))
     {
         return 1;
     }

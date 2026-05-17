@@ -130,6 +130,8 @@ void populateCoopSecondaryAlinkState(const char* phase, daAlink_c* player,
     diag->itemActor = reinterpret_cast<uintptr_t>(player->mItemAcKeep.getActor());
     diag->throwBoomerangActor = reinterpret_cast<uintptr_t>(player->mThrowBoomerangAcKeep.getActor());
     diag->copyRodActor = reinterpret_cast<uintptr_t>(player->mCopyRodAcKeep.getActor());
+    diag->copyRodControlActor = reinterpret_cast<uintptr_t>(player->getCopyRodControllActor());
+    diag->copyRodCameraActor = reinterpret_cast<uintptr_t>(player->getCopyRodCameraActor());
     if (player->mItemAcKeep.getActor() != NULL) {
         diag->itemActorId = fopAcM_GetID(player->mItemAcKeep.getActor());
         diag->itemActorName = fopAcM_GetName(player->mItemAcKeep.getActor());
@@ -174,6 +176,7 @@ void populateCoopSecondaryAlinkState(const char* phase, daAlink_c* player,
     diag->attentionLock = player->checkAttentionLock();
     diag->itemButtonR = (player->mItemButton & btn_r) != 0;
     diag->itemTriggerR = (player->mItemTrigger & btn_r) != 0;
+    diag->copyRodTopUse = player->checkCopyRodTopUse();
 }
 
 void coopLogSecondaryExecuteState(const char* phase, daAlink_c* player) {

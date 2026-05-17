@@ -27,7 +27,7 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
 - `docs/coop-secondary-player-prototype-plan.md`: diagnostic third co-op milestone: secondary ALINK prototype evidence.
 - `docs/coop-alink-duplication-audit-plan.md`: completed first ALINK duplication audit phase: confirmed model-data and attention singleton hazards plus the visible-P2 containment harness.
 - `docs/coop-secondary-alink-input-routing-plan.md`: completed secondary ALINK input-routing milestone: P2 moves from controller 2 and basic rolling/combat swing works.
-- `docs/coop-secondary-alink-item-ownership-plan.md`: current active co-op plan: classify and fix the first P2 item/action ownership hazards, starting with boomerang and fishing hook evidence.
+- `docs/coop-secondary-alink-item-ownership-plan.md`: current active co-op plan: classify and fix P2 item/action ownership hazards, now extending the boomerang/fishing pattern into Dominion Rod, bow/arrow, spinner, and related item actors.
 - `docs/coop-player-owner-lookup-audit.md`: reusable audit table for item/weapon actors that still ask global P1 when they should ask the owning ALINK slot.
 - `.codex/config.toml`: Codex hook wiring. Keep hook behavior narrow and documented in `docs/codex-hooks.md`.
 - `files.cmake`: explicit source-file list. Update it when adding C++ source/header files that must be built.

@@ -452,6 +452,9 @@ json alinkSecondaryEventKey(const json& data) {
         {"item_actor_name", data.value("item_actor_name", 0)},
         {"throw_boomerang_actor", data.value("throw_boomerang_actor", "0x0")},
         {"copy_rod_actor", data.value("copy_rod_actor", "0x0")},
+        {"copy_rod_control_actor", data.value("copy_rod_control_actor", "0x0")},
+        {"copy_rod_camera_actor", data.value("copy_rod_camera_actor", "0x0")},
+        {"copy_rod_top_use", data.value("copy_rod_top_use", false)},
         {"item_button", data.value("item_button", 0)},
         {"item_trigger", data.value("item_trigger", 0)},
         {"use_button_flags", data.value("use_button_flags", 0)},
@@ -789,7 +792,7 @@ json collectCoopProbes() {
 json collectAlinkSecondary() {
     const SecondaryAlinkState& state = s_state.secondaryAlinkState;
     json data = {
-        {"schema_version", 1},
+        {"schema_version", 2},
         {"available", s_state.hasSecondaryAlinkState},
     };
     if (!s_state.hasSecondaryAlinkState) {
@@ -807,6 +810,9 @@ json collectAlinkSecondary() {
     data["item_actor_name"] = static_cast<int>(state.itemActorName);
     data["throw_boomerang_actor"] = ptrString(state.throwBoomerangActor);
     data["copy_rod_actor"] = ptrString(state.copyRodActor);
+    data["copy_rod_control_actor"] = ptrString(state.copyRodControlActor);
+    data["copy_rod_camera_actor"] = ptrString(state.copyRodCameraActor);
+    data["copy_rod_top_use"] = state.copyRodTopUse;
     data["item_button"] = static_cast<unsigned int>(state.itemButton);
     data["item_trigger"] = static_cast<unsigned int>(state.itemTrigger);
     data["use_button_flags"] = static_cast<unsigned int>(state.useButtonFlags);
@@ -848,7 +854,7 @@ Provider s_providers[] = {
     {"attention.state", 1, "medium", 5, true, 60, 12288, collectAttentionState},
     {"player.status", 1, "cheap", 1, true, 120, 8192, collectPlayerStatus},
     {"coop.probes", 1, "cheap", 30, true, 20, 4096, collectCoopProbes},
-    {"alink.secondary", 1, "cheap", 1, true, 120, 8192, collectAlinkSecondary},
+    {"alink.secondary", 2, "cheap", 1, true, 120, 8192, collectAlinkSecondary},
 };
 
 const Provider* findProvider(const char* name) {
