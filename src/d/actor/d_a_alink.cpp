@@ -126,7 +126,17 @@ void populateCoopSecondaryAlinkState(const char* phase, daAlink_c* player,
     diag->modelUser = player->mpLinkModel != nullptr ? player->mpLinkModel->getUserArea() : 0;
     diag->ownerUnder = reinterpret_cast<uintptr_t>(player->field_0x1f20);
     diag->ownerUpper = reinterpret_cast<uintptr_t>(player->field_0x1f24);
+    // Co-op: item ownership bugs route through ALINK-owned actor keeps, not just input/proc state.
+    diag->itemActor = reinterpret_cast<uintptr_t>(player->mItemAcKeep.getActor());
+    diag->throwBoomerangActor = reinterpret_cast<uintptr_t>(player->mThrowBoomerangAcKeep.getActor());
+    diag->copyRodActor = reinterpret_cast<uintptr_t>(player->mCopyRodAcKeep.getActor());
     diag->proc = player->mProcID;
+    diag->equipItem = player->mEquipItem;
+    diag->selectItemId = player->mSelectItemId;
+    diag->itemButton = player->mItemButton;
+    diag->itemTrigger = player->mItemTrigger;
+    diag->useButtonFlags = player->mUseButtonFlags;
+    diag->previousUseButtonFlags = player->field_0x2faf;
     diag->stickAngle = player->mStickAngle;
     diag->moveAngle = player->mMoveAngle;
     diag->currentAngleY = player->current.angle.y;

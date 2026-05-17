@@ -341,10 +341,9 @@ unsigned int gameplayButtonMask(unsigned int buttons) {
 
 json inputPadEventKey(const json& data) {
     auto inputEvent = [](const json& input) {
-        const unsigned int triggerButtons = input.value("trigger_buttons", 0u);
+        const unsigned int holdButtons = input.value("hold_buttons", 0u);
         return json{
-            {"trigger_buttons", gameplayButtonMask(triggerButtons)},
-            {"trigger_lock_r", input.value("trigger_lock_r", 0)},
+            {"hold_buttons", gameplayButtonMask(holdButtons)},
             {"hold_lock_r", input.value("hold_lock_r", 0)},
             {"hold_r", input.value("hold_r", false)},
             {"hold_l", input.value("hold_l", false)},
@@ -414,16 +413,29 @@ json attentionStateEventKey(const json& data) {
 }
 
 json playerStatusEventKey(const json& data) {
+    const json buttonStatus = data.value("button_status", json::object());
+    const json buttonStatusForce = data.value("button_status_force", json::object());
+
     return {
         {"schema_version", data.value("schema_version", 1)},
-        {"button_status", data.value("button_status", json::object())},
-        {"button_status_force", data.value("button_status_force", json::object())},
+        {"button_status", {
+            {"r", buttonStatus.value("r", 0)},
+            {"a", buttonStatus.value("a", 0)},
+            {"do", buttonStatus.value("do", 0)},
+            {"z", buttonStatus.value("z", 0)},
+            {"x", buttonStatus.value("x", 0)},
+            {"y", buttonStatus.value("y", 0)},
+        }},
+        {"button_status_force", {
+            {"r", buttonStatusForce.value("r", 0)},
+            {"a", buttonStatusForce.value("a", 0)},
+            {"do", buttonStatusForce.value("do", 0)},
+            {"z", buttonStatusForce.value("z", 0)},
+        }},
         {"player_status_words", data.value("player_status_words", json::array())},
-        {"camera_attention_status", data.value("camera_attention_status", json::array())},
         {"attention_lock", data.value("attention_lock", false)},
-        {"attention_flags", data.value("attention_flags", 0)},
         {"secondary_attention_lock", data.value("secondary_attention_lock", false)},
-        {"secondary_raw_mask", data.value("secondary_raw_mask", 0)},
+        {"secondary_proc", data.value("secondary_proc", 0)},
     };
 }
 
@@ -433,22 +445,55 @@ json alinkSecondaryEventKey(const json& data) {
         {"available", data.value("available", false)},
         {"actor", data.value("actor", "0x0")},
         {"proc", data.value("proc", 0)},
+        {"equip_item", data.value("equip_item", 0)},
+        {"select_item_id", data.value("select_item_id", 0)},
+        {"item_actor", data.value("item_actor", "0x0")},
+        {"throw_boomerang_actor", data.value("throw_boomerang_actor", "0x0")},
+        {"copy_rod_actor", data.value("copy_rod_actor", "0x0")},
+        {"item_button", data.value("item_button", 0)},
+        {"item_trigger", data.value("item_trigger", 0)},
+        {"use_button_flags", data.value("use_button_flags", 0)},
+        {"previous_use_button_flags", data.value("previous_use_button_flags", 0)},
         {"stick_active", data.value("stick_active", false)},
         {"move_active", data.value("move_active", false)},
         {"speed_active", data.value("speed_active", false)},
-        {"anim", data.value("anim", "0x0")},
-        {"attention_flags", data.value("attention_flags", 0)},
         {"input_r", data.value("input_r", false)},
         {"attention_lock", data.value("attention_lock", false)},
         {"target", data.value("target", "0x0")},
         {"item_button_r", data.value("item_button_r", false)},
         {"item_trigger_r", data.value("item_trigger_r", false)},
-        {"raw_mask", data.value("raw_mask", 0)},
         {"r_status", data.value("r_status", 0)},
         {"model_user", data.value("model_user", "0x0")},
         {"owner_under", data.value("owner_under", "0x0")},
         {"owner_upper", data.value("owner_upper", "0x0")},
     };
+}
+
+const char* alinkProcName(u16 proc) {
+    switch (proc) {
+    case daAlink_c::PROC_WAIT:
+        return "PROC_WAIT";
+    case daAlink_c::PROC_MOVE:
+        return "PROC_MOVE";
+    case daAlink_c::PROC_ATN_MOVE:
+        return "PROC_ATN_MOVE";
+    case daAlink_c::PROC_ATN_ACTOR_WAIT:
+        return "PROC_ATN_ACTOR_WAIT";
+    case daAlink_c::PROC_FRONT_ROLL:
+        return "PROC_FRONT_ROLL";
+    case daAlink_c::PROC_CUT_NORMAL:
+        return "PROC_CUT_NORMAL";
+    case daAlink_c::PROC_BOOMERANG_SUBJECT:
+        return "PROC_BOOMERANG_SUBJECT";
+    case daAlink_c::PROC_BOOMERANG_MOVE:
+        return "PROC_BOOMERANG_MOVE";
+    case daAlink_c::PROC_BOOMERANG_CATCH:
+        return "PROC_BOOMERANG_CATCH";
+    case daAlink_c::PROC_FISHING_CAST:
+        return "PROC_FISHING_CAST";
+    default:
+        return "";
+    }
 }
 
 json eventKeyForProvider(const char* provider, const json& data) {
@@ -742,6 +787,16 @@ json collectAlinkSecondary() {
     data["phase"] = state.phase != nullptr ? state.phase : "";
     data["actor"] = ptrString(state.actor);
     data["proc"] = static_cast<unsigned int>(state.proc);
+    data["proc_name"] = alinkProcName(state.proc);
+    data["equip_item"] = static_cast<unsigned int>(state.equipItem);
+    data["select_item_id"] = static_cast<unsigned int>(state.selectItemId);
+    data["item_actor"] = ptrString(state.itemActor);
+    data["throw_boomerang_actor"] = ptrString(state.throwBoomerangActor);
+    data["copy_rod_actor"] = ptrString(state.copyRodActor);
+    data["item_button"] = static_cast<unsigned int>(state.itemButton);
+    data["item_trigger"] = static_cast<unsigned int>(state.itemTrigger);
+    data["use_button_flags"] = static_cast<unsigned int>(state.useButtonFlags);
+    data["previous_use_button_flags"] = static_cast<unsigned int>(state.previousUseButtonFlags);
     data["speed_f"] = state.speedF;
     data["normal_speed"] = state.normalSpeed;
     data["stick_value"] = state.stickValue;

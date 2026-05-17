@@ -9,10 +9,24 @@
 #include "JSystem/J2DGraph/J2DAnmLoader.h"
 #include "d/actor/d_a_alink.h"
 #include "d/d_pane_class.h"
+#include "dusk/coop/player_slots.h"
 #include "m_Do/m_Do_lib.h"
 #include "d/actor/d_a_mirror.h"
 #include "Z2AudioLib/Z2Instances.h"
 #include "SSystem/SComponent/c_math.h"
+
+// Co-op: boomerang actors must return to the ALINK slot that owns their actor keep, not always global P1.
+static daAlink_c* daBoomerang_getOwner(daBoomerang_c* i_boomerang) {
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        fopAc_ac_c* actor = dusk::coop::getPlayer(static_cast<dusk::coop::PlayerSlot>(i));
+        daAlink_c* player = static_cast<daAlink_c*>(actor);
+        if (player != NULL && player->getBoomerangActor() == i_boomerang) {
+            return player;
+        }
+    }
+
+    return daAlink_getAlinkActorClass();
+}
 
 int daBoomerang_sight_c::createHeap() {
     void* tmpData;
@@ -634,7 +648,7 @@ void daBoomerang_c::setRoomInfo() {
 }
 
 void daBoomerang_c::setKeepMatrix() {
-    daAlink_c* player = daAlink_getAlinkActorClass();
+    daAlink_c* player = daBoomerang_getOwner(this);
 
     mDoMtx_stack_c::copy(player->getLeftItemMatrix());
     mDoMtx_stack_c::transM(32.0f, -5.0f, -6.0f);
@@ -685,7 +699,7 @@ void daBoomerang_c::setAimPos() {
     if (checkStateFlg0(FLG0_1)) {
         if (fopAcM_GetParam(this) != 1)
             return;
-        m_aimPos = daAlink_getAlinkActorClass()->getBoomerangCatchPos();
+        m_aimPos = daBoomerang_getOwner(this)->getBoomerangCatchPos();
         return;
     }
 
@@ -880,7 +894,7 @@ void daBoomerang_c::setEffect() {
 }
 
 int daBoomerang_c::procWait() {
-    daAlink_c* player = daAlink_getAlinkActorClass();
+    daAlink_c* player = daBoomerang_getOwner(this);
     speedF = 0.0f;
     setKeepMatrix();
 
@@ -1030,7 +1044,7 @@ int daBoomerang_c::procWait() {
 }
 
 int daBoomerang_c::procMove() {
-    daAlink_c* player = daAlink_getAlinkActorClass();
+    daAlink_c* player = daBoomerang_getOwner(this);
 
     if (field_0x957 != 0) {
         speedF = 40.0f;
@@ -1275,7 +1289,7 @@ int daBoomerang_c::execute() {
         }
     }
 
-    daAlink_c* player = daAlink_getAlinkActorClass();
+    daAlink_c* player = daBoomerang_getOwner(this);
 
     if (dStage_stagInfo_GetSTType(dComIfGp_getStage()->getStagInfo()) != ST_BOSS_ROOM) {
         f32 temp_f31 = 500.0f + player->getBoomLockMax();

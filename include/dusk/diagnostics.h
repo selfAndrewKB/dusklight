@@ -15,7 +15,16 @@ struct SecondaryAlinkState {
     uintptr_t modelUser = 0;
     uintptr_t ownerUnder = 0;
     uintptr_t ownerUpper = 0;
+    uintptr_t itemActor = 0;
+    uintptr_t throwBoomerangActor = 0;
+    uintptr_t copyRodActor = 0;
     u16 proc = 0;
+    u16 equipItem = 0;
+    u8 selectItemId = 0;
+    u8 itemButton = 0;
+    u8 itemTrigger = 0;
+    u8 useButtonFlags = 0;
+    u8 previousUseButtonFlags = 0;
     s16 stickAngle = 0;
     s16 moveAngle = 0;
     s16 currentAngleY = 0;

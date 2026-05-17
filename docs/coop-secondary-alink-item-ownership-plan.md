@@ -15,7 +15,11 @@ Keep P2 basic input working while classifying and fixing the first item/action o
 - The default secondary ALINK probe set now runs secondary execute. `Skip execute` remains available only as a recovery/debug checkbox.
 - `Ctrl+F12` is the fast test hotkey: it enables the co-op diagnostics profile, resets secondary ALINK probes to default, spawns P2 if the secondary slot is free, and shows a Dusk toast with the result.
 - Fishing hook ownership is wrong: pulling it out for P2 made it invisible in P2's hands and visible on P1.
-- Boomerang ownership is wrong: P2 could throw it, but P1 caught it and P2 could not throw it again afterward.
+- Boomerang ownership was wrong: P2 could throw it, but P1 caught it and P2 could not throw it again afterward.
+- Structured diagnostics showed the P2 boomerang flow enters `PROC_BOOMERANG_MOVE`, moves the item actor from P2 `mItemAcKeep` to P2 `mThrowBoomerangAcKeep`, then remains associated with that thrown actor while P2 returns to wait.
+- The first boomerang owner bug is in `daBoomerang_c`: the boomerang actor asks `daAlink_getAlinkActorClass()` for held matrices, speed/range, aim/catch position, lock state, and `returnBoomerang()`, which always resolves global P1.
+- The local boomerang owner fix routes those lookups through the ALINK slot whose `mThrowBoomerangAcKeep` owns the boomerang actor, falling back to global P1 for vanilla behavior. User validation confirmed P2's boomerang now returns to P2 and can be repeatedly rethrown, while P1's boomerang still works.
+- The remaining P2 boomerang reticle/camera perspective is still P1-centered. Treat that as camera/HUD/attention ownership, not boomerang actor ownership.
 - The remaining failures are item/action ownership failures, not the original "can P2 receive input?" problem.
 
 ## Working Assumptions
@@ -52,11 +56,11 @@ Keep P2 basic input working while classifying and fixing the first item/action o
 
 - [x] P2 input routing milestone completed.
 - [x] Fishing hook and boomerang identified as first item ownership failures.
-- [ ] Audit boomerang owner/catch/availability path.
+- [x] Audit boomerang owner/catch/availability path.
+- [x] Choose the smaller first item ownership fix.
+- [x] Land one narrow item ownership helper or local fix.
+- [x] Validate P1 unchanged and P2 ownership improved for boomerang.
 - [ ] Audit fishing hook model/hand attachment path.
-- [ ] Choose the smaller first item ownership fix.
-- [ ] Land one narrow item ownership helper or local fix.
-- [ ] Validate P1 unchanged and P2 ownership improved.
 
 ## Test Plan
 
@@ -76,6 +80,7 @@ Manual test sequence:
 Expected next big win:
 
 - One P2-owned item no longer redirects visible held state, return/catch state, or availability restoration to P1.
+- Boomerang has reached this win for return/catch and availability restoration. Fishing hook/rod is the next focused item family for visible hand attachment.
 
 Failure conditions:
 
