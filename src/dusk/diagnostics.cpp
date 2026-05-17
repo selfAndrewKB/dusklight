@@ -441,18 +441,19 @@ json playerStatusEventKey(const json& data) {
 }
 
 json alinkSecondaryEventKey(const json& data) {
-    const json copyRod = data.value("copy_rod", json::object());
-    json copyRodKey = {
-        {"active", copyRod.value("active", false)},
-    };
-    if (copyRodKey["active"].get<bool>()) {
+    json copyRodKey = nullptr;
+    if (data.contains("copy_rod")) {
+        const json copyRod = data.value("copy_rod", json::object());
+        copyRodKey = {
+            {"active", true},
+        };
         copyRodKey["actor"] = copyRod.value("actor", "0x0");
         copyRodKey["control_actor"] = copyRod.value("control_actor", "0x0");
         copyRodKey["camera_actor"] = copyRod.value("camera_actor", "0x0");
         copyRodKey["top_use"] = copyRod.value("top_use", false);
     }
 
-    return {
+    json eventKey = {
         {"schema_version", data.value("schema_version", 1)},
         {"available", data.value("available", false)},
         {"actor", data.value("actor", "0x0")},
@@ -463,7 +464,6 @@ json alinkSecondaryEventKey(const json& data) {
         {"item_actor_id", data.value("item_actor_id", 0)},
         {"item_actor_name", data.value("item_actor_name", 0)},
         {"throw_boomerang_actor", data.value("throw_boomerang_actor", "0x0")},
-        {"copy_rod", copyRodKey},
         {"item_button", data.value("item_button", 0)},
         {"item_trigger", data.value("item_trigger", 0)},
         {"use_button_flags", data.value("use_button_flags", 0)},
@@ -481,6 +481,12 @@ json alinkSecondaryEventKey(const json& data) {
         {"owner_under", data.value("owner_under", "0x0")},
         {"owner_upper", data.value("owner_upper", "0x0")},
     };
+
+    if (!copyRodKey.is_null()) {
+        eventKey["copy_rod"] = copyRodKey;
+    }
+
+    return eventKey;
 }
 
 const char* alinkProcName(u16 proc) {
@@ -837,14 +843,13 @@ json collectAlinkSecondary() {
     const bool copyRodActive = state.copyRodActor != 0 || state.copyRodControlActor != 0 ||
                                state.copyRodCameraActor != 0 || state.copyRodTopUse ||
                                state.equipItem == dItemNo_COPY_ROD_e;
-    data["copy_rod"] = {
-        {"active", copyRodActive},
-    };
     if (copyRodActive) {
-        data["copy_rod"]["actor"] = ptrString(state.copyRodActor);
-        data["copy_rod"]["control_actor"] = ptrString(state.copyRodControlActor);
-        data["copy_rod"]["camera_actor"] = ptrString(state.copyRodCameraActor);
-        data["copy_rod"]["top_use"] = state.copyRodTopUse;
+        data["copy_rod"] = {
+            {"actor", ptrString(state.copyRodActor)},
+            {"control_actor", ptrString(state.copyRodControlActor)},
+            {"camera_actor", ptrString(state.copyRodCameraActor)},
+            {"top_use", state.copyRodTopUse},
+        };
     }
     data["item_button"] = static_cast<unsigned int>(state.itemButton);
     data["item_trigger"] = static_cast<unsigned int>(state.itemTrigger);
