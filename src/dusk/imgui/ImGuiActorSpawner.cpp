@@ -1,10 +1,12 @@
 #include "imgui.h"
 
+#include "ImGuiConsole.hpp"
 #include "ImGuiMenuTools.hpp"
 #include "d/actor/d_a_alink.h"
 #include "d/d_com_inf_game.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/diagnostics.h"
+#include "dusk/hotkeys.h"
 #include "dusk/io.hpp"
 #include "f_op/f_op_actor_mng.h"
 #include "SSystem/SComponent/c_sxyz.h"
@@ -33,6 +35,62 @@ struct ActorSpawnerState {
 
 ActorSpawnerState s_state;
 
+unsigned int spawnSecondaryLinkPrototype(daAlink_c* player) {
+    cXyz pos = player->current.pos;
+    pos.x += 120.0f;
+    csXyz angle = player->shape_angle;
+
+    layer_class* savedLayer = fpcLy_CurrentLayer();
+    base_process_class* playScene = fpcM_SearchByName(fpcNm_PLAY_SCENE_e);
+    if (playScene != nullptr) {
+        fpcLy_SetCurrentLayer(&((process_node_class*)playScene)->layer);
+    }
+
+    // Co-op: debug-only spawn path exercises secondary ALINK without overwriting player 0.
+    unsigned int result = fopAcM_create(
+        fpcNm_ALINK_e,
+        fopAcM_GetParam(player),
+        &pos,
+        player->current.roomNo,
+        &angle,
+        nullptr,
+        (s8)dusk::coop::kSecondaryPlayerPrototypeArgument
+    );
+
+    fpcLy_SetCurrentLayer(savedLayer);
+    return result;
+}
+
+void tryCoopHotkeySpawnSecondary() {
+    if (!ImGui::GetIO().KeyCtrl || !ImGui::IsKeyPressed(ImGuiKey_F12)) {
+        return;
+    }
+
+    dusk::diagnostics::setSecondaryAlinkActionMirrorProfileEnabled(true);
+    dusk::coop::setSecondaryAlinkProbeFlags(dusk::coop::kDefaultSecondaryAlinkProbeFlags);
+
+    daAlink_c* player = (daAlink_c*)dComIfGp_getPlayer(0);
+    if (player == nullptr) {
+        DuskToast("Co-op diagnostics enabled; primary Link is not available");
+        return;
+    }
+
+    if (dusk::coop::getPlayer(dusk::coop::PlayerSlot::Secondary) != nullptr) {
+        DuskToast("Co-op diagnostics enabled; secondary Link already exists");
+        return;
+    }
+
+    s_state.lastResult = spawnSecondaryLinkPrototype(player);
+    s_state.lastAttempted = 1;
+    s_state.hasResult = true;
+
+    if (s_state.lastResult != 0) {
+        DuskToast("Co-op diagnostics enabled; spawned secondary Link");
+    } else {
+        DuskToast("Co-op diagnostics enabled; secondary Link spawn failed");
+    }
+}
+
 void secondaryAlinkProbeCheckbox(const char* label, dusk::coop::SecondaryAlinkProbeFlag flag) {
     unsigned int flags = dusk::coop::getSecondaryAlinkProbeFlags();
     bool enabled = (flags & static_cast<unsigned int>(flag)) != 0;
@@ -58,6 +116,8 @@ void secondaryAlinkProbeCheckbox(const char* label, dusk::coop::SecondaryAlinkPr
 }  // namespace
 
 void ImGuiMenuTools::ShowActorSpawner() {
+    tryCoopHotkeySpawnSecondary();
+
     if (!m_showActorSpawner) {
         return;
     }
@@ -77,30 +137,9 @@ void ImGuiMenuTools::ShowActorSpawner() {
     }
 
     if (ImGui::Button("Spawn Secondary Link Prototype", ImVec2(-1, 0))) {
-        cXyz pos = player->current.pos;
-        pos.x += 120.0f;
-        csXyz angle = player->shape_angle;
-
-        layer_class* savedLayer = fpcLy_CurrentLayer();
-        base_process_class* playScene = fpcM_SearchByName(fpcNm_PLAY_SCENE_e);
-        if (playScene != nullptr) {
-            fpcLy_SetCurrentLayer(&((process_node_class*)playScene)->layer);
-        }
-
-        // Co-op: debug-only spawn path exercises secondary ALINK without overwriting player 0.
-        s_state.lastResult = fopAcM_create(
-            fpcNm_ALINK_e,
-            fopAcM_GetParam(player),
-            &pos,
-            player->current.roomNo,
-            &angle,
-            nullptr,
-            (s8)dusk::coop::kSecondaryPlayerPrototypeArgument
-        );
+        s_state.lastResult = spawnSecondaryLinkPrototype(player);
         s_state.lastAttempted = 1;
         s_state.hasResult = true;
-
-        fpcLy_SetCurrentLayer(savedLayer);
     }
 
     if (!canSpawnSecondary) {
@@ -116,6 +155,8 @@ void ImGuiMenuTools::ShowActorSpawner() {
     if (ImGui::Checkbox("Record action mirror diagnostics", &diagnosticsEnabled)) {
         dusk::diagnostics::setSecondaryAlinkActionMirrorProfileEnabled(diagnosticsEnabled);
     }
+    ImGui::TextDisabled("Hotkey: %s enables diagnostics, resets probes, and spawns P2",
+                        dusk::hotkeys::COOP_SPAWN_SECONDARY_LINK);
     if (diagnosticsEnabled) {
         if (ImGui::SmallButton("Flush diagnostics")) {
             dusk::diagnostics::flush("manual-ui");

@@ -222,7 +222,8 @@ Use this pattern again when a secondary ALINK bug appears:
    - Record which ones target shared Link body/face/hat/sword model data.
 5. Add logs or toggles only for the next specific suspected ownership write.
    - Do not add a broad "skip everything" mode.
-   - Keep `Skip execute`, `Skip draw`, and `Restore P1 model data owner` as the default containment harness.
+   - Historical note: this audit originally kept `Skip execute`, `Skip draw`, and `Restore P1 model data owner` as the default containment harness.
+   - Current default after the input-routing milestone: `Skip execute` and `Skip draw` are off; restore/scoped model-data ownership and ignored shared attention lock remain on.
 6. Once shared model-data ownership is mapped, test whether secondary draw can be re-enabled with P1 ownership restored.
    - Expected risk: secondary draw may steal model-data owner again or mutate material animators.
    - If it breaks, inspect draw-time `modelDraw(...)`, `modelCalc(...)`, material animator entry/removal, and `J3DModel::setUserArea(...)` paths.
@@ -340,7 +341,7 @@ Current visible-P2 conclusion:
 
 ## Current Execute Probe
 
-The next diagnostic keeps `Skip execute` checked by default, but adds a separate `Scoped execute model data owner` toggle. When `Skip execute` is unchecked with that scoped-owner toggle still enabled, secondary ALINK `execute()` runs once per frame under temporary player 2 model-data ownership, then restores player 1 immediately afterward.
+Historical diagnostic note: this phase kept `Skip execute` checked by default, but added a separate `Scoped execute model data owner` toggle. When `Skip execute` was unchecked with that scoped-owner toggle still enabled, secondary ALINK `execute()` ran once per frame under temporary player 2 model-data ownership, then restored player 1 immediately afterward.
 
 Searchable logs:
 

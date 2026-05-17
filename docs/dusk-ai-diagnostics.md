@@ -362,6 +362,7 @@ Implemented:
 - `diagnostics.stats` is written into `latest.json` as recorder health, not as a normal spam-prone JSONL provider. It reports buffered event count and per-provider written/throttled/oversized counts plus active budgets.
 - The ring buffer keeps the latest 3600 emitted events in memory and is flushed through the same event path.
 - Actor Spawner exposes `Record action mirror diagnostics`, `Flush diagnostics`, and the active output path near the secondary ALINK controls.
+- `Ctrl+F12` is the fast co-op capture setup: enable the diagnostics profile, reset secondary ALINK probes to default, spawn P2 if possible, and show a Dusk toast. Use the manual UI controls for recovery, alternate probe combinations, or flushing.
 - The existing ALINK action-mirror helper now also feeds `alink.secondary` structured state whenever it emits the human-readable `secondary action-mirror` log. Its `"phase"` field is informational; identical state is not re-emitted just because the helper saw a new before/after phase.
 - `attention.state` records the shared `dAttention_c` object directly: owner actor, pad number, flags, lock truth, lock/action/check counts and offsets, primary targets, and active lock/action/check list entries with actor metadata. It samples every five frames and intentionally omits empty list slots plus noisy list weights/distances in this profile. This exists because the current shield/target mirror evidence points at shared attention state, not P2 raw input leakage.
 

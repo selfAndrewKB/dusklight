@@ -12,6 +12,8 @@ Keep P2 basic input working while classifying and fixing the first item/action o
 - P2 can move from controller 2 with secondary execute enabled.
 - P2 rolling worked.
 - P2 basic combat swing worked.
+- The default secondary ALINK probe set now runs secondary execute. `Skip execute` remains available only as a recovery/debug checkbox.
+- `Ctrl+F12` is the fast test hotkey: it enables the co-op diagnostics profile, resets secondary ALINK probes to default, spawns P2 if the secondary slot is free, and shows a Dusk toast with the result.
 - Fishing hook ownership is wrong: pulling it out for P2 made it invisible in P2's hands and visible on P1.
 - Boomerang ownership is wrong: P2 could throw it, but P1 caught it and P2 could not throw it again afterward.
 - The remaining failures are item/action ownership failures, not the original "can P2 receive input?" problem.
@@ -63,9 +65,9 @@ The user owns Visual Studio/CMake builds unless explicitly delegated to Codex.
 Manual test sequence:
 
 1. Build with Visual Studio MSVC debug.
-2. Enable diagnostics profile if capture is needed.
-3. Spawn Secondary Link Prototype.
-4. Uncheck `Skip execute`.
+2. Press `Ctrl+F12` to enable diagnostics, reset default probes, and spawn Secondary Link Prototype.
+3. Confirm the Dusk toast reports that diagnostics are enabled and P2 spawned.
+4. If using the UI instead, confirm `Skip execute` is unchecked under the default probe set.
 5. Confirm P2 still moves from controller 2.
 6. Test the chosen item with P1.
 7. Test the chosen item with P2.
@@ -87,3 +89,4 @@ Failure conditions:
 - Once an item ownership pattern is confirmed, decide whether it belongs in a reusable helper.
 - Reduce old action-mirror human logs once structured diagnostics cover the same evidence.
 - Decide which secondary ALINK probe flags should become default co-op containment rather than debug checkboxes.
+- If P2 execute becomes unstable again, temporarily re-enable `Skip execute` only to isolate the regression; do not treat it as the normal test path.

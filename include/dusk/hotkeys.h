@@ -21,6 +21,8 @@ constexpr const char* SHOW_AUDIO_DEBUG = "F10";
 
 constexpr const char* TOGGLE_FULLSCREEN = "F11";
 
+constexpr const char* COOP_SPAWN_SECONDARY_LINK = "Ctrl+F12";
+
 constexpr const char* TURBO = "Tab";
 
 }

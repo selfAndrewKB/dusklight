@@ -28,6 +28,7 @@ This milestone is not full combat, item use, camera, UI, targeting, interaction,
 - `alink.secondary` now refreshes from the secondary execute probe, so locomotion tests can compare P2 pad input, secondary stick/move values, speed, angles, and position without depending on R/attention changes.
 - User validation confirmed the second controller moved the spawned Link. Rolling worked, and a basic combat swing worked.
 - Item/action ownership remains P1/global in several paths: pulling out the fishing hook made it invisible in P2's hands and visible on P1, and throwing the boomerang caused P1 to catch it and blocked P2 from throwing again.
+- After this milestone, `Skip execute` is no longer part of the default secondary ALINK probe set. It remains available only as a recovery/debug checkbox.
 
 ## Working Assumptions
 
@@ -84,7 +85,7 @@ Manual test sequence:
 4. Enable the diagnostics profile if a capture is needed.
 5. Spawn `Spawn Secondary Link Prototype`.
 6. Confirm P2 is visible and P1 still animates normally.
-7. Uncheck `Skip execute`.
+7. Confirm `Skip execute` is unchecked under the default probe set.
 8. Move controller 2's stick and observe whether P2 moves, turns, or changes proc/animation state.
 9. Move P1 separately and confirm P1 still behaves normally.
 10. Flush diagnostics and inspect `input.pad`, `alink.secondary`, `player.status`, and `attention.state`.
