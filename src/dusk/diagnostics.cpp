@@ -448,6 +448,8 @@ json alinkSecondaryEventKey(const json& data) {
         {"equip_item", data.value("equip_item", 0)},
         {"select_item_id", data.value("select_item_id", 0)},
         {"item_actor", data.value("item_actor", "0x0")},
+        {"item_actor_id", data.value("item_actor_id", 0)},
+        {"item_actor_name", data.value("item_actor_name", 0)},
         {"throw_boomerang_actor", data.value("throw_boomerang_actor", "0x0")},
         {"copy_rod_actor", data.value("copy_rod_actor", "0x0")},
         {"item_button", data.value("item_button", 0)},
@@ -489,8 +491,18 @@ const char* alinkProcName(u16 proc) {
         return "PROC_BOOMERANG_MOVE";
     case daAlink_c::PROC_BOOMERANG_CATCH:
         return "PROC_BOOMERANG_CATCH";
+    case daAlink_c::PROC_CANOE_ROD_GRAB:
+        return "PROC_CANOE_ROD_GRAB";
+    case daAlink_c::PROC_CANOE_FISHING_WAIT:
+        return "PROC_CANOE_FISHING_WAIT";
+    case daAlink_c::PROC_CANOE_FISHING_REEL:
+        return "PROC_CANOE_FISHING_REEL";
+    case daAlink_c::PROC_CANOE_FISHING_GET:
+        return "PROC_CANOE_FISHING_GET";
     case daAlink_c::PROC_FISHING_CAST:
         return "PROC_FISHING_CAST";
+    case daAlink_c::PROC_FISHING_FOOD:
+        return "PROC_FISHING_FOOD";
     default:
         return "";
     }
@@ -791,6 +803,8 @@ json collectAlinkSecondary() {
     data["equip_item"] = static_cast<unsigned int>(state.equipItem);
     data["select_item_id"] = static_cast<unsigned int>(state.selectItemId);
     data["item_actor"] = ptrString(state.itemActor);
+    data["item_actor_id"] = static_cast<int>(state.itemActorId);
+    data["item_actor_name"] = static_cast<int>(state.itemActorName);
     data["throw_boomerang_actor"] = ptrString(state.throwBoomerangActor);
     data["copy_rod_actor"] = ptrString(state.copyRodActor);
     data["item_button"] = static_cast<unsigned int>(state.itemButton);

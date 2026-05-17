@@ -20,6 +20,10 @@ Keep P2 basic input working while classifying and fixing the first item/action o
 - The first boomerang owner bug is in `daBoomerang_c`: the boomerang actor asks `daAlink_getAlinkActorClass()` for held matrices, speed/range, aim/catch position, lock state, and `returnBoomerang()`, which always resolves global P1.
 - The local boomerang owner fix routes those lookups through the ALINK slot whose `mThrowBoomerangAcKeep` owns the boomerang actor, falling back to global P1 for vanilla behavior. User validation confirmed P2's boomerang now returns to P2 and can be repeatedly rethrown, while P1's boomerang still works.
 - The remaining P2 boomerang reticle/camera perspective is still P1-centered. Treat that as camera/HUD/attention ownership, not boomerang actor ownership.
+- Fishing rod has a clean owner relationship for the first pass: `daAlink_c::checkFishingRodGrab(actor)` checks whether a rod actor is the ALINK's kept item actor. The first fishing patch should use that relationship only for hand attachment/ready-state owner facts, leaving camera/HUD/minigame policy alone.
+- First fishing test result: the rod appeared in P2's hand and P2 could cast it, which confirms the hand attachment owner path. After casting, P2 got stuck and rod control followed P1's controller, exposing a second owner-specific path: `MG_ROD` samples raw `PAD_1` into its rod stick/substick/reel fields and those values feed ALINK fishing control.
+- The second fishing patch routes the bobber rod input fields and immediate owner arm/cast callbacks through the owning ALINK slot. User validation confirmed P2 regained control after casting, and P1/P2 can use fishing rods simultaneously. Camera/HUD/minigame policy remains intentionally untouched.
+- Broader item/weapon candidates are tracked in `docs/coop-player-owner-lookup-audit.md` so future fixes can classify owner-specific lookups without rediscovering the boomerang/fishing pattern each time.
 - The remaining failures are item/action ownership failures, not the original "can P2 receive input?" problem.
 
 ## Working Assumptions
@@ -60,7 +64,10 @@ Keep P2 basic input working while classifying and fixing the first item/action o
 - [x] Choose the smaller first item ownership fix.
 - [x] Land one narrow item ownership helper or local fix.
 - [x] Validate P1 unchanged and P2 ownership improved for boomerang.
-- [ ] Audit fishing hook model/hand attachment path.
+- [x] Add reusable owner-lookup audit lane for item/weapon actors.
+- [x] Validate fishing rod owner-scoped hand attachment.
+- [x] Validate fishing rod owner-scoped input/cast recovery.
+- [ ] Pick the next item/weapon owner-lookup target from `docs/coop-player-owner-lookup-audit.md`.
 
 ## Test Plan
 
@@ -81,6 +88,7 @@ Expected next big win:
 
 - One P2-owned item no longer redirects visible held state, return/catch state, or availability restoration to P1.
 - Boomerang has reached this win for return/catch and availability restoration. Fishing hook/rod is the next focused item family for visible hand attachment.
+- Fishing rod has also reached this win for visible hand attachment and owner-routed rod input/cast recovery, including simultaneous P1/P2 use.
 
 Failure conditions:
 

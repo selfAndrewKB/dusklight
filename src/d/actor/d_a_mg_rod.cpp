@@ -18,6 +18,7 @@
 #include "d/d_meter2_info.h"
 #include "d/d_msg_object.h"
 #include "d/d_item.h"
+#include "dusk/coop/player_slots.h"
 #include "f_op/f_op_kankyo_mng.h"
 #include "c/c_damagereaction.h"
 #include "SSystem/SComponent/c_counter.h"
@@ -26,6 +27,30 @@
 #include <cstring>
 
 #include "dusk/version.hpp"
+
+// Co-op: MG_ROD is kept by the ALINK that equipped it, so hand attachment must not always ask global P1.
+static daAlink_c* dmg_rod_getOwner(dmg_rod_class* i_this) {
+    fopAc_ac_c* actor = &i_this->actor;
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        fopAc_ac_c* player_actor = dusk::coop::getPlayer(static_cast<dusk::coop::PlayerSlot>(i));
+        daAlink_c* player = static_cast<daAlink_c*>(player_actor);
+        if (player != NULL && player->checkFishingRodGrab(actor)) {
+            return player;
+        }
+    }
+
+    return daAlink_getAlinkActorClass();
+}
+
+// Co-op: rod input should follow the ALINK slot that owns this MG_ROD actor, not always PAD_1.
+static u32 dmg_rod_getOwnerPad(dmg_rod_class* i_this) {
+    dusk::coop::PlayerSlot slot = dusk::coop::getSlotForActor(dmg_rod_getOwner(i_this));
+    if (slot == dusk::coop::PlayerSlot::Invalid) {
+        slot = dusk::coop::PlayerSlot::Primary;
+    }
+
+    return static_cast<u32>(dusk::coop::getPadForSlot(slot));
+}
 
 class dmg_rod_HIO_c : public JORReflexible {
 public:
@@ -280,7 +305,7 @@ static int dmg_rod_Draw(dmg_rod_class* i_this) {
 
 static void rod_control(dmg_rod_class* i_this) {
     fopAc_ac_c* actor = &i_this->actor;
-    fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+    daAlink_c* player = dmg_rod_getOwner(i_this);
     cXyz* rodJointPos;
     int i;
 
@@ -330,14 +355,14 @@ static void rod_control(dmg_rod_class* i_this) {
 
         i_this->rod_angle_y = boat->shape_angle.y + NREG_S(3);
     } else {
-        i_this->rod_angle_y = daAlink_getAlinkActorClass()->getFishingRodAngleY();
-        if (i_this->kind == MG_ROD_KIND_LURE && daAlink_getAlinkActorClass()->checkFishingRodGrabLeft()) {
-            MTXCopy(daAlink_getAlinkActorClass()->getLeftItemMatrix(), *calc_mtx);
+        i_this->rod_angle_y = player->getFishingRodAngleY();
+        if (i_this->kind == MG_ROD_KIND_LURE && player->checkFishingRodGrabLeft()) {
+            MTXCopy(player->getLeftItemMatrix(), *calc_mtx);
             cMtx_YrotM(*calc_mtx, (s16)(JREG_S(3) + 0x20B6));
             cMtx_XrotM(*calc_mtx, (s16)(JREG_S(4) + 0x8000));
             cMtx_ZrotM(*calc_mtx, (s16)(JREG_S(5) - 0x4000));
         } else {
-            MTXCopy(daAlink_getAlinkActorClass()->getRightItemMatrix(), *calc_mtx);
+            MTXCopy(player->getRightItemMatrix(), *calc_mtx);
             if (i_this->kind == MG_ROD_KIND_LURE) {
                 rodRollAdj = 0;
                 rodPitchAdj = i_this->rod_angle_y - player->shape_angle.y;
@@ -3503,11 +3528,11 @@ static int uki_calc(dmg_rod_class* i_this) {
 
 static void uki_ready(dmg_rod_class* i_this) {
     fopAc_ac_c* actor = &i_this->actor;
-    fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+    daAlink_c* player = dmg_rod_getOwner(i_this);
     cXyz sp24;
     cXyz sp18;
 
-    u32 sp8 = daAlink_getAlinkActorClass()->checkFishingRodUseStart();
+    u32 sp8 = player->checkFishingRodUseStart();
 
     i_this->field_0x1508 = 1.0f;
     sp24 = i_this->field_0x6c8 - i_this->field_0x6d4;
@@ -3529,7 +3554,7 @@ static void uki_ready(dmg_rod_class* i_this) {
 
     cLib_addCalc2(&i_this->field_0x6f8, sp18.z, 1.0f, sp18.y);
 
-    MTXCopy(daAlink_getAlinkActorClass()->getLeftItemMatrix(), *calc_mtx);
+    MTXCopy(player->getLeftItemMatrix(), *calc_mtx);
     sp24.set(0.0f, 0.0f, 0.0f);
     MtxPosition(&sp24, &sp18);
 
@@ -3552,7 +3577,7 @@ static void uki_ready(dmg_rod_class* i_this) {
         return;
     }
 
-    if (daAlink_getAlinkActorClass()->checkFishingRodUseAccept() && player->speedF < 1.0f && i_this->rod_substick_y < -0.9f) {
+    if (player->checkFishingRodUseAccept() && player->speedF < 1.0f && i_this->rod_substick_y < -0.9f) {
         i_this->field_0x14e4++;
         if (i_this->field_0x14e4 > 6) {
             i_this->play_cam_mode = 1;
@@ -3566,14 +3591,14 @@ static void uki_ready(dmg_rod_class* i_this) {
     }
 
     if (i_this->play_cam_mode != 0) {
-        daAlink_getAlinkActorClass()->startFishingCastWait();
+        player->startFishingCastWait();
         i_this->action = ACTION_UKI_STANDBY;
         i_this->cast_momentum = 0.0f;
         i_this->field_0x1504 = 0.0f;
         i_this->field_0x1418 = player->shape_angle.y - dCam_getControledAngleY(dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0)));
         i_this->timers[0] = 20;
         i_this->field_0x102e = 0;
-        daAlink_getAlinkActorClass()->seStartOnlyReverb(Z2SE_AL_ROD_SWING_UKI);
+        player->seStartOnlyReverb(Z2SE_AL_ROD_SWING_UKI);
         i_this->timers[6] = 20;
         i_this->cast_momentum = i_this->cast_power = 1.0f;
         i_this->field_0xf64 = i_this->field_0xf68 = 0.0f;
@@ -3582,7 +3607,7 @@ static void uki_ready(dmg_rod_class* i_this) {
 
 static BOOL uki_rod_bg_check(dmg_rod_class* i_this) {
     fopAc_ac_c* actor = &i_this->actor;
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
+    daAlink_c* player = dmg_rod_getOwner(i_this);
 
     dBgS_LinChk sp20;
     sp20.SetRope();
@@ -3603,7 +3628,7 @@ static BOOL uki_rod_bg_check(dmg_rod_class* i_this) {
 }
 
 static void uki_pl_arm_calc(dmg_rod_class* i_this) {
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
+    daAlink_c* player = dmg_rod_getOwner(i_this);
     csXyz sp10;
     csXyz sp8;
 
@@ -3646,16 +3671,17 @@ static void uki_pl_arm_calc(dmg_rod_class* i_this) {
     if (i_this->action == ACTION_UKI_HIT && i_this->field_0xf60 > 140.0f + JREG_F(14)) {
         ANGLE_ADD(sp8.y, (50.0f + nREG_F(0)) * cM_ssin(i_this->counter * 0x6200));
         ANGLE_ADD(sp8.z, (50.0f + nREG_F(0)) * cM_ssin(i_this->counter * 0x6500));
-        daAlink_getAlinkActorClass()->seStartOnlyReverbLevel(Z2SE_AL_ROD_BEND);
+        player->seStartOnlyReverbLevel(Z2SE_AL_ROD_BEND);
     }
 
-    daAlink_getAlinkActorClass()->setFishingArm1Angle(sp8);
-    daAlink_getAlinkActorClass()->setFishingArm2Angle(sp10);
+    player->setFishingArm1Angle(sp8);
+    player->setFishingArm2Angle(sp10);
 }
 
 static void uki_standby(dmg_rod_class* i_this) {
     fopAc_ac_c* actor = &i_this->actor;
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
+    daAlink_c* player = dmg_rod_getOwner(i_this);
+    const u32 owner_pad = dmg_rod_getOwnerPad(i_this);
     cXyz sp30;
     cXyz sp24;
 
@@ -3671,7 +3697,7 @@ static void uki_standby(dmg_rod_class* i_this) {
     cLib_addCalc2(&i_this->field_0x150c, substickX, 0.5f, 0.2f);
 
     if (i_this->field_0x1508 > 0.3f && i_this->play_cam_mode < 5) {
-        ANGLE_ADD(i_this->field_0x1418, (-500.0f + VREG_F(3)) * mDoCPd_c::getStickX3D(PAD_1));
+        ANGLE_ADD(i_this->field_0x1418, (-500.0f + VREG_F(3)) * mDoCPd_c::getStickX3D(owner_pad));
     }
 
     cMtx_YrotS(*calc_mtx, i_this->field_0x1418);
@@ -3726,7 +3752,7 @@ static void uki_standby(dmg_rod_class* i_this) {
             }
 
             if (i_this->field_0x1508 > 0.7f) {
-                daAlink_getAlinkActorClass()->seStartOnlyReverb(Z2SE_AL_ROD_SWING_UKI);
+                player->seStartOnlyReverb(Z2SE_AL_ROD_SWING_UKI);
             }
         }
     }
@@ -3756,7 +3782,7 @@ static void uki_standby(dmg_rod_class* i_this) {
         Z2GetAudioMgr()->changeFishingBgm(0);
     }
 
-    if (mDoCPd_c::getTrigA(PAD_1)) {
+    if (mDoCPd_c::getTrigA(owner_pad)) {
         i_this->play_cam_mode = 90;
         Z2GetAudioMgr()->changeFishingBgm(0);
     }
@@ -3767,7 +3793,7 @@ static void uki_standby(dmg_rod_class* i_this) {
 
     if (i_this->play_cam_mode == 90) {
         i_this->action = ACTION_UKI_READY;
-        daAlink_getAlinkActorClass()->endFishingCastWait();
+        player->endFishingCastWait();
         i_this->field_0x1094 = 0.0f;
         i_this->cast_momentum = 0.0f;
         i_this->field_0x10a5 = 0;
@@ -5735,6 +5761,7 @@ static void play_camera_u(dmg_rod_class* i_this) {
 
 static int dmg_rod_Execute(dmg_rod_class* i_this) {
     fopAc_ac_c* actor = &i_this->actor;
+    const u32 owner_pad = dmg_rod_getOwnerPad(i_this);
 
     #if TARGET_PC
     if (dusk::version::isPalOrAtLeastWiiR2()) {
@@ -5786,15 +5813,15 @@ static int dmg_rod_Execute(dmg_rod_class* i_this) {
 
     actor->eyePos = actor->current.pos;
 
-    i_this->rod_stick_x = mDoCPd_c::getStickX3D(PAD_1);
-    i_this->rod_stick_y = mDoCPd_c::getStickY(PAD_1);
-    i_this->rod_substick_x = mDoCPd_c::getSubStickX(PAD_1);
+    i_this->rod_stick_x = mDoCPd_c::getStickX3D(owner_pad);
+    i_this->rod_stick_y = mDoCPd_c::getStickY(owner_pad);
+    i_this->rod_substick_x = mDoCPd_c::getSubStickX(owner_pad);
     i_this->prev_rod_substick_y = i_this->rod_substick_y;
-    i_this->rod_substick_y = mDoCPd_c::getSubStickY(PAD_1);
+    i_this->rod_substick_y = mDoCPd_c::getSubStickY(owner_pad);
 
     i_this->reel_speed = 5.0f;
-    i_this->reel_btn_flags = mDoCPd_c::getHoldB(PAD_1) | mDoCPd_c::getHoldDown(PAD_1);
-    if (mDoCPd_c::getHoldDown(PAD_1)) {
+    i_this->reel_btn_flags = mDoCPd_c::getHoldB(owner_pad) | mDoCPd_c::getHoldDown(owner_pad);
+    if (mDoCPd_c::getHoldDown(owner_pad)) {
         i_this->reel_speed = 15.0f;
     }
 

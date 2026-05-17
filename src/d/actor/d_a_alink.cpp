@@ -130,6 +130,10 @@ void populateCoopSecondaryAlinkState(const char* phase, daAlink_c* player,
     diag->itemActor = reinterpret_cast<uintptr_t>(player->mItemAcKeep.getActor());
     diag->throwBoomerangActor = reinterpret_cast<uintptr_t>(player->mThrowBoomerangAcKeep.getActor());
     diag->copyRodActor = reinterpret_cast<uintptr_t>(player->mCopyRodAcKeep.getActor());
+    if (player->mItemAcKeep.getActor() != NULL) {
+        diag->itemActorId = fopAcM_GetID(player->mItemAcKeep.getActor());
+        diag->itemActorName = fopAcM_GetName(player->mItemAcKeep.getActor());
+    }
     diag->proc = player->mProcID;
     diag->equipItem = player->mEquipItem;
     diag->selectItemId = player->mSelectItemId;

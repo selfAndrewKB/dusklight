@@ -18,6 +18,8 @@ struct SecondaryAlinkState {
     uintptr_t itemActor = 0;
     uintptr_t throwBoomerangActor = 0;
     uintptr_t copyRodActor = 0;
+    int itemActorId = 0;
+    s16 itemActorName = 0;
     u16 proc = 0;
     u16 equipItem = 0;
     u8 selectItemId = 0;
