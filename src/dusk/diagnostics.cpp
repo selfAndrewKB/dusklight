@@ -453,6 +453,19 @@ json alinkSecondaryEventKey(const json& data) {
         copyRodKey["top_use"] = copyRod.value("top_use", false);
     }
 
+    json bombKey = nullptr;
+    if (data.contains("bomb")) {
+        const json bomb = data.value("bomb", json::object());
+        bombKey = {
+            {"active", true},
+            {"active_count", bomb.value("active_count", 0)},
+            {"insect_count", bomb.value("insect_count", 0)},
+            {"item_actor", bomb.value("item_actor", "0x0")},
+            {"item_actor_id", bomb.value("item_actor_id", 0)},
+            {"item_actor_name", bomb.value("item_actor_name", 0)},
+        };
+    }
+
     json eventKey = {
         {"schema_version", data.value("schema_version", 1)},
         {"available", data.value("available", false)},
@@ -488,6 +501,9 @@ json alinkSecondaryEventKey(const json& data) {
 
     if (!copyRodKey.is_null()) {
         eventKey["copy_rod"] = copyRodKey;
+    }
+    if (!bombKey.is_null()) {
+        eventKey["bomb"] = bombKey;
     }
 
     return eventKey;
@@ -831,7 +847,7 @@ json collectCoopProbes() {
 json collectAlinkSecondary() {
     const SecondaryAlinkState& state = s_state.secondaryAlinkState;
     json data = {
-        {"schema_version", 3},
+        {"schema_version", 4},
         {"available", s_state.hasSecondaryAlinkState},
     };
     if (!s_state.hasSecondaryAlinkState) {
@@ -852,6 +868,19 @@ json collectAlinkSecondary() {
     data["ride_actor_name"] = static_cast<int>(state.rideActorName);
     data["ride_status"] = static_cast<unsigned int>(state.rideStatus);
     data["throw_boomerang_actor"] = ptrString(state.throwBoomerangActor);
+    const bool bombActive = state.activeBombCount != 0 || state.insectBombCount != 0 ||
+                            state.equipItem == dItemNo_NORMAL_BOMB_e ||
+                            state.equipItem == dItemNo_WATER_BOMB_e ||
+                            state.equipItem == dItemNo_POKE_BOMB_e;
+    if (bombActive) {
+        data["bomb"] = {
+            {"active_count", static_cast<unsigned int>(state.activeBombCount)},
+            {"insect_count", static_cast<unsigned int>(state.insectBombCount)},
+            {"item_actor", ptrString(state.itemActor)},
+            {"item_actor_id", static_cast<int>(state.itemActorId)},
+            {"item_actor_name", static_cast<int>(state.itemActorName)},
+        };
+    }
     const bool copyRodActive = state.copyRodActor != 0 || state.copyRodControlActor != 0 ||
                                state.copyRodCameraActor != 0 || state.copyRodTopUse;
     if (copyRodActive) {
@@ -903,7 +932,7 @@ Provider s_providers[] = {
     {"attention.state", 1, "medium", 5, true, 60, 12288, collectAttentionState},
     {"player.status", 1, "cheap", 1, true, 120, 8192, collectPlayerStatus},
     {"coop.probes", 1, "cheap", 30, true, 20, 4096, collectCoopProbes},
-    {"alink.secondary", 3, "cheap", 1, true, 120, 8192, collectAlinkSecondary},
+    {"alink.secondary", 4, "cheap", 1, true, 120, 8192, collectAlinkSecondary},
 };
 
 const Provider* findProvider(const char* name) {

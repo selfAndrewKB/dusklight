@@ -91,6 +91,10 @@ public:
 
     s16 getExTime() { return mExTime; }
 
+    // Co-op: player-made bombs must decrement the ALINK slot that created their bomb count.
+    void setOwner(fopAc_ac_c* i_actor) { mOwnerAcKeep.setData(i_actor); }
+    fopAc_ac_c* getOwner() const { return mOwnerAcKeep.getActor(); }
+
     static const char* m_arcNameList[6];
 
     /* 0x56C */ request_of_phase_process_class mPhase;
@@ -134,6 +138,7 @@ public:
     /* 0xC20 */ cXyz field_0xc20;
     /* 0xC2C */ cXyz field_0xc2c;
     /* 0xC38 */ BOOL (daNbomb_c::*mProcFunc)();
+    /* 0xC44 */ daPy_actorKeep_c mOwnerAcKeep;
 };
 
 #endif /* D_A_NBOMB_H */

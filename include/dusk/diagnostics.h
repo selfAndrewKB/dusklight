@@ -29,6 +29,8 @@ struct SecondaryAlinkState {
     u16 equipItem = 0;
     u8 selectItemId = 0;
     u8 rideStatus = 0;
+    u8 activeBombCount = 0;
+    u8 insectBombCount = 0;
     u8 itemButton = 0;
     u8 itemTrigger = 0;
     u8 useButtonFlags = 0;

@@ -39,6 +39,7 @@
 #include "d/actor/d_a_horse.h"
 #include "m_Do/m_Do_controller_pad.h"
 #include "d/d_bomb.h"
+#include "d/actor/d_a_nbomb.h"
 #include "d/d_meter2_info.h"
 #include "d/actor/d_a_kytag05.h"
 #include "d/actor/d_a_b_mgn.h"
@@ -145,6 +146,8 @@ void populateCoopSecondaryAlinkState(const char* phase, daAlink_c* player,
     diag->equipItem = player->mEquipItem;
     diag->selectItemId = player->mSelectItemId;
     diag->rideStatus = player->mRideStatus;
+    diag->activeBombCount = player->mActiveBombNum;
+    diag->insectBombCount = player->field_0x2fcf;
     diag->itemButton = player->mItemButton;
     diag->itemTrigger = player->mItemTrigger;
     diag->useButtonFlags = player->mUseButtonFlags;
@@ -14852,6 +14855,8 @@ BOOL daAlink_c::setItemActor() {
             }
 
             if (actor != NULL) {
+                // Co-op: bomb lifetime can outlive the grab/item keep, so preserve its creating ALINK slot.
+                static_cast<daNbomb_c*>(actor)->setOwner(this);
                 mActiveBombNum++;
                 setGrabItemActor(actor);
                 dComIfGp_addSelectItemNum(mSelectItemId, -1);

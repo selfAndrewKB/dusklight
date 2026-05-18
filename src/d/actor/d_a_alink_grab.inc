@@ -1358,9 +1358,14 @@ int daAlink_c::procPickPut() {
         checkNextAction(1);
     } else if (framectrl->checkPass(9.0f)) {
         if (mProcVar2.field_0x300c != 0) {
-            if (checkReadyItem() && dBomb_c::createInsectBombPlayer(&current.pos)) {
-                dComIfGp_addSelectItemNum(mSelectItemId, -1);
-                field_0x2fcf++;
+            if (checkReadyItem()) {
+                fopAc_ac_c* bombActor = dBomb_c::createInsectBombPlayer(&current.pos);
+                if (bombActor != NULL) {
+                    // Co-op: bombling lifetime can outlive the creating ALINK action, so preserve its owner.
+                    static_cast<daNbomb_c*>(bombActor)->setOwner(this);
+                    dComIfGp_addSelectItemNum(mSelectItemId, -1);
+                    field_0x2fcf++;
+                }
             }
             mEquipItem = dItemNo_NONE_e;
         } else {

@@ -17,6 +17,7 @@ The goal is not to replace every global player lookup. The goal is to identify c
 - Dominion Rod follows the same item-actor ownership rule in two phases: the held CROD actor is in `mItemAcKeep`, and the thrown copy-rod ball is in `mCopyRodAcKeep`.
 - Arrow/bow confirms the projectile variant of the same pattern. The arrow starts in the owning ALINK's `mItemAcKeep`, then must preserve that owner after the keep is cleared for the shot; otherwise flight origin, held-arrow matrix, owner HIO values, and hit sounds all fall back to P1.
 - Spinner is the first ride-action version of the same problem. The actor lives in `mRideAcKeep`, so lifecycle, draw, movement constants, sounds, and local pad input should ask the ALINK whose ride keep owns the spinner actor. During `PROC_SPINNER_READY`, `mRideAcKeep` is already set before `mRideStatus` becomes `RIDETYPE_SPINNER`, so ownership resolution must not depend only on `checkSpinnerRideOwn()`.
+- Bombs proved the counter-lifetime variant. Normal/water bombs increment `mActiveBombNum` on the ALINK that creates them, and bomblings increment `field_0x2fcf`, but `daNbomb_c` deletion originally decremented global P1. Player-made bombs need to preserve their creating ALINK until deletion so the same slot's active-bomb count is released.
 
 ## Audit Table
 
@@ -26,7 +27,7 @@ The goal is not to replace every global player lookup. The goal is to identify c
 | Fishing rod/hook | `src/d/actor/d_a_mg_rod.cpp` | 93 | `mItemAcKeep` via `checkFishingRodGrab(actor)` | Fixed first owner clusters; hand attachment, cast recovery, and simultaneous P1/P2 rod use validated |
 | Arrow/bow | `src/d/actor/d_a_arrow.cpp` | 1 fallback after fix | `mItemAcKeep` plus preserved spawned-arrow owner | Fixed locally; P2 no longer forces P1 first-person, arrows fire from each owner, sound validated |
 | Dominion Rod | `src/d/actor/d_a_crod.cpp` | 2 fallback sites after fix | `mItemAcKeep` / `mCopyRodAcKeep` | Fixed first owner cluster; P2 throw/return validated |
-| Bombs | `src/d/actor/d_a_nbomb.cpp` | 16 | item/grab/carry ownership likely mixed with world collision | Not started |
+| Bombs | `src/d/actor/d_a_nbomb.cpp` | 15 fallback sites after first patch | preserved creating ALINK owner for player-made bomb counter decrement | Fixed first counter-lifetime cluster; P2 bomb limit resets after explosion, P2 pickup remains separate object-interaction work |
 | Spinner | `src/d/actor/d_a_spinner.cpp`, `src/d/actor/d_a_tag_sppath.cpp` | 1 fallback after first patch | `mRideAcKeep` via ride actor identity; spinner rail tags use active rider position | Fixed locally; P2 spawn/despawn and rail/slot entry validated |
 
 ## Procedure
@@ -37,7 +38,8 @@ The goal is not to replace every global player lookup. The goal is to identify c
 4. Patch one owner-specific cluster first.
 5. Use `alink.secondary` diagnostics to confirm the item actor, item actor id/name, equip item, proc, and action state before expanding the fix.
 6. Keep P1 fallback behavior for vanilla paths.
+7. If an actor's lifetime outlives the original ALINK keep, preserve the owning ALINK at creation time rather than rediscovering it from global state during deletion or return.
 
 ## Diagnostics Notes
 
-`alink.secondary` records the currently kept item actor pointer, ride actor pointer, actor id/name values, thrown boomerang actor, equipped item, selected item slot, item button/trigger masks, and use-button flags. Item-specific blocks such as `copy_rod` are optional and should appear only while that item state is active. Add actor-specific providers only after this generic ownership snapshot cannot answer the next question.
+`alink.secondary` records the currently kept item actor pointer, ride actor pointer, actor id/name values, thrown boomerang actor, equipped item, selected item slot, item button/trigger masks, and use-button flags. Item-specific blocks such as `copy_rod` and `bomb` are optional and should appear only while that item state is active. Add actor-specific providers only after this generic ownership snapshot cannot answer the next question.

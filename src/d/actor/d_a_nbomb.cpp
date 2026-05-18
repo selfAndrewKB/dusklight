@@ -16,6 +16,16 @@
 #include "JSystem/JAudio2/JAUSectionHeap.h"
 #include <cstring>
 
+// Co-op: player-made bomb counters live on the ALINK that created the bomb, not always global P1.
+static daAlink_c* daNbomb_getOwner(daNbomb_c* i_bomb) {
+    fopAc_ac_c* owner = i_bomb->getOwner();
+    if (owner != NULL) {
+        return static_cast<daAlink_c*>(owner);
+    }
+
+    return daAlink_getAlinkActorClass();
+}
+
 void daNbomb_c::coHitCallback(fopAc_ac_c* i_hitActor) {
     if (fopAcM_GetGroup(i_hitActor) == fopAc_ENEMY_e ||
         (checkStateFlg0(FLG0_INSECT_BOMB) &&
@@ -394,7 +404,7 @@ daNbomb_c::~daNbomb_c() {
         dComIfG_resDelete(&mPhase, m_arcNameList[mType]);
     }
 
-    daAlink_c* player = daAlink_getAlinkActorClass();
+    daAlink_c* player = daNbomb_getOwner(this);
     if (player != NULL) {
         if (checkStateFlg0(FLG0_INSECT_BOMB)) {
             player->decrementInsectBombCnt();

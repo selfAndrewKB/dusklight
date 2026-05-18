@@ -28,7 +28,9 @@ Keep P2 basic input working while classifying and fixing the first item/action o
 - `alink.secondary` now includes copy-rod control/camera actor pointers and top-use state so future item fixes leave structured evidence behind even when the symptom and fix are already understood.
 - Bow/arrow showed the projectile version of the same owner problem. P2 could enter the bow proc, but global player status forced P1 first-person camera and `daArrow_c` used global P1 for held matrix, shot origin, HIO values, and hit sounds. The local arrow patch stores the spawning ALINK owner on the arrow actor, routes owner-specific arrow work through that owner, and skips setting global bow/sling camera status for secondary ALINK prototypes. User validation confirmed P2 no longer forces P1 first-person, arrows fire from each owning player, and sound follows the shot correctly.
 - Spinner is the ride-action version of the same owner problem. Its actor is kept in `mRideAcKeep`, and the first patch routes spinner lifecycle, draw visibility, movement constants, sounds, and raw local pad input through the ALINK slot whose ride keep owns the spinner actor. User validation confirmed this fixes P2's immediate Spinner despawn while P1 Spinner still works. The next Spinner issue was rail/slot detection: `Tag_Sppath` followed only global P1's position, so the rail patch makes the tag use the nearest registered ALINK that is currently riding Spinner. User validation confirmed P2 can now enter Spinner slots/rails.
-- Item-specific `alink.secondary` blocks are gated to actual item context. `copy_rod`, and any future `bow` or `arrow` block, should be absent during unrelated item tests; generic `equip_item`, `item_actor`, `ride_actor`, and `proc_name` remain always available for current ALINK state.
+- Bombs are the first counter-lifetime owner problem. P2 can place bombs, but each created bomb increments P2's `mActiveBombNum` and deletion decremented global P1, leaving P2's three-bomb limit stuck until respawn or area reload. The first bomb patch preserves the creating ALINK on normal, water, and bombling bombs so `daNbomb_c` deletion decrements the same slot that incremented the counter. User validation confirmed P2 can place more bombs after earlier bombs explode.
+- P2 cannot pick bombs back up yet. Treat that as part of the broader object interaction/carry lane unless the counter patch exposes a bomb-specific pickup owner bug.
+- Item-specific `alink.secondary` blocks are gated to actual item context. `copy_rod`, `bomb`, and any future `bow` or `arrow` block should be absent during unrelated item tests; generic `equip_item`, `item_actor`, `ride_actor`, and `proc_name` remain always available for current ALINK state.
 - The remaining failures are item/action ownership failures, not the original "can P2 receive input?" problem.
 
 ## Working Assumptions
@@ -82,6 +84,10 @@ Keep P2 basic input working while classifying and fixing the first item/action o
 - [x] Validate P2 Spinner no longer despawns immediately and still lets P1 use Spinner normally.
 - [x] Land first Spinner rail/slot tag patch.
 - [x] Validate P2 Spinner can enter rail/slot paths.
+- [x] Identify bomb counter ownership failure.
+- [x] Validate P2 bomb count resets after placed bombs explode.
+- [x] Add gated bomb count diagnostics to `alink.secondary`.
+- [ ] Classify P2 bomb pickup failure as bomb-specific or broader object interaction/carry ownership.
 
 ## Test Plan
 
@@ -105,6 +111,8 @@ Expected next big win:
 - Fishing rod has reached this win for visible hand attachment and owner-routed rod input/cast recovery, including simultaneous P1/P2 use.
 - Dominion Rod has reached this win for the first copy-rod actor ownership cluster.
 - Bow/arrow has reached this win for shot origin, held-arrow matrix, owner HIO values, and hit sounds.
+- Spinner has reached this win for item lifecycle, owner-local input/sound, and rail/slot detection.
+- Bombs have reached this win for active bomb count release after explosion.
 
 Failure conditions:
 
