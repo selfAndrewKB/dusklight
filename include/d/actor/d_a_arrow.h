@@ -62,6 +62,10 @@ public:
     // Co-op: preserve the ALINK slot that spawned this arrow after the item keep is cleared.
     void setOwner(fopAc_ac_c* i_actor) { field_0xa08.setData(i_actor); }
     fopAc_ac_c* getOwner() const { return field_0xa08.getActor(); }
+#if TARGET_PC
+    static void setPendingOwner(fopAc_ac_c* i_actor);
+    static void clearPendingOwner(fopAc_ac_c* i_actor);
+#endif
 
     BOOL checkWait() { return fopAcM_GetParam(this) == 0; }
 
@@ -77,6 +81,10 @@ public:
     void deleteArrow() { field_0x93f = 1; }
 
     static fopAc_ac_c* makeArrow(fopAc_ac_c* i_actor, u16 param_1) {
+#if TARGET_PC
+        // Co-op: fopAcM_fastCreate can run arrow create logic before this helper returns.
+        daArrow_c::setPendingOwner(i_actor);
+#endif
         fopAc_ac_c* arrow = (fopAc_ac_c*)fopAcM_fastCreate(fpcNm_ARROW_e,
                                                            param_1 << 8,
                                                            &i_actor->current.pos,
@@ -86,6 +94,9 @@ public:
                                                            -1,
                                                            NULL,
                                                            NULL);
+#if TARGET_PC
+        daArrow_c::clearPendingOwner(i_actor);
+#endif
         if (arrow != NULL) {
             static_cast<daArrow_c*>(arrow)->setOwner(i_actor);
         }
@@ -93,6 +104,10 @@ public:
     }
 
     static fopAc_ac_c* makeSlingStone(fopAc_ac_c* i_actor, cXyz* i_pos) {
+#if TARGET_PC
+        // Co-op: sling stones shoot during create, so owner lookup must work inside fastCreate.
+        daArrow_c::setPendingOwner(i_actor);
+#endif
         fopAc_ac_c* stone = (fopAc_ac_c*)fopAcM_fastCreate(fpcNm_ARROW_e,
                                                            0x401,
                                                            i_pos,
@@ -102,6 +117,9 @@ public:
                                                            -1,
                                                            NULL,
                                                            NULL);
+#if TARGET_PC
+        daArrow_c::clearPendingOwner(i_actor);
+#endif
         if (stone != NULL) {
             static_cast<daArrow_c*>(stone)->setOwner(i_actor);
         }

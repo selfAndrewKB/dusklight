@@ -18,6 +18,9 @@ The goal is not to replace every global player lookup. The goal is to identify c
 - Arrow/bow confirms the projectile variant of the same pattern. The arrow starts in the owning ALINK's `mItemAcKeep`, then must preserve that owner after the keep is cleared for the shot; otherwise flight origin, held-arrow matrix, owner HIO values, and hit sounds all fall back to P1.
 - Spinner is the first ride-action version of the same problem. The actor lives in `mRideAcKeep`, so lifecycle, draw, movement constants, sounds, and local pad input should ask the ALINK whose ride keep owns the spinner actor. During `PROC_SPINNER_READY`, `mRideAcKeep` is already set before `mRideStatus` becomes `RIDETYPE_SPINNER`, so ownership resolution must not depend only on `checkSpinnerRideOwn()`.
 - Bombs proved the counter-lifetime variant. Normal/water bombs increment `mActiveBombNum` on the ALINK that creates them, and bomblings increment `field_0x2fcf`, but `daNbomb_c` deletion originally decremented global P1. Player-made bombs need to preserve their creating ALINK until deletion so the same slot's active-bomb count is released.
+- Slingshot adds a create-time owner hazard to the arrow/bow pattern. Sling stones call their launch setup during `fopAcM_fastCreate()`, before the post-create `setOwner()` call can run, so owner lookup needs a temporary pending owner for the create path.
+- Iron Boots expose shared equipment model-data visibility. Their equip path hides/show feet and leg `J3DShape`s directly, which affects every ALINK using the shared model data until model visibility is split per player.
+- Iron Boots also exposed audio-owner leakage. `Z2LinkSoundStarter::startSound()` is called by an owning Link sound starter, but heavy-boot footstep conversion used global `Z2GetLink()` state.
 
 ## Audit Table
 
@@ -26,9 +29,11 @@ The goal is not to replace every global player lookup. The goal is to identify c
 | Boomerang | `src/d/actor/d_a_boomerang.cpp` | 1 fallback after fix | `mThrowBoomerangAcKeep` | Fixed locally; P2 return/rethrow validated, P1 still works |
 | Fishing rod/hook | `src/d/actor/d_a_mg_rod.cpp` | 93 | `mItemAcKeep` via `checkFishingRodGrab(actor)` | Fixed first owner clusters; hand attachment, cast recovery, and simultaneous P1/P2 rod use validated |
 | Arrow/bow | `src/d/actor/d_a_arrow.cpp` | 1 fallback after fix | `mItemAcKeep` plus preserved spawned-arrow owner | Fixed locally; P2 no longer forces P1 first-person, arrows fire from each owner, sound validated |
+| Slingshot | `src/d/actor/d_a_alink_bow.inc`, `src/d/actor/d_a_arrow.cpp` | shares bow/arrow path | pending create owner plus preserved spawned sling-stone owner | Fixed locally; P2 slingshot visibility, direction, and camera behavior validated |
 | Dominion Rod | `src/d/actor/d_a_crod.cpp` | 2 fallback sites after fix | `mItemAcKeep` / `mCopyRodAcKeep` | Fixed first owner cluster; P2 throw/return validated |
 | Bombs | `src/d/actor/d_a_nbomb.cpp` | 15 fallback sites after first patch | preserved creating ALINK owner for player-made bomb counter decrement | Fixed first counter-lifetime cluster; P2 bomb limit resets after explosion, P2 pickup remains separate object-interaction work |
 | Spinner | `src/d/actor/d_a_spinner.cpp`, `src/d/actor/d_a_tag_sppath.cpp` | 1 fallback after first patch | `mRideAcKeep` via ride actor identity; spinner rail tags use active rider position | Fixed locally; P2 spawn/despawn and rail/slot entry validated |
+| Iron Boots | `src/d/actor/d_a_alink_hvyboots.inc`, `src/Z2AudioLib/Z2LinkMgr.cpp` | ALINK-local code plus global audio state | equipment state on ALINK; feet/leg shape visibility is shared; sound starter has owning `Z2CreatureLink` | Fixed locally; cross-player leg visibility and heavy boot sounds validated |
 
 ## Procedure
 

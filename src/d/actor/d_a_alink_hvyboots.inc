@@ -24,6 +24,17 @@ void daAlink_c::multVecMagneBootInvMtx(cXyz* o_dst) {
     }
 }
 
+static bool daAlink_shouldApplySharedBootsShapeVisibility(daAlink_c* i_player) {
+#if TARGET_PC
+    // Co-op: these J3DShape show/hide calls mutate shared ALINK model data, so either player
+    // can hide the other's feet before equipment model data is split per player.
+    (void)i_player;
+    return false;
+#else
+    return true;
+#endif
+}
+
 bool daAlink_c::commonMagneLineCheck(cXyz* i_start, cXyz* i_end) {
     mMagneLineChk.Set(i_start, i_end, this);
 
@@ -44,7 +55,7 @@ int daAlink_c::setHeavyBoots(int param_0) {
         offNoResetFlg0(FLG0_EQUIP_HVY_BOOTS);
         mZ2Link.setLinkBootsType(0);
 
-        if (field_0x06e0 != NULL) {
+        if (daAlink_shouldApplySharedBootsShapeVisibility(this) && field_0x06e0 != NULL) {
             field_0x06e0->show();
 
             if (checkZoraWearMaskDraw()) {
@@ -75,7 +86,7 @@ int daAlink_c::setHeavyBoots(int param_0) {
         onNoResetFlg0(FLG0_EQUIP_HVY_BOOTS);
         mZ2Link.setLinkBootsType(1);
 
-        if (field_0x06e0 != NULL) {
+        if (daAlink_shouldApplySharedBootsShapeVisibility(this) && field_0x06e0 != NULL) {
             field_0x06e0->hide();
 
             if (field_0x06e4 != NULL) {

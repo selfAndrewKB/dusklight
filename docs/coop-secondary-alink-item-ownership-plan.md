@@ -30,6 +30,8 @@ Keep P2 basic input working while classifying and fixing the first item/action o
 - Spinner is the ride-action version of the same owner problem. Its actor is kept in `mRideAcKeep`, and the first patch routes spinner lifecycle, draw visibility, movement constants, sounds, and raw local pad input through the ALINK slot whose ride keep owns the spinner actor. User validation confirmed this fixes P2's immediate Spinner despawn while P1 Spinner still works. The next Spinner issue was rail/slot detection: `Tag_Sppath` followed only global P1's position, so the rail patch makes the tag use the nearest registered ALINK that is currently riding Spinner. User validation confirmed P2 can now enter Spinner slots/rails.
 - Bombs are the first counter-lifetime owner problem. P2 can place bombs, but each created bomb increments P2's `mActiveBombNum` and deletion decremented global P1, leaving P2's three-bomb limit stuck until respawn or area reload. The first bomb patch preserves the creating ALINK on normal, water, and bombling bombs so `daNbomb_c` deletion decrements the same slot that incremented the counter. User validation confirmed P2 can place more bombs after earlier bombs explode.
 - P2 cannot pick bombs back up yet. Treat that as part of the broader object interaction/carry lane unless the counter patch exposes a bomb-specific pickup owner bug.
+- Slingshot showed a create-time owner variant of the bow fix. P2 sling stones were visible only when P1 also had slingshot equipped. Letting secondary slingshot set the legacy global slingshot status was rejected because it reintroduced P1 first-person/facing leakage. The current containment keeps secondary bow/sling status suppressed and gives `daArrow_c` a pending owner during `fopAcM_fastCreate()` so sling-stone launch math can resolve P2 before `makeSlingStone()` returns. User validation confirmed P2 slingshot visibility, direction, and camera behavior are fixed.
+- Iron Boots showed an equipment-model visibility variant. Equipping P2 boots hid P1's feet, then skipping only secondary shape changes let P1 boots hide P2's regular legs. The current containment skips the shared feet/leg `J3DShape::show()/hide()` calls for all PC ALINKs until per-player equipment model data exists. The follow-up audio patch routes heavy-boot footstep selection through the owning `Z2CreatureLink` instead of global `Z2GetLink()`. User validation confirmed cross-player leg visibility and P1/P2 heavy boot sounds are fixed.
 - Item-specific `alink.secondary` blocks are gated to actual item context. `copy_rod`, `bomb`, and any future `bow` or `arrow` block should be absent during unrelated item tests; generic `equip_item`, `item_actor`, `ride_actor`, and `proc_name` remain always available for current ALINK state.
 - The remaining failures are item/action ownership failures, not the original "can P2 receive input?" problem.
 
@@ -88,6 +90,9 @@ Keep P2 basic input working while classifying and fixing the first item/action o
 - [x] Validate P2 bomb count resets after placed bombs explode.
 - [x] Add gated bomb count diagnostics to `alink.secondary`.
 - [ ] Classify P2 bomb pickup failure as bomb-specific or broader object interaction/carry ownership.
+- [x] Validate P2 slingshot stones remain visible and use P2 facing when P1 does not have slingshot equipped.
+- [x] Validate P1/P2 Iron Boots no longer hide the other player's regular legs.
+- [x] Validate P1/P2 Iron Boots both emit heavy boot footstep sounds.
 
 ## Test Plan
 

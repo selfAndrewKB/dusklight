@@ -533,6 +533,12 @@ bool Z2LinkSoundStarter::startSound(JAISoundID soundID, JAISoundHandle* handle,
                                     f32 dolby, u32 moveSteps) {
     bool bVar2 = false;
     bool bVar3 = false;
+#if TARGET_PC
+    // Co-op: boot footstep selection is actor-local; Z2GetLink() may point at another ALINK.
+    Z2CreatureLink* link = static_cast<Z2CreatureLink*>(this);
+#else
+    Z2CreatureLink* link = Z2GetLink();
+#endif
 
     if (Z2GetLink()->isInWater() && Z2GetStatusMgr()->getCameraInWaterDepthRatio() > 0.0f) {
         switch (soundID) {
@@ -582,9 +588,9 @@ bool Z2LinkSoundStarter::startSound(JAISoundID soundID, JAISoundHandle* handle,
         // fallthrough
     case Z2SE_GORON_FOOTNOTE:
     case Z2SE_FN_GOB_JUMP:
-        if (Z2GetLink()->mLinkBootsType == 1) {
+        if (link->mLinkBootsType == 1) {
             soundID = Z2SE_FN_WALK_HEAVY;
-            if (Z2GetLink()->mMagnetized) {
+            if (link->mMagnetized) {
                 mapinfo = 127;
             }
         }
@@ -593,9 +599,9 @@ bool Z2LinkSoundStarter::startSound(JAISoundID soundID, JAISoundHandle* handle,
     case Z2SE_FN_JUMP_DUMMY:
         bVar2 = true;
         bVar3 = true;
-        if (Z2GetLink()->mLinkBootsType == 1) {
+        if (link->mLinkBootsType == 1) {
             soundID = Z2SE_FN_JUMP_HEAVY;
-            if (Z2GetLink()->mMagnetized) {
+            if (link->mMagnetized) {
                 mapinfo = 127;
             }
         }

@@ -22,6 +22,20 @@
 #include "dusk/coop/player_slots.h"
 #endif
 
+#if TARGET_PC
+static fopAc_ac_c* s_pendingArrowOwner;
+
+void daArrow_c::setPendingOwner(fopAc_ac_c* i_actor) {
+    s_pendingArrowOwner = i_actor;
+}
+
+void daArrow_c::clearPendingOwner(fopAc_ac_c* i_actor) {
+    if (s_pendingArrowOwner == i_actor) {
+        s_pendingArrowOwner = NULL;
+    }
+}
+#endif
+
 // Co-op: arrows are owned by the ALINK slot that created or still keeps them, not always global P1.
 static daAlink_c* daArrow_getOwner(daArrow_c* i_arrow) {
     fopAc_ac_c* owner = i_arrow->getOwner();
@@ -30,6 +44,10 @@ static daAlink_c* daArrow_getOwner(daArrow_c* i_arrow) {
     }
 
 #if TARGET_PC
+    if (s_pendingArrowOwner != NULL && fopAcM_GetName(s_pendingArrowOwner) == fpcNm_ALINK_e) {
+        return static_cast<daAlink_c*>(s_pendingArrowOwner);
+    }
+
     for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
         fopAc_ac_c* actor = dusk::coop::getPlayer(static_cast<dusk::coop::PlayerSlot>(i));
         daAlink_c* player = static_cast<daAlink_c*>(actor);
