@@ -14,6 +14,8 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
 - For secondary ALINK shield/attention bugs, do not treat clean P2 input as proof that state is decoupled. Current evidence points at shared attention/player-status state, so capture status facts before adding behavior fixes.
 - `checkAttentionLock()` is the first confirmed singleton hazard: P2 stopped mirroring P1's shield/target pose once secondary ALINK ignored the shared `dAttention_c::Lockon()` result. Future fixes should turn that into per-player attention semantics, not remove global attention from P1 camera/HUD/story uses.
 - Diagnostics must keep `latest.json` rich and `events.jsonl` semantic. Continuous values may appear in latest snapshots or emitted payload context, but they should not drive JSONL events unless the profile is explicitly testing frame-level churn.
+- Runtime co-op identity should come from the player-slot registry (`getSlotForActor`, `isPlayerInSlot`, `isAdditionalPlayer`). ALINK negative actor arguments are only spawn-time bootstraps before extra-slot registration exists.
+- Additional player spawning should go through slot-based `dusk::coop::spawnPlayer(...)`; ImGui and hotkeys are debug callers, not the lifecycle owner.
 
 ## Repository Map
 

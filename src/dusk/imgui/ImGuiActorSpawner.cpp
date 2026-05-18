@@ -36,32 +36,6 @@ struct ActorSpawnerState {
 
 ActorSpawnerState s_state;
 
-unsigned int spawnSecondaryLinkPrototype(daAlink_c* player) {
-    cXyz pos = player->current.pos;
-    pos.x += 120.0f;
-    csXyz angle = player->shape_angle;
-
-    layer_class* savedLayer = fpcLy_CurrentLayer();
-    base_process_class* playScene = fpcM_SearchByName(fpcNm_PLAY_SCENE_e);
-    if (playScene != nullptr) {
-        fpcLy_SetCurrentLayer(&((process_node_class*)playScene)->layer);
-    }
-
-    // Co-op: debug-only spawn path exercises secondary ALINK without overwriting player 0.
-    unsigned int result = fopAcM_create(
-        fpcNm_ALINK_e,
-        fopAcM_GetParam(player),
-        &pos,
-        player->current.roomNo,
-        &angle,
-        nullptr,
-        (s8)dusk::coop::kSecondaryPlayerPrototypeArgument
-    );
-
-    fpcLy_SetCurrentLayer(savedLayer);
-    return result;
-}
-
 void tryCoopHotkeySpawnSecondary() {
     if (!ImGui::GetIO().KeyCtrl || !ImGui::IsKeyPressed(ImGuiKey_F12)) {
         return;
@@ -77,13 +51,13 @@ void tryCoopHotkeySpawnSecondary() {
         return;
     }
 
-    if (dusk::coop::getPlayer(dusk::coop::PlayerSlot::Secondary) != nullptr) {
+    if (dusk::coop::getPlayer(dusk::coop::PlayerSlot::Slot1) != nullptr) {
         dusk::coop::camera::ensureSecondaryCamera();
         DuskToast("Co-op diagnostics and split screen enabled; secondary Link already exists");
         return;
     }
 
-    s_state.lastResult = spawnSecondaryLinkPrototype(player);
+    s_state.lastResult = dusk::coop::spawnPlayer(dusk::coop::PlayerSlot::Slot1, player);
     s_state.lastAttempted = 1;
     s_state.hasResult = true;
 
@@ -133,14 +107,14 @@ void ImGuiMenuTools::ShowActorSpawner() {
     daAlink_c* player = (daAlink_c*)dComIfGp_getPlayer(0);
 
     ImGui::SeparatorText("Co-op");
-    bool secondarySlotAvailable = dusk::coop::getPlayer(dusk::coop::PlayerSlot::Secondary) == nullptr;
+    bool secondarySlotAvailable = dusk::coop::getPlayer(dusk::coop::PlayerSlot::Slot1) == nullptr;
     bool canSpawnSecondary = player != nullptr && secondarySlotAvailable;
     if (!canSpawnSecondary) {
         ImGui::BeginDisabled();
     }
 
-    if (ImGui::Button("Spawn Secondary Link Prototype", ImVec2(-1, 0))) {
-        s_state.lastResult = spawnSecondaryLinkPrototype(player);
+    if (ImGui::Button("Spawn Secondary Link", ImVec2(-1, 0))) {
+        s_state.lastResult = dusk::coop::spawnPlayer(dusk::coop::PlayerSlot::Slot1, player);
         s_state.lastAttempted = 1;
         s_state.hasResult = true;
     }

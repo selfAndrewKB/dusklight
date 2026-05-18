@@ -63,6 +63,10 @@ The first item/action ownership pass is documented in `docs/coop-secondary-alink
 
 The current active plan is `docs/coop-native-split-screen-camera-plan.md`. Shared camera is now the testing bottleneck: P2 can do enough that keeping both players inside P1's view makes further camera, object interaction, AI, and world-acknowledgement work slower than necessary. The next milestone should use native `dCamera_c` and render-window concepts, with a Dusk-owned extension layer for slot 1 rather than a hand-written camera imitation.
 
+The secondary Link experiment has graduated into the supported local additional-player path for current co-op testing. Runtime systems should identify player actors through the slot registry, not by inspecting ALINK's spawn argument. Spawn arguments now encode requested extra slots (`-2` for slot 1, `-3` for slot 2, `-4` for slot 3) only as a create-time bootstrap so `daAlink_c::create()` can avoid claiming vanilla player 0 before it has registered in the sidecar.
+
+Additional player spawning should not be owned by the ImGui Actor Spawner. The current debug button and `Ctrl+F12` hotkey are callers of the Dusk co-op lifecycle API. Future player-count settings, controller-port "press Start to join", and online host/client join handling should reuse the same slot-based `spawnPlayer(...)` path so local and networked co-op do not diverge. The registry, spawn request decoding, and controller-port mapping are shaped for four slots now; camera/render sidecars and diagnostics remain proven only for slot 1 until later plans extend them.
+
 ## Design Principles
 
 Single-player remains the compatibility baseline. Slot 0 is the primary player and must behave exactly like the current game until a co-op option is enabled. Existing call sites such as `dComIfGp_getPlayer(0)` should continue to mean the primary player.

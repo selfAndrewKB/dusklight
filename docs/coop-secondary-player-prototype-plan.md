@@ -11,7 +11,7 @@ This is not a camera rewrite, a networking layer, a second save slot, or a full 
 ## Assumptions
 
 - Primary Link remains the only actor allowed to call `dComIfGp_setPlayer(0, this)` and `dComIfGp_setLinkPlayer(this)`.
-- A secondary ALINK prototype is marked by actor `argument == -2`.
+- Additional Link spawn requests are marked by actor arguments only during ALINK creation: `-2` requests slot 1, `-3` requests slot 2, and `-4` requests slot 3.
 - The secondary prototype registers in Dusk's sidecar slot 1 and reads the slot 1 input snapshot, which maps to `PAD_2`.
 - The prototype is expected to expose additional singleton issues. Any crash or bad global side effect is useful evidence for deciding between full ALINK duplication and a proxy actor.
 - A proxy/replica actor is a fallback or temporary visual/debug tool, not the preferred architecture unless the ALINK duplication audit proves ALINK reuse is untenable.
@@ -25,7 +25,7 @@ This is not a camera rewrite, a networking layer, a second save slot, or a full 
 - `include/f_op/f_op_actor.h` stores the actor `argument` at `fopAc_ac_c::argument`.
 - `src/d/actor/d_a_alink.cpp` primary creation normally calls `dComIfGp_setPlayer(0, this)`, `dComIfGp_setLinkPlayer(this)`, and creates primary-only companions/start side effects.
 - `src/d/actor/d_a_alink.cpp` primary deletion normally clears player 0 globals.
-- `include/dusk/coop/player_slots.h` now defines `kSecondaryPlayerPrototypeArgument = -2` and `isSecondaryPlayerPrototype(...)`.
+- `include/dusk/coop/player_slots.h` now defines `kFirstAdditionalPlayerSpawnArgument = -2`, `getAdditionalPlayerSpawnRequestSlot(...)`, slot-first runtime helpers such as `isAdditionalPlayer(...)`, and the thin slot-based `spawnPlayer(...)` API.
 
 ## Files
 
@@ -42,7 +42,7 @@ Do not resize `dComIfG_play_c` or mass-replace player singleton helpers in this 
 
 ## Implementation
 
-1. Add a Dusk-owned marker for secondary ALINK prototypes: actor `argument == -2`.
+1. Add Dusk-owned markers for additional ALINK creation: actor `argument == -2` requests slot 1, `-3` requests slot 2, and `-4` requests slot 3.
 2. In ALINK create, register marked actors as sidecar slot 1 instead of overwriting player 0 globals.
 3. Keep primary ALINK behavior unchanged for unmarked actors.
 4. Skip primary-only startup side effects for marked secondary actors where they are clearly global:
@@ -51,7 +51,7 @@ Do not resize `dComIfG_play_c` or mass-replace player singleton helpers in this 
    - duplicate debug HIO entry,
    - Midna/TKS/start portal/start switch setup.
 5. In ALINK delete, unregister marked actors from sidecar slot 1 and do not clear player 0 globals.
-6. Add a debug Actor Spawner button that creates ALINK near player 1 with argument `-2`, current player parameters, current room, and current facing.
+6. Add a debug Actor Spawner button that creates an additional ALINK near player 1 through the slot-based spawn API, using current player parameters, current room, and current facing.
 7. Keep marked secondary ALINK actors out of vanilla attention lists.
 8. Do not tick marked secondary ALINK actors through `execute()` after creation. Runtime testing showed full secondary ALINK ticking corrupts primary player animation/state.
 9. Log primary ALINK action/animation checkpoints during secondary creation only. This keeps tracing focused on creation-time singleton damage instead of adding broad per-frame noise.
@@ -66,9 +66,9 @@ Do not resize `dComIfG_play_c` or mass-replace player singleton helpers in this 
 ## Progress
 
 - [x] Confirmed ALINK actor ID and actor creation path.
-- [x] Added the secondary ALINK prototype marker helper.
+- [x] Added the secondary ALINK spawn marker helper.
 - [x] Gated primary singleton ownership in ALINK create/delete.
-- [x] Added a debug Actor Spawner button for the secondary prototype.
+- [x] Added a debug Actor Spawner button for secondary Link.
 - [x] Moved the button to the top `Co-op` section so it is not hidden below the generic spawn controls.
 - [x] Manually attempted a secondary spawn from the Actor Spawner.
 - [x] Recorded whether full ALINK duplication looks viable or whether a proxy actor is safer.
@@ -89,13 +89,16 @@ Do not resize `dComIfG_play_c` or mass-replace player singleton helpers in this 
 - [x] Build and manually attempt the create-time `mpLinkModel->calc()`-skipped secondary ALINK diagnostic.
 - [ ] Build and manually attempt the runtime-toggle secondary ALINK diagnostics.
 - [x] Build and manually attempt the scoped secondary execute diagnostic.
+- [x] Graduated runtime identity away from spawn arguments: negative ALINK arguments now mean only "additional ALINK spawn request", while registered slot state is the runtime source of truth.
 
 ## Decisions
 
-- Use actor `argument == -2` instead of stealing bits from ALINK parameters. ALINK parameters already encode start room, start mode, and start event.
+- Use negative actor arguments instead of stealing bits from ALINK parameters. ALINK parameters already encode start room, start mode, and start event.
 - Use the existing Actor Spawner instead of adding a new co-op UI panel.
 - Spawn beside player 1 with a simple local X offset. This is crude but keeps the first test focused on lifecycle, singleton ownership, and input routing.
-- Keep this path visibly labeled as a prototype. It is not a promise that full ALINK duplication is the final design.
+- This path is no longer labeled as a runtime prototype. The plan remains the historical record for the ALINK duplication experiment, but current code treats the path as the supported local secondary Link spawn for co-op testing.
+- Spawn arguments are not runtime identity. They are create-time bootstraps so `daAlink_c::create()` can avoid claiming vanilla player 0 before extra-slot registration exists. After registration, runtime code should use `getSlotForActor`, `isPlayerInSlot`, or `isAdditionalPlayer`.
+- The spawn operation lives in `dusk::coop::spawnPlayer(...)`, not the ImGui panel. The Actor Spawner and `Ctrl+F12` are debug callers; future menu player-count settings, controller "press Start to join", and online host join flows should call the same co-op lifecycle API. The registry and request encoding are four-slot-shaped now, while camera/render support remains validated only for slot 1.
 - First runtime evidence argues against full ALINK duplication as the next path. A full secondary ALINK appeared and idled, but it became targetable, made player 1's animation stick in idle while movement/attacks still applied, mirrored shield/block animation, and spun while targeted. This points at attention, animation, and singleton state coupling beyond the create/delete globals.
 - After that evidence, the prototype is reduced to a render/lifecycle probe: secondary ALINK registers/draws but does not enter the full `execute()` loop.
 - Clearing secondary attention flags fixed the yellow reticule, but skipping secondary `execute()` did not fix player 1's standing-animation lock. That means the next evidence should come from ALINK creation checkpoints, not per-frame secondary logic.
@@ -117,7 +120,7 @@ Expected manual path after a successful build:
 
 1. Boot a normal save and confirm player 1 still controls normally.
 2. Open Dusk's Tools menu and the Actor Spawner.
-3. Click `Spawn Secondary Link Prototype`.
+3. Click `Spawn Secondary Link`.
 4. Watch the log for `dusk::coop` messages.
 
 Expected log signal:
@@ -187,6 +190,6 @@ If the prototype breaks startup or primary play, remove only these changes:
 - `docs/coop-secondary-player-prototype-plan.md`
 - the secondary prototype marker in `include/dusk/coop/player_slots.h` and `src/dusk/coop/player_slots.cpp`
 - the `coop_secondary` guarded blocks in `src/d/actor/d_a_alink.cpp`
-- the `Spawn Secondary Link Prototype` block in `src/dusk/imgui/ImGuiActorSpawner.cpp`
+- the `Spawn Secondary Link` block in `src/dusk/imgui/ImGuiActorSpawner.cpp`
 
 Keep the committed player-slot registry and input snapshot milestones unless the failure directly involves them.

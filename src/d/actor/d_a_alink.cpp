@@ -81,8 +81,9 @@ void coopLogPrimaryRuntimeState(daAlink_c* player) {
     static uintptr_t s_prev_anm = 0;
     static int s_sample = 0;
 
+    // Co-op: P1 runtime sampling is only useful while the currently supported extra slot exists.
     if (!dusk::coop::isPrimaryPlayer(player) ||
-        dusk::coop::getPlayer(dusk::coop::PlayerSlot::Secondary) == nullptr)
+        dusk::coop::getPlayer(dusk::coop::PlayerSlot::Slot1) == nullptr)
     {
         s_prev_proc = daAlink_c::PROC_MAX;
         s_prev_anm = 0;
@@ -100,7 +101,7 @@ void coopLogPrimaryRuntimeState(daAlink_c* player) {
     s_prev_proc = player->mProcID;
     s_prev_anm = anm;
 
-    // Co-op: sample P1 only while the secondary prototype exists, to catch post-spawn animation lockups.
+    // Co-op: sample P1 only while secondary Link exists, to catch post-spawn animation lockups.
     CoopAlinkLog.debug(
         "primary runtime p1 0x{:x} proc {} speed {:.3f}/{:.3f} stick {:.3f} "
         "under frame {:.3f} rate {:.3f} anm 0x{:x} flags 0x{:x}",
@@ -198,7 +199,7 @@ void coopLogSecondaryExecuteState(const char* phase, daAlink_c* player) {
     static uintptr_t s_prev_anm = 0;
     static int s_sample = 0;
 
-    if (!dusk::coop::isSecondaryPlayerPrototype(player)) {
+    if (!dusk::coop::isSecondaryPlayer(player)) {
         s_prev_proc = daAlink_c::PROC_MAX;
         s_prev_anm = 0;
         s_sample = 0;
@@ -234,7 +235,7 @@ void coopLogSecondaryActionMirrorState(const char* phase, daAlink_c* player) {
     static uintptr_t s_prev_target = UINTPTR_MAX;
     static u8 s_prev_r_status = 0xff;
 
-    if (!dusk::coop::isSecondaryPlayerPrototype(player)) {
+    if (!dusk::coop::isSecondaryPlayer(player)) {
         s_prev_mask = 0xffffffff;
         s_prev_target = UINTPTR_MAX;
         s_prev_r_status = 0xff;
@@ -299,7 +300,8 @@ void coopLogSecondaryActionMirrorState(const char* phase, daAlink_c* player) {
 }
 
 BOOL checkCoopAttentionLock(daAlink_c* player) {
-    if (dusk::coop::isSecondaryPlayerPrototype(player) &&
+    // Co-op: extra player Links must not mirror P1's shared attention lock.
+    if (dusk::coop::isAdditionalPlayer(player) &&
         dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_IgnoreSharedAttentionLock))
     {
         return FALSE;
@@ -2611,7 +2613,7 @@ int daAlink_c::jointControll(int i_jointNo) {
         }
 
 #if TARGET_PC
-        if (dusk::coop::isSecondaryPlayerPrototype(this) &&
+        if (dusk::coop::isSecondaryPlayer(this) &&
             spC->x == 0.0f && spC->y == 0.0f && spC->z == 0.0f && spC->w == 0.0f)
         {
             // Co-op: distinguish secondary ALINK joint-callback zero quats from matrix-calculator failures.
@@ -5208,8 +5210,9 @@ int daAlink_c::create() {
     s16 startPoint = dComIfGp_getStartStagePoint();
     BOOL isHorseStart = checkHorseStart(sceneMode, startMode);
 #if TARGET_PC
-    // Co-op: actor argument -2 marks an intentionally spawned secondary ALINK prototype.
-    const bool coop_secondary = dusk::coop::isSecondaryPlayerPrototype(this);
+    // Co-op: the spawn argument only selects an extra slot until sidecar registration exists.
+    const dusk::coop::PlayerSlot coop_slot = dusk::coop::getAdditionalPlayerSpawnRequestSlot(this);
+    const bool coop_secondary = coop_slot != dusk::coop::PlayerSlot::Invalid;
     auto coop_log_primary_state = [&](const char* phase) {
         if (!coop_secondary) {
             return;
@@ -5243,7 +5246,7 @@ int daAlink_c::create() {
 
     if (!bgWaitFlg) {
 #if TARGET_PC
-        // Co-op: secondary prototypes should not rewrite global clothing startup state.
+        // Co-op: secondary Link should not rewrite global clothing startup state.
         if (!coop_secondary) {
 #endif
         #if DEBUG
@@ -5271,8 +5274,8 @@ int daAlink_c::create() {
 
 #if TARGET_PC
         if (coop_secondary) {
-            // Co-op: secondary ALINK prototypes must not replace vanilla player 0 globals.
-            dusk::coop::registerPlayer(dusk::coop::PlayerSlot::Secondary, this);
+            // Co-op: additional Links must not replace vanilla player 0 globals.
+            dusk::coop::registerPlayer(coop_slot, this);
         } else {
 #endif
         dComIfGp_setPlayer(0, this);
@@ -5322,7 +5325,7 @@ int daAlink_c::create() {
         }
 #if TARGET_PC
         if (coop_secondary) {
-            // Co-op: keep secondary ALINK prototypes out of vanilla lock-on/action attention lists.
+            // Co-op: keep secondary Link out of vanilla lock-on/action attention lists.
             attention_info.flags = 0;
         } else {
 #endif
@@ -5366,9 +5369,9 @@ int daAlink_c::create() {
 
         mAttention = dComIfGp_getAttention();
 #if TARGET_PC
-        // Co-op: secondary ALINK uses camera 1 only after the native split-screen camera exists.
+        // Co-op: only slot 1 has a native sidecar camera until more viewports are implemented.
         const bool use_secondary_camera =
-            coop_secondary && dusk::coop::camera::isSplitScreenEnabled() &&
+            coop_slot == dusk::coop::PlayerSlot::Slot1 && dusk::coop::camera::isSplitScreenEnabled() &&
             dusk::coop::camera::isSecondaryCameraReady();
         field_0x317c = use_secondary_camera ? dComIfGp_getPlayerCameraID(1) :
                                               dComIfGp_getPlayerCameraID(0);
@@ -5434,7 +5437,7 @@ int daAlink_c::create() {
 #endif
 
 #if TARGET_PC
-    // Co-op: secondary prototypes should not move the single-player restart point.
+    // Co-op: secondary Link should not move the single-player restart point.
     if (!coop_secondary) {
 #endif
     dComIfGs_setRestartRoom(current.pos, shape_angle.y, getStartRoomNo());
@@ -5620,7 +5623,7 @@ int daAlink_c::create() {
 
     #if DEBUG
 #if TARGET_PC
-    // Co-op: avoid registering duplicate Link HIO entries for secondary prototypes.
+    // Co-op: avoid registering duplicate Link HIO entries for secondary Link.
     if (!coop_secondary) {
 #endif
     // "Link"
@@ -10270,7 +10273,7 @@ void daAlink_c::setAtnList() {
 
 BOOL daAlink_c::checkAttentionLock() {
 #if TARGET_PC
-    // Co-op: secondary ALINK prototypes should not mirror P1's shared dAttention_c lock state.
+    // Co-op: secondary Link should not mirror P1's shared dAttention_c lock state.
     return checkCoopAttentionLock(this);
 #else
     return mAttention->Lockon();
@@ -18448,9 +18451,9 @@ int daAlink_c::execute() {
     }
 
 #if TARGET_PC
-    // Co-op: keep secondary movement/aiming on camera 1 once it exists, with a safe camera 0 fallback.
+    // Co-op: keep slot 1 movement/aiming on camera 1 once it exists, with a safe camera 0 fallback.
     const bool use_secondary_camera =
-        dusk::coop::isSecondaryPlayerPrototype(this) &&
+        dusk::coop::isPlayerInSlot(this, dusk::coop::PlayerSlot::Slot1) &&
         dusk::coop::camera::isSplitScreenEnabled() &&
         dusk::coop::camera::isSecondaryCameraReady();
     const int camera_id = use_secondary_camera ? dComIfGp_getPlayerCameraID(1) :
@@ -19524,14 +19527,14 @@ int daAlink_c::execute() {
 
 static int daAlink_Execute(daAlink_c* i_this) {
 #if TARGET_PC
-    if (dusk::coop::isSecondaryPlayerPrototype(i_this) &&
+    if (dusk::coop::isAdditionalPlayer(i_this) &&
         dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_SkipExecute))
     {
-        // Co-op: full secondary ALINK ticking corrupts primary animation/state; keep this as a render/lifecycle probe.
+        // Co-op: full extra ALINK ticking uses the same containment probes until each slot is audited.
         return 1;
     }
 
-    if (dusk::coop::isSecondaryPlayerPrototype(i_this) &&
+    if (dusk::coop::isAdditionalPlayer(i_this) &&
         dusk::coop::hasSecondaryAlinkProbeFlag(
             dusk::coop::SecondaryAlinkProbe_ScopedExecuteModelDataOwner))
     {
@@ -19543,7 +19546,7 @@ static int daAlink_Execute(daAlink_c* i_this) {
         coopLogSecondaryExecuteState("after", i_this);
         coopLogSecondaryActionMirrorState("after", i_this);
         if (primary != nullptr) {
-            // Co-op: secondary execute touches shared Link model data, so return ownership to P1 immediately.
+            // Co-op: extra Link execute touches shared Link model data, so return ownership to P1 immediately.
             coopInstallModelDataOwner(primary);
         }
         return result;
@@ -20478,13 +20481,13 @@ int daAlink_c::draw() {
 
 static int daAlink_Draw(daAlink_c* i_this) {
 #if TARGET_PC
-    if (dusk::coop::isSecondaryPlayerPrototype(i_this) &&
+    if (dusk::coop::isAdditionalPlayer(i_this) &&
         dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_SkipDraw))
     {
-        // Co-op: skip secondary ALINK drawing to test whether draw/model-calc state pins P1's visible animation.
+        // Co-op: skip extra ALINK drawing to test whether draw/model-calc state pins P1's visible animation.
         return 1;
     }
-    if (dusk::coop::isSecondaryPlayerPrototype(i_this) &&
+    if (dusk::coop::isAdditionalPlayer(i_this) &&
         dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_ScopedDrawModelDataOwner))
     {
         static daAlink_c* s_loggedSecondary = nullptr;
@@ -20529,8 +20532,14 @@ static int daAlink_Draw(daAlink_c* i_this) {
 
 daAlink_c::~daAlink_c() {
 #if TARGET_PC
-    const bool coop_secondary = dusk::coop::isSecondaryPlayerPrototype(this);
-    // Co-op: secondary prototypes should not clear primary player's global status flags.
+    // Co-op: extra player ALINKs never own player 0 globals, even if destruction happens before registration.
+    dusk::coop::PlayerSlot coop_slot = dusk::coop::getSlotForActor(this);
+    if (coop_slot == dusk::coop::PlayerSlot::Invalid) {
+        coop_slot = dusk::coop::getAdditionalPlayerSpawnRequestSlot(this);
+    }
+    const bool coop_secondary = coop_slot != dusk::coop::PlayerSlot::Invalid &&
+                                coop_slot != dusk::coop::PlayerSlot::Slot0;
+    // Co-op: secondary Link should not clear primary player's global status flags.
     if (!coop_secondary) {
 #endif
     dComIfGp_clearPlayerStatus0(0, ~0x400030);
@@ -20541,7 +20550,7 @@ daAlink_c::~daAlink_c() {
 
     #if DEBUG
 #if TARGET_PC
-    // Co-op: secondary prototypes skip the matching debug HIO entry in create().
+    // Co-op: secondary Link skips the matching debug HIO entry in create().
     if (!coop_secondary) {
 #endif
     mpHIO->removeHIO();
@@ -20580,8 +20589,8 @@ daAlink_c::~daAlink_c() {
 
     #if TARGET_PC
     if (coop_secondary) {
-        // Co-op: secondary ALINK prototypes never own vanilla player 0 globals.
-        dusk::coop::unregisterPlayer(dusk::coop::PlayerSlot::Secondary, this);
+        // Co-op: extra Links never own vanilla player 0 globals.
+        dusk::coop::unregisterPlayer(coop_slot, this);
     } else {
         // Co-op: clear only the matching sidecar slot before vanilla clears player 0.
         dusk::coop::unregisterPlayer(dusk::coop::PlayerSlot::Primary, this);

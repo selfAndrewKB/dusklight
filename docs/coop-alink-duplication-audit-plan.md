@@ -33,7 +33,7 @@ Next active work:
 
 Observed during manual Visual Studio MSVC debug builds on 2026-05-11:
 
-- A secondary ALINK can be spawned from the Actor Spawner when marked with actor `argument == -2`.
+- An additional ALINK can be spawned from the Dusk co-op lifecycle path; slot 1 currently uses the Actor Spawner and `Ctrl+F12` debug callers.
 - The secondary actor registers in Dusk's sidecar player slot 1.
 - Gating secondary create/delete prevents the secondary from replacing or clearing vanilla player 0 globals.
 - Clearing secondary `attention_info.flags` prevents the yellow targeting reticule.
@@ -293,7 +293,7 @@ Expected manual check:
 
 1. Build with Visual Studio MSVC.
 2. Confirm player 1 animates normally before spawning the prototype.
-3. Spawn `Spawn Secondary Link Prototype`.
+3. Spawn `Spawn Secondary Link`.
 4. The secondary actor is expected to be visible with the current default harness.
 5. Move, stop, attack, and shield/block with player 1.
 6. Confirm player 1's visible animation remains correct with `Restore P1 model data owner` checked.
@@ -457,7 +457,7 @@ Already useful:
 - `dusk::coop::getPlayer(...)`
 - `dusk::coop::getPrimaryPlayer()`
 - `dusk::coop::isPrimaryPlayer(...)`
-- `dusk::coop::isSecondaryPlayerPrototype(...)`
+- `dusk::coop::isAdditionalPlayer(...)`
 - `dusk::coop::captureInputSnapshot(...)`
 
 Potential future helpers, only when a plan needs them:
@@ -479,7 +479,7 @@ For each diagnostic patch:
 1. Build using the user's Visual Studio MSVC flow.
 2. Boot a normal save.
 3. Confirm P1 control and animation before spawning secondary ALINK.
-4. Spawn `Spawn Secondary Link Prototype`.
+4. Spawn `Spawn Secondary Link`.
 5. Move, stop, shield/block, and attack with P1.
 6. Record `dusk::coop` and `dusk::coop.alink` log excerpts in the relevant plan.
 7. Update this audit if the evidence changes the likely culprit.

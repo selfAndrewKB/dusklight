@@ -16,7 +16,7 @@ This milestone is not full combat, item use, camera, UI, targeting, interaction,
 
 ## Current Evidence
 
-- Secondary ALINK can be spawned with actor `argument == -2` and registered as sidecar player slot 1.
+- Additional ALINKs are spawned through `dusk::coop::spawnPlayer(...)`; the current validated path registers slot 1.
 - P2 can render visibly when shared Link model-data ownership is scoped to the secondary during create-time animation/model setup, draw, and execute, then restored to P1.
 - P1's earlier animation lock was caused by shared `J3DModelData` matrix-calculator ownership, not by input/action state.
 - Scoped secondary `execute()` is partially viable: P2 can idle animate while P1 remains stable.
@@ -24,7 +24,7 @@ This milestone is not full combat, item use, camera, UI, targeting, interaction,
 - With `Ignore shared attention lock` enabled, P2 no longer mirrors P1's shield/target pose.
 - `dusk::coop::readInputForActor(this)` already exists and the first ALINK input cluster uses slot-aware snapshots for stick and item button state.
 - Diagnostics can distinguish `input.pad`, `attention.state`, `player.status`, `coop.probes`, and `alink.secondary`.
-- Secondary slot input already maps to `PAD_2` through `dusk::coop::getPadForSlot(PlayerSlot::Secondary)`.
+- Slot 1 input already maps to `PAD_2` through `dusk::coop::getPadForSlot(PlayerSlot::Slot1)`. The slot API also maps slots 2 and 3 to `PAD_3` and `PAD_4`, though the rest of the ALINK/camera stack is not validated for those slots yet.
 - `alink.secondary` now refreshes from the secondary execute probe, so locomotion tests can compare P2 pad input, secondary stick/move values, speed, angles, and position without depending on R/attention changes.
 - User validation confirmed the second controller moved the spawned Link. Rolling worked, and a basic combat swing worked.
 - Item/action ownership remains P1/global in several paths: pulling out the fishing hook made it invisible in P2's hands and visible on P1, and throwing the boomerang caused P1 to catch it and blocked P2 from throwing again.
@@ -83,7 +83,7 @@ Manual test sequence:
 2. Boot a save and confirm P1 baseline behavior.
 3. Open Actor Spawner and reset secondary ALINK probes to `Default`.
 4. Enable the diagnostics profile if a capture is needed.
-5. Spawn `Spawn Secondary Link Prototype`.
+5. Spawn `Spawn Secondary Link`.
 6. Confirm P2 is visible and P1 still animates normally.
 7. Confirm `Skip execute` is unchecked under the default probe set.
 8. Move controller 2's stick and observe whether P2 moves, turns, or changes proc/animation state.

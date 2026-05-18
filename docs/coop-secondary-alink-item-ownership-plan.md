@@ -101,7 +101,7 @@ The user owns Visual Studio/CMake builds unless explicitly delegated to Codex.
 Manual test sequence:
 
 1. Build with Visual Studio MSVC debug.
-2. Press `Ctrl+F12` to enable diagnostics, reset default probes, and spawn Secondary Link Prototype.
+2. Press `Ctrl+F12` to enable diagnostics, reset default probes, and spawn slot 1's additional Link.
 3. Confirm the Dusk toast reports that diagnostics are enabled and P2 spawned.
 4. If using the UI instead, confirm `Skip execute` is unchecked under the default probe set.
 5. Confirm P2 still moves from controller 2.

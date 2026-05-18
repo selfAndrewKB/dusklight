@@ -11,7 +11,7 @@ This is not a general input rewrite, not network input, and not a second-player 
 ## Assumptions
 
 - `dusk::coop::PlayerSlot::Primary` maps to `PAD_1`.
-- `dusk::coop::PlayerSlot::Secondary` may map to `PAD_2`, but no secondary actor consumes it in this milestone.
+- `dusk::coop::PlayerSlot::Slot1` maps to `PAD_2`, but no secondary actor consumes it in this milestone.
 - Unknown actors fall back to primary input for now. This keeps current singleton-shaped call sites stable.
 - The input snapshot should wrap `mDoCPd_c` reads, not replace the low-level controller system.
 - The first conversion should stay inside one `src/d/actor/d_a_alink.cpp` input cluster.

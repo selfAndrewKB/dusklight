@@ -1204,7 +1204,7 @@ void mDoExt_MtxCalcAnmBlendTblOld::calc() {
     }
 #if TARGET_PC
     if (quat3.x == 0.0f && quat3.y == 0.0f && quat3.z == 0.0f && quat3.w == 0.0f) {
-        // Co-op: identify zero-quaternion ALINK prototype failures before MTXQuat asserts.
+        // Co-op: identify secondary ALINK zero-quaternion failures before MTXQuat asserts.
         CoopMtxLog.debug(
             "anm-blend-old zero quat modelUser 0x{:x} joint {} oldFlg {} oldRate {:.3f} start {} end {}",
             j3dSys.getModel()->getUserArea(), static_cast<unsigned int>(jntNo),

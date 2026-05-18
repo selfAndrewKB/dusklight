@@ -144,8 +144,8 @@ void daAlink_c::deleteArrow() {
 
 void daAlink_c::setBowOrSlingStatus() {
 #if TARGET_PC
-    // Co-op: secondary bow use must not flip the global P1 camera/status bits before cameras are per-player.
-    if (dusk::coop::isSecondaryPlayerPrototype(this)) {
+    // Co-op: extra player bow use must not flip the global P1 camera/status bits before cameras are per-player.
+    if (dusk::coop::isAdditionalPlayer(this)) {
         return;
     }
 #endif

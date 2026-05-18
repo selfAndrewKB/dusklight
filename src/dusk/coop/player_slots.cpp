@@ -2,7 +2,13 @@
 
 #include "dusk/coop/camera.h"
 #include "dusk/logging.h"
+#include "d/actor/d_a_alink.h"
+#include "f_pc/f_pc_layer.h"
+#include "f_pc/f_pc_manager.h"
+#include "f_pc/f_pc_node.h"
+#include "f_pc/f_pc_name.h"
 #include "f_op/f_op_actor.h"
+#include "f_op/f_op_actor_mng.h"
 #include "m_Do/m_Do_controller_pad.h"
 
 #include <cstdint>
@@ -19,7 +25,8 @@ fopAc_ac_c* s_players[kPlayerSlotCount] = {};
 unsigned int s_secondaryAlinkProbeFlags = kDefaultSecondaryAlinkProbeFlags;
 
 constexpr bool isValidSlot(PlayerSlot slot) {
-    return slot == PlayerSlot::Primary || slot == PlayerSlot::Secondary;
+    return slot == PlayerSlot::Slot0 || slot == PlayerSlot::Slot1 ||
+           slot == PlayerSlot::Slot2 || slot == PlayerSlot::Slot3;
 }
 
 constexpr int slotIndex(PlayerSlot slot) {
@@ -48,7 +55,7 @@ void registerPlayer(PlayerSlot slot, fopAc_ac_c* actor) {
                       reinterpret_cast<uintptr_t>(actor));
     }
 
-    if (slot == PlayerSlot::Secondary) {
+    if (slot == PlayerSlot::Slot1) {
         camera::syncSecondaryPlayerAssignment();
         camera::ensureSecondaryCamera();
     }
@@ -65,7 +72,7 @@ void unregisterPlayer(PlayerSlot slot, const fopAc_ac_c* actor) {
         registered_actor = nullptr;
         CoopLog.debug("unregistered player slot {} actor 0x{:x}", index,
                       reinterpret_cast<uintptr_t>(actor));
-        if (slot == PlayerSlot::Secondary) {
+        if (slot == PlayerSlot::Slot1) {
             camera::syncSecondaryPlayerAssignment();
         }
     } else {
@@ -91,8 +98,34 @@ bool isPrimaryPlayer(const fopAc_ac_c* actor) {
     return actor != nullptr && actor == getPrimaryPlayer();
 }
 
-bool isSecondaryPlayerPrototype(const fopAc_ac_c* actor) {
-    return actor != nullptr && actor->argument == kSecondaryPlayerPrototypeArgument;
+bool isPlayerInSlot(const fopAc_ac_c* actor, PlayerSlot slot) {
+    return actor != nullptr && getSlotForActor(actor) == slot;
+}
+
+bool isSecondaryPlayer(const fopAc_ac_c* actor) {
+    return isPlayerInSlot(actor, PlayerSlot::Slot1);
+}
+
+bool isAdditionalPlayer(const fopAc_ac_c* actor) {
+    PlayerSlot slot = getSlotForActor(actor);
+    return slot != PlayerSlot::Invalid && slot != PlayerSlot::Slot0;
+}
+
+bool isAdditionalPlayerSpawnRequest(const fopAc_ac_c* actor) {
+    return getAdditionalPlayerSpawnRequestSlot(actor) != PlayerSlot::Invalid;
+}
+
+PlayerSlot getAdditionalPlayerSpawnRequestSlot(const fopAc_ac_c* actor) {
+    if (actor == nullptr || actor->argument > kFirstAdditionalPlayerSpawnArgument) {
+        return PlayerSlot::Invalid;
+    }
+
+    int slot = 1 + (kFirstAdditionalPlayerSpawnArgument - actor->argument);
+    if (slot < 1 || slot >= kPlayerSlotCount) {
+        return PlayerSlot::Invalid;
+    }
+
+    return static_cast<PlayerSlot>(slot);
 }
 
 PlayerSlot getSlotForActor(const fopAc_ac_c* actor) {
@@ -113,11 +146,49 @@ int getPadForSlot(PlayerSlot slot) {
     switch (slot) {
     case PlayerSlot::Primary:
         return PAD_1;
-    case PlayerSlot::Secondary:
+    case PlayerSlot::Slot1:
         return PAD_2;
+    case PlayerSlot::Slot2:
+        return PAD_3;
+    case PlayerSlot::Slot3:
+        return PAD_4;
     default:
         return PAD_1;
     }
+}
+
+unsigned int spawnPlayer(PlayerSlot slot, daAlink_c* primary) {
+    if (!isValidSlot(slot) || slot == PlayerSlot::Slot0 || primary == nullptr ||
+        getPlayer(slot) != nullptr)
+    {
+        return 0;
+    }
+
+    cXyz pos = primary->current.pos;
+    pos.x += 120.0f;
+    csXyz angle = primary->shape_angle;
+
+    layer_class* savedLayer = fpcLy_CurrentLayer();
+    base_process_class* playScene = fpcM_SearchByName(fpcNm_PLAY_SCENE_e);
+    if (playScene != nullptr) {
+        fpcLy_SetCurrentLayer(&((process_node_class*)playScene)->layer);
+    }
+
+    const int spawnArgument = kFirstAdditionalPlayerSpawnArgument - (slotIndex(slot) - 1);
+
+    // Co-op: encode the requested slot before ALINK create can register the actor in the sidecar.
+    const unsigned int result = fopAcM_create(
+        fpcNm_ALINK_e,
+        fopAcM_GetParam(primary),
+        &pos,
+        primary->current.roomNo,
+        &angle,
+        nullptr,
+        (s8)spawnArgument
+    );
+
+    fpcLy_SetCurrentLayer(savedLayer);
+    return result;
 }
 
 unsigned int getSecondaryAlinkProbeFlags() {
