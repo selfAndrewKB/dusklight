@@ -21,9 +21,6 @@ aurora::Module CoopLog("dusk::coop");
 // Co-op: records actor identity only. Actor lifetime stays owned by the game.
 fopAc_ac_c* s_players[kPlayerSlotCount] = {};
 
-// Co-op: default to the current safe-ish secondary ALINK harness while probes remain explicit in the UI.
-unsigned int s_secondaryAlinkProbeFlags = kDefaultSecondaryAlinkProbeFlags;
-
 constexpr bool isValidSlot(PlayerSlot slot) {
     return slot == PlayerSlot::Slot0 || slot == PlayerSlot::Slot1 ||
            slot == PlayerSlot::Slot2 || slot == PlayerSlot::Slot3;
@@ -189,22 +186,6 @@ unsigned int spawnPlayer(PlayerSlot slot, daAlink_c* primary) {
 
     fpcLy_SetCurrentLayer(savedLayer);
     return result;
-}
-
-unsigned int getSecondaryAlinkProbeFlags() {
-    return s_secondaryAlinkProbeFlags;
-}
-
-void setSecondaryAlinkProbeFlags(unsigned int flags) {
-    if ((flags & SecondaryAlinkProbe_SkipCreateAnimePlay) != 0) {
-        // Co-op: running secondary model calc without the matching animation playback hit a zero-quaternion assert.
-        flags |= SecondaryAlinkProbe_SkipCreateModelCalc;
-    }
-    s_secondaryAlinkProbeFlags = flags;
-}
-
-bool hasSecondaryAlinkProbeFlag(SecondaryAlinkProbeFlag flag) {
-    return (s_secondaryAlinkProbeFlags & static_cast<unsigned int>(flag)) != 0;
 }
 
 }  // namespace dusk::coop

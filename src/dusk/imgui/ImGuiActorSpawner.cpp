@@ -4,6 +4,7 @@
 #include "ImGuiMenuTools.hpp"
 #include "d/actor/d_a_alink.h"
 #include "d/d_com_inf_game.h"
+#include "dusk/coop/alink_probes.h"
 #include "dusk/coop/camera.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/diagnostics.h"

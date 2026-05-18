@@ -1414,12 +1414,14 @@ set(DUSK_FILES
         include/dusk/action_bindings.h
         include/dusk/endian_gx.hpp
         include/dusk/config.hpp
+        include/dusk/coop/alink_probes.h
         include/dusk/coop/camera.h
         include/dusk/coop/input.h
         include/dusk/coop/player_slots.h
         include/dusk/diagnostics.h
         include/dusk/dvd_asset.hpp
         include/dusk/scope_guard.hpp
+        src/dusk/coop/alink_probes.cpp
         src/dusk/coop/camera.cpp
         src/dusk/coop/player_slots.cpp
         src/dusk/coop/input.cpp

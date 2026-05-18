@@ -54,6 +54,7 @@
 
 #if TARGET_PC
 #include "dusk/action_bindings.h"
+#include "dusk/coop/alink_probes.h"
 #include "dusk/coop/camera.h"
 #include "dusk/coop/input.h"
 #include "dusk/coop/player_slots.h"
