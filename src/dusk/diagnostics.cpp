@@ -463,6 +463,10 @@ json alinkSecondaryEventKey(const json& data) {
         {"item_actor", data.value("item_actor", "0x0")},
         {"item_actor_id", data.value("item_actor_id", 0)},
         {"item_actor_name", data.value("item_actor_name", 0)},
+        {"ride_actor", data.value("ride_actor", "0x0")},
+        {"ride_actor_id", data.value("ride_actor_id", 0)},
+        {"ride_actor_name", data.value("ride_actor_name", 0)},
+        {"ride_status", data.value("ride_status", 0)},
         {"throw_boomerang_actor", data.value("throw_boomerang_actor", "0x0")},
         {"item_button", data.value("item_button", 0)},
         {"item_trigger", data.value("item_trigger", 0)},
@@ -525,6 +529,10 @@ const char* alinkProcName(u16 proc) {
         return "PROC_COPY_ROD_SWING";
     case daAlink_c::PROC_COPY_ROD_REVIVE:
         return "PROC_COPY_ROD_REVIVE";
+    case daAlink_c::PROC_SPINNER_READY:
+        return "PROC_SPINNER_READY";
+    case daAlink_c::PROC_SPINNER_WAIT:
+        return "PROC_SPINNER_WAIT";
     case daAlink_c::PROC_CANOE_ROD_GRAB:
         return "PROC_CANOE_ROD_GRAB";
     case daAlink_c::PROC_CANOE_FISHING_WAIT:
@@ -839,10 +847,13 @@ json collectAlinkSecondary() {
     data["item_actor"] = ptrString(state.itemActor);
     data["item_actor_id"] = static_cast<int>(state.itemActorId);
     data["item_actor_name"] = static_cast<int>(state.itemActorName);
+    data["ride_actor"] = ptrString(state.rideActor);
+    data["ride_actor_id"] = static_cast<int>(state.rideActorId);
+    data["ride_actor_name"] = static_cast<int>(state.rideActorName);
+    data["ride_status"] = static_cast<unsigned int>(state.rideStatus);
     data["throw_boomerang_actor"] = ptrString(state.throwBoomerangActor);
     const bool copyRodActive = state.copyRodActor != 0 || state.copyRodControlActor != 0 ||
-                               state.copyRodCameraActor != 0 || state.copyRodTopUse ||
-                               state.equipItem == dItemNo_COPY_ROD_e;
+                               state.copyRodCameraActor != 0 || state.copyRodTopUse;
     if (copyRodActive) {
         data["copy_rod"] = {
             {"actor", ptrString(state.copyRodActor)},
@@ -892,7 +903,7 @@ Provider s_providers[] = {
     {"attention.state", 1, "medium", 5, true, 60, 12288, collectAttentionState},
     {"player.status", 1, "cheap", 1, true, 120, 8192, collectPlayerStatus},
     {"coop.probes", 1, "cheap", 30, true, 20, 4096, collectCoopProbes},
-    {"alink.secondary", 2, "cheap", 1, true, 120, 8192, collectAlinkSecondary},
+    {"alink.secondary", 3, "cheap", 1, true, 120, 8192, collectAlinkSecondary},
 };
 
 const Provider* findProvider(const char* name) {

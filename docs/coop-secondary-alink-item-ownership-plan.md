@@ -27,7 +27,8 @@ Keep P2 basic input working while classifying and fixing the first item/action o
 - Dominion Rod showed the same characteristics as the boomerang. The first CROD patch routes held/thrown CROD actor matrix, light/top-use, speed/return, control-hit, catch/return, and draw visibility checks through the ALINK slot that owns either `mItemAcKeep` or `mCopyRodAcKeep`. User validation confirmed this fixes P2 Dominion Rod behavior.
 - `alink.secondary` now includes copy-rod control/camera actor pointers and top-use state so future item fixes leave structured evidence behind even when the symptom and fix are already understood.
 - Bow/arrow showed the projectile version of the same owner problem. P2 could enter the bow proc, but global player status forced P1 first-person camera and `daArrow_c` used global P1 for held matrix, shot origin, HIO values, and hit sounds. The local arrow patch stores the spawning ALINK owner on the arrow actor, routes owner-specific arrow work through that owner, and skips setting global bow/sling camera status for secondary ALINK prototypes. User validation confirmed P2 no longer forces P1 first-person, arrows fire from each owning player, and sound follows the shot correctly.
-- Item-specific `alink.secondary` blocks are gated to actual item context. `copy_rod`, and any future `bow` or `arrow` block, should be absent during unrelated item tests; generic `equip_item`, `item_actor`, and `proc_name` remain always available for current ALINK state.
+- Spinner is the ride-action version of the same owner problem. Its actor is kept in `mRideAcKeep`, and the first patch routes spinner lifecycle, draw visibility, movement constants, sounds, and raw local pad input through the ALINK slot whose ride keep owns the spinner actor. User validation confirmed this fixes P2's immediate Spinner despawn while P1 Spinner still works. The next Spinner issue was rail/slot detection: `Tag_Sppath` followed only global P1's position, so the rail patch makes the tag use the nearest registered ALINK that is currently riding Spinner. User validation confirmed P2 can now enter Spinner slots/rails.
+- Item-specific `alink.secondary` blocks are gated to actual item context. `copy_rod`, and any future `bow` or `arrow` block, should be absent during unrelated item tests; generic `equip_item`, `item_actor`, `ride_actor`, and `proc_name` remain always available for current ALINK state.
 - The remaining failures are item/action ownership failures, not the original "can P2 receive input?" problem.
 
 ## Working Assumptions
@@ -76,7 +77,11 @@ Keep P2 basic input working while classifying and fixing the first item/action o
 - [x] Validate Dominion Rod owner-scoped throw/return behavior.
 - [x] Land first bow/arrow owner-routing patch.
 - [x] Validate P2 bow shots use P2 origin without forcing P1 first-person.
-- [ ] Pick the next item/weapon owner-lookup target from `docs/coop-player-owner-lookup-audit.md`.
+- [x] Pick Spinner as the next item/action owner-lookup target from `docs/coop-player-owner-lookup-audit.md`.
+- [x] Land first Spinner ride-owner routing patch.
+- [x] Validate P2 Spinner no longer despawns immediately and still lets P1 use Spinner normally.
+- [x] Land first Spinner rail/slot tag patch.
+- [x] Validate P2 Spinner can enter rail/slot paths.
 
 ## Test Plan
 

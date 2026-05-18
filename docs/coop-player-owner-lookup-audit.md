@@ -16,6 +16,7 @@ The goal is not to replace every global player lookup. The goal is to identify c
 - Fishing rod is the second proof target. `daAlink_c::checkFishingRodGrab(actor)` already defines whether a rod actor belongs to a given ALINK through `mItemAcKeep`, so the first safe owner resolver can use that relationship without inventing new ownership state.
 - Dominion Rod follows the same item-actor ownership rule in two phases: the held CROD actor is in `mItemAcKeep`, and the thrown copy-rod ball is in `mCopyRodAcKeep`.
 - Arrow/bow confirms the projectile variant of the same pattern. The arrow starts in the owning ALINK's `mItemAcKeep`, then must preserve that owner after the keep is cleared for the shot; otherwise flight origin, held-arrow matrix, owner HIO values, and hit sounds all fall back to P1.
+- Spinner is the first ride-action version of the same problem. The actor lives in `mRideAcKeep`, so lifecycle, draw, movement constants, sounds, and local pad input should ask the ALINK whose ride keep owns the spinner actor. During `PROC_SPINNER_READY`, `mRideAcKeep` is already set before `mRideStatus` becomes `RIDETYPE_SPINNER`, so ownership resolution must not depend only on `checkSpinnerRideOwn()`.
 
 ## Audit Table
 
@@ -26,7 +27,7 @@ The goal is not to replace every global player lookup. The goal is to identify c
 | Arrow/bow | `src/d/actor/d_a_arrow.cpp` | 1 fallback after fix | `mItemAcKeep` plus preserved spawned-arrow owner | Fixed locally; P2 no longer forces P1 first-person, arrows fire from each owner, sound validated |
 | Dominion Rod | `src/d/actor/d_a_crod.cpp` | 2 fallback sites after fix | `mItemAcKeep` / `mCopyRodAcKeep` | Fixed first owner cluster; P2 throw/return validated |
 | Bombs | `src/d/actor/d_a_nbomb.cpp` | 16 | item/grab/carry ownership likely mixed with world collision | Not started |
-| Spinner | `src/d/actor/d_a_spinner.cpp` | 9 | likely player action actor; needs audit | Not started |
+| Spinner | `src/d/actor/d_a_spinner.cpp`, `src/d/actor/d_a_tag_sppath.cpp` | 1 fallback after first patch | `mRideAcKeep` via ride actor identity; spinner rail tags use active rider position | Fixed locally; P2 spawn/despawn and rail/slot entry validated |
 
 ## Procedure
 
@@ -39,4 +40,4 @@ The goal is not to replace every global player lookup. The goal is to identify c
 
 ## Diagnostics Notes
 
-`alink.secondary` records the currently kept item actor pointer, item actor id/name, thrown boomerang actor, copy-rod actor, copy-rod control/camera actors, equipped item, selected item slot, item button/trigger masks, and use-button flags. Add actor-specific providers only after this generic item ownership snapshot cannot answer the next question.
+`alink.secondary` records the currently kept item actor pointer, ride actor pointer, actor id/name values, thrown boomerang actor, equipped item, selected item slot, item button/trigger masks, and use-button flags. Item-specific blocks such as `copy_rod` are optional and should appear only while that item state is active. Add actor-specific providers only after this generic ownership snapshot cannot answer the next question.

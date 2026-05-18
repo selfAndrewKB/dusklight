@@ -7,6 +7,9 @@
 
 #include "d/actor/d_a_tag_sppath.h"
 #include "d/actor/d_a_player.h"
+#if TARGET_PC
+#include "dusk/coop/player_slots.h"
+#endif
 #include <cmath>
 #include <cstring>
 
@@ -67,8 +70,8 @@ static int daTagSppath_Delete(daTagSppath_c* i_this) {
     return 1;
 }
 
-int daTagSppath_c::getNearPathPos(cXyz* i_result, dPath* i_path) {
-    cXyz* pyCurPos = &daPy_getPlayerActorClass()->current.pos;
+int daTagSppath_c::getNearPathPos(cXyz* i_result, dPath* i_path, cXyz* i_refPos) {
+    cXyz* pyCurPos = i_refPos;
     dPnt* curPnt = i_path->m_points;
     f32 bestDist = FLT_MAX;
 
@@ -163,9 +166,7 @@ int daTagSppath_c::getNearPathPos(cXyz* i_result, dPath* i_path) {
 }
 
 int daTagSppath_c::execute() {
-    daPy_py_c* py = daPy_getPlayerActorClass();
-
-    if (py->checkSpinnerRide() == 0 || (mSwNo1 != 0xff && !fopAcM_isSwitch(this, mSwNo1)) ||
+    if ((mSwNo1 != 0xff && !fopAcM_isSwitch(this, mSwNo1)) ||
         (mSwNo2 != 0xff && fopAcM_isSwitch(this, mSwNo2)))
     {
         return 1;
@@ -177,8 +178,40 @@ int daTagSppath_c::execute() {
     f32 dist;
     int no;
 
+#if TARGET_PC
+    daPy_py_c* py = NULL;
+    // Co-op: spinner rail tags must follow whichever registered ALINK is riding, not only global P1.
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        fopAc_ac_c* playerActor = dusk::coop::getPlayer(static_cast<dusk::coop::PlayerSlot>(i));
+        daPy_py_c* player = static_cast<daPy_py_c*>(playerActor);
+        if (player == NULL || player->checkSpinnerRide() == 0) {
+            continue;
+        }
+
+        for (path = mpInitPath; path != NULL; path = dPath_GetNextRoomPath(path, fopAcM_GetRoomNo(this))) {
+            no = getNearPathPos(&nearestPointOnPath, path, &player->current.pos);
+            dist = nearestPointOnPath.abs2(player->current.pos);
+            if (dist < bestDist) {
+                bestDist = dist;
+                current.pos = nearestPointOnPath;
+                mpBestPath = path;
+                mBestNo = no;
+                py = player;
+            }
+        }
+    }
+
+    if (py == NULL) {
+        return 1;
+    }
+#else
+    daPy_py_c* py = daPy_getPlayerActorClass();
+    if (py->checkSpinnerRide() == 0) {
+        return 1;
+    }
+
     for (; path != NULL; path = dPath_GetNextRoomPath(path, fopAcM_GetRoomNo(this))) {
-        no = getNearPathPos(&nearestPointOnPath, path);
+        no = getNearPathPos(&nearestPointOnPath, path, &py->current.pos);
         dist = nearestPointOnPath.abs2(py->current.pos);
         if (dist < bestDist) {
             bestDist = dist;
@@ -187,6 +220,7 @@ int daTagSppath_c::execute() {
             mBestNo = no;
         }
     }
+#endif
 
     if (mpBestPath->field_0x4 == 0) {
         if (mpBestPath->swbit == 0xff || fopAcM_isSwitch(this, mpBestPath->swbit) == 0) {

@@ -11,11 +11,35 @@
 #include "d/actor/d_a_mirror.h"
 #include "Z2AudioLib/Z2Instances.h"
 #include "SSystem/SComponent/c_math.h"
+#include "dusk/coop/player_slots.h"
 #include "m_Do/m_Do_controller_pad.h"
 
 static u8 const lit_3768[12] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
+
+// Co-op: spinner actors are ride actors, so lifecycle/input checks must follow their ALINK owner.
+static daAlink_c* daSpinner_getOwner(const daSpinner_c* i_spinner) {
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        fopAc_ac_c* actor = dusk::coop::getPlayer(static_cast<dusk::coop::PlayerSlot>(i));
+        daAlink_c* player = static_cast<daAlink_c*>(actor);
+        if (player != NULL && player->getRideActor() == i_spinner) {
+            return player;
+        }
+    }
+
+    return daAlink_getAlinkActorClass();
+}
+
+// Co-op: spinner jump/steer input should read the pad for the ALINK slot riding this spinner.
+static u32 daSpinner_getOwnerPad(const daSpinner_c* i_spinner) {
+    dusk::coop::PlayerSlot slot = dusk::coop::getSlotForActor(daSpinner_getOwner(i_spinner));
+    if (slot == dusk::coop::PlayerSlot::Invalid) {
+        slot = dusk::coop::PlayerSlot::Primary;
+    }
+
+    return static_cast<u32>(dusk::coop::getPadForSlot(slot));
+}
 
 int daSpinner_c::createHeap() {
     J3DModelData* modelData = (J3DModelData*)dComIfG_getObjectRes(daAlink_c::getAlinkArcName(), 0x21);
@@ -194,7 +218,7 @@ void daSpinner_c::setEffect() {
 }
 
 int daSpinner_c::posMove() {
-    daAlink_c* player = daAlink_getAlinkActorClass();
+    daAlink_c* player = daSpinner_getOwner(this);
     
     f32 move_speed;
     if (!player->checkDemoSpinnerKeep()) {
@@ -398,7 +422,7 @@ void daSpinner_c::setWallHit(s16 param_0, u32 param_1) {
     }
 
     if (field_0xa78 == 0) {
-        daAlink_getAlinkActorClass()->itemHitSE(Z2SE_HIT_SPINNER, param_1, &mSound);
+        daSpinner_getOwner(this)->itemHitSE(Z2SE_HIT_SPINNER, param_1, &mSound);
         field_0xa78 = 10;
 
         if (field_0xa79 == 0) {
@@ -411,7 +435,7 @@ void daSpinner_c::setWallHit(s16 param_0, u32 param_1) {
 void daSpinner_c::setAnm() {
     if (mBck.isStop() && mTrigJump) {
         mBck.init(mpSpoutBck, 1, -1, 1.0f, 0, -1, true);
-        daAlink_getAlinkActorClass()->seStartOnlyReverb(Z2SE_AL_SPINNER_EXTEND);
+        daSpinner_getOwner(this)->seStartOnlyReverb(Z2SE_AL_SPINNER_EXTEND);
         dComIfGp_getVibration().StartShock(2, 1, cXyz(0.0f, 1.0f, 0.0f));
 
         if (!mJumpFlg) {
@@ -597,10 +621,11 @@ int daSpinner_c::checkPathMove() {
         mAcchCir[0].SetWallR(58.0f);
         mCyl.SetR(58.0f);
 
-        mRideMoveTime = daAlink_getAlinkActorClass()->getSpinnerRideMoveTime();
+        daAlink_c* player = daSpinner_getOwner(this);
+        mRideMoveTime = player->getSpinnerRideMoveTime();
 
         if (mpPathMove->field_0x7 == 0xFF) {
-            speedF = daAlink_getAlinkActorClass()->getSpinnerRideSpeedF();
+            speedF = player->getSpinnerRideSpeedF();
         } else {
             speedF = mpPathMove->field_0x7;
         }
@@ -656,7 +681,8 @@ int daSpinner_c::execute() {
     int sp24 = 0;
     mButtonJump = false;
 
-    daAlink_c* player = daAlink_getAlinkActorClass();
+    daAlink_c* player = daSpinner_getOwner(this);
+    u32 owner_pad = daSpinner_getOwnerPad(this);
     if (!player->checkGameOverWindow() && field_0xa78 != 0) {
         field_0xa78--;
     }
@@ -671,15 +697,15 @@ int daSpinner_c::execute() {
         if (mSpinnerTag != TAG_NONE || mpPathMove != NULL || (mJumpFlg && daAlink_c::checkStageName("D_MN10A") && dComIfGs_isZoneSwitch(6, dComIfGp_roomControl_getStayNo()) && dComIfGs_isZoneSwitch(7, dComIfGp_roomControl_getStayNo()))) {
             pad_stick_value = 0.0f;
         } else {
-            pad_stick_value = mDoCPd_c::getStickValue(PAD_1);
+            pad_stick_value = mDoCPd_c::getStickValue(owner_pad);
         }
 
-        move_angle = (mDoCPd_c::getStickAngle3D(PAD_1) + 0x10000 + dCam_getControledAngleY(dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0)))) - 0x8000;
+        move_angle = (mDoCPd_c::getStickAngle3D(owner_pad) + 0x10000 + dCam_getControledAngleY(dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0)))) - 0x8000;
 
 #if PLATFORM_WII || VERSION == VERSION_SHIELD_DEBUG
-        if (dComIfG_getTrigB(PAD_1) && dComIfGp_getSelectItem(3) == dItemNo_SPINNER_e) {
+        if (dComIfG_getTrigB(owner_pad) && dComIfGp_getSelectItem(3) == dItemNo_SPINNER_e) {
 #else
-        if (dComIfG_getTrigA(PAD_1)) {
+        if (dComIfG_getTrigA(owner_pad)) {
 #endif
             mTrigJump = true;
         } else {
@@ -914,14 +940,15 @@ int daSpinner_c::draw() {
     g_env_light.settingTevStruct(0, &current.pos, &tevStr);
     g_env_light.setLightTevColorType_MAJI(mpModel, &tevStr);
 
-    if ((daAlink_getAlinkActorClass()->checkSpinnerReady() && daAlink_getAlinkActorClass()->gravity >= 0.0f) || mDeleteFlg) {
+    daAlink_c* player = daSpinner_getOwner(this);
+    if ((player->checkSpinnerReady() && player->gravity >= 0.0f) || mDeleteFlg) {
         return 1;
     }
 
     mDoExt_modelEntryDL(mpModel);
     daMirror_c::entry(mpModel);
 
-    if (!daAlink_getAlinkActorClass()->checkSpinnerRideOwn(this)) {
+    if (!player->checkSpinnerRideOwn(this)) {
         cXyz sp8(current.pos.x, 70.0f + current.pos.y, current.pos.z);
         field_0xa94 = dComIfGd_setShadow(field_0xa94, 1, mpModel, &sp8, 300.0f, 0.0f, sp8.y, mAcch.GetGroundH(), mAcch.m_gnd, &tevStr, 0, 1.0f, dDlst_shadowControl_c::getSimpleTex());
     }

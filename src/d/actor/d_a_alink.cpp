@@ -128,6 +128,7 @@ void populateCoopSecondaryAlinkState(const char* phase, daAlink_c* player,
     diag->ownerUpper = reinterpret_cast<uintptr_t>(player->field_0x1f24);
     // Co-op: item ownership bugs route through ALINK-owned actor keeps, not just input/proc state.
     diag->itemActor = reinterpret_cast<uintptr_t>(player->mItemAcKeep.getActor());
+    diag->rideActor = reinterpret_cast<uintptr_t>(player->mRideAcKeep.getActor());
     diag->throwBoomerangActor = reinterpret_cast<uintptr_t>(player->mThrowBoomerangAcKeep.getActor());
     diag->copyRodActor = reinterpret_cast<uintptr_t>(player->mCopyRodAcKeep.getActor());
     diag->copyRodControlActor = reinterpret_cast<uintptr_t>(player->getCopyRodControllActor());
@@ -136,9 +137,14 @@ void populateCoopSecondaryAlinkState(const char* phase, daAlink_c* player,
         diag->itemActorId = fopAcM_GetID(player->mItemAcKeep.getActor());
         diag->itemActorName = fopAcM_GetName(player->mItemAcKeep.getActor());
     }
+    if (player->mRideAcKeep.getActor() != NULL) {
+        diag->rideActorId = fopAcM_GetID(player->mRideAcKeep.getActor());
+        diag->rideActorName = fopAcM_GetName(player->mRideAcKeep.getActor());
+    }
     diag->proc = player->mProcID;
     diag->equipItem = player->mEquipItem;
     diag->selectItemId = player->mSelectItemId;
+    diag->rideStatus = player->mRideStatus;
     diag->itemButton = player->mItemButton;
     diag->itemTrigger = player->mItemTrigger;
     diag->useButtonFlags = player->mUseButtonFlags;

@@ -9,7 +9,7 @@ class daTagSppath_c : public fopAc_ac_c {
 public:
     int create();
     ~daTagSppath_c();
-    int getNearPathPos(cXyz*, dPath*);
+    int getNearPathPos(cXyz*, dPath*, cXyz*);
     int execute();
 
     dPath* getKeepPath() { return mpBestPath; }
