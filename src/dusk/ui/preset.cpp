@@ -40,7 +40,7 @@ void applyPresetDusk() {
     s.game.enableQuickTransform.setValue(true);
     s.game.instantSaves.setValue(true);
     s.game.midnasLamentNonStop.setValue(true);
-    s.game.enableFrameInterpolation.setValue(true);
+    s.game.enableFrameInterpolation.setValue(FrameInterpMode::Unlimited);
     s.game.sunsSong.setValue(true);
     s.game.bloomMode.setValue(BloomMode::Dusk);
     s.game.internalResolutionScale.setValue(0);
@@ -59,7 +59,7 @@ PresetWindow::PresetWindow() : WindowSmall("modal", "modal-dialog") {
 
     auto* title = append(header, "div");
     title->SetClass("modal-title", true);
-    title->SetInnerRML("Welcome to Dusk");
+    title->SetInnerRML("Welcome to Dusklight");
 
     auto* headIcon = append(header, "icon");
     headIcon->SetClass("celebration", true);
@@ -83,7 +83,7 @@ PresetWindow::PresetWindow() : WindowSmall("modal", "modal-dialog") {
          "Enhancements disabled to match the GameCube version. "
          "Good for speedrunning or simple nostalgia!",
          applyPresetClassic},
-        {"Dusk",
+        {"Dusklight",
          "Graphics & quality of life tweaks, including some from the Wii U version. "
          "Our recommended way to play!",
          applyPresetDusk},

@@ -2428,7 +2428,7 @@ void mDoExt_3DlineMat0_c::draw() {
     }
 
 #if TARGET_PC
-    if (!dusk::getSettings().game.enableFrameInterpolation)
+    if (!dusk::frame_interp::is_enabled())
 #endif
     {
         field_0x16 ^= (u8)1;
@@ -2758,7 +2758,7 @@ void mDoExt_3DlineMat1_c::draw() {
     }
     GXSetTexCoordScaleManually(GX_TEXCOORD0, 0, 0, 0);
 #if TARGET_PC
-    if (!dusk::getSettings().game.enableFrameInterpolation)
+    if (!dusk::frame_interp::is_enabled())
 #endif
     {
         mIsDrawn ^= (u8)1;
@@ -2840,7 +2840,7 @@ void mDoExt_3DlineMat1_c::update(int param_0, f32 param_1, GXColor& param_2, u16
         }
 
 #if TARGET_PC
-        const cXyz& lineEye = (presentationEye != nullptr && dusk::getSettings().game.enableFrameInterpolation) ? *presentationEye : sp_3c->lookat.eye;
+        const cXyz& lineEye = (presentationEye != nullptr && dusk::frame_interp::is_enabled()) ? *presentationEye : sp_3c->lookat.eye;
         sp_13c = *local_r27 - lineEye;
 #else
         sp_13c = *local_r27 - sp_3c->lookat.eye;
@@ -3000,7 +3000,7 @@ void mDoExt_3DlineMat1_c::update(int param_0, GXColor& param_2, dKy_tevstr_c* pa
         local_r27 = sp_38[0].field_0x0;
         size_p = sp_38->field_0x4;
 #if TARGET_PC
-        if (presentationEye != nullptr && dusk::getSettings().game.enableFrameInterpolation && size_p == NULL) {
+        if (presentationEye != nullptr && dusk::frame_interp::is_enabled() && size_p == NULL) {
             sp_38 += 1;
             continue;
         }
@@ -3019,7 +3019,7 @@ void mDoExt_3DlineMat1_c::update(int param_0, GXColor& param_2, dKy_tevstr_c* pa
         local_f30 = sp_130.abs();
         local_f31 += local_f30 * 0.1f;
 #if TARGET_PC
-        const cXyz& lineEye = (presentationEye != nullptr && dusk::getSettings().game.enableFrameInterpolation) ? *presentationEye : stack_3c->lookat.eye;
+        const cXyz& lineEye = (presentationEye != nullptr && dusk::frame_interp::is_enabled()) ? *presentationEye : stack_3c->lookat.eye;
         sp_13c = local_r27[0] - lineEye;
 #else
         sp_13c = local_r27[0] - stack_3c->lookat.eye;
@@ -3095,7 +3095,7 @@ void mDoExt_3DlineMat1_c::update(int param_0, GXColor& param_2, dKy_tevstr_c* pa
 
 #if TARGET_PC
 void mDoExt_3DlineMat1_c::refreshGeometryForPresentationEye(const cXyz& eye) {
-    if (!dusk::getSettings().game.enableFrameInterpolation) {
+    if (!dusk::frame_interp::is_enabled()) {
         return;
     }
     if (mInterpLineKind == 1) {

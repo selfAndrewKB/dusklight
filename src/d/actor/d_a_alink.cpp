@@ -53,6 +53,7 @@
 #include "d/d_s_play.h"
 
 #if TARGET_PC
+#include "dusk/action_bindings.h"
 #include "dusk/coop/input.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/diagnostics.h"
@@ -6517,7 +6518,7 @@ void daAlink_c::setItemMatrix(int param_0) {
 
         mDoMtx_stack_c::XrotS(-0x8000);
 #ifdef TARGET_PC
-        if (dusk::getSettings().game.enableFrameInterpolation) {
+        if (dusk::frame_interp::is_enabled()) {
             Mtx boot_mtx;
             mDoMtx_concat(mpLinkModel->getAnmMtx(0x18), mDoMtx_stack_c::get(), boot_mtx);
             mpLinkBootModels[1]->setAnmMtx(1, boot_mtx);
@@ -8089,12 +8090,7 @@ void daAlink_c::setBlendMoveAnime(f32 i_morf) {
     f32 sp2C;
     f32 sp28 = mpHIO->mMove.m.mFootPositionRatio;
     BOOL sp24 = checkEventRun();
-    BOOL sp20 = checkBootsMoveAnime(1);
-#if TARGET_PC
-    if (dusk::getSettings().game.enableFastIronBoots) {
-        sp20 = FALSE;
-    }
-#endif
+    BOOL sp20 = checkBootsMoveAnime(1) IF_DUSK(&& !dusk::getSettings().game.enableFastIronBoots);
 
     f32 var_f29;
 
@@ -8607,7 +8603,7 @@ void daAlink_c::setBlendAtnBackMoveAnime(f32 i_morf) {
     daAlink_ANM var_r27;
     daAlink_ANM var_r29;
 
-    if (checkBootsMoveAnime(1)) {
+    if (checkBootsMoveAnime(1) IF_DUSK(&& !dusk::getSettings().game.enableFastIronBoots)) {
         mMaxSpeed = mpHIO->mAtnMove.m.mMaxBackwardsSpeed;
         var_f27 = mpHIO->mAtnMove.m.mMinBackWalkFrame;
         var_f31 = mpHIO->mAtnMove.m.mBackWalkChangeRate;
@@ -9893,6 +9889,12 @@ BOOL daAlink_c::spActionTrigger() {
 }
 
 BOOL daAlink_c::midnaTalkTrigger() const {
+#if TARGET_PC
+    // If we have a custom bind for Midna, check that instead
+    if (dusk::isActionBound(dusk::ActionBinds::CALL_MIDNA, 0)) {
+        return dusk::getActionBindTrig(dusk::ActionBinds::CALL_MIDNA, 0);
+    }
+#endif
     return mItemTrigger & BTN_Z;
 }
 
@@ -16711,6 +16713,9 @@ int daAlink_c::procSlideLand() {
 
 int daAlink_c::procFrontRollInit() {
     BOOL is_guard_anime = checkUpperGuardAnime();
+#ifdef TARGET_PC    
+    const f32 fastRollMultiplier = dusk::getSettings().game.fastRoll ? 2.0f : 1.0f;
+#endif
 
     if (mProcID == PROC_FRONT_ROLL && mDemo.getDemoMode() == daPy_demo_c::DEMO_FRONT_ROLL_e) {
         return 0;
@@ -16726,10 +16731,16 @@ int daAlink_c::procFrontRollInit() {
         roll_anm_speed = mpHIO->mFrontRoll.m.mRollAnm.mStartFrame;
     }
 
-    setSingleAnime(ANM_FRONT_ROLL, mpHIO->mFrontRoll.m.mRollAnm.mSpeed, roll_anm_speed,
+    setSingleAnime(ANM_FRONT_ROLL,
+#ifdef TARGET_PC        
+                   mpHIO->mFrontRoll.m.mRollAnm.mSpeed * fastRollMultiplier, 
+#else
+                   mpHIO->mFrontRoll.m.mRollAnm.mSpeed,
+#endif
+                   roll_anm_speed,
                    mpHIO->mFrontRoll.m.mRollAnm.mEndFrame,
                    mpHIO->mFrontRoll.m.mRollAnm.mInterpolation);
-
+                   
     mNormalSpeed = speedF * mpHIO->mFrontRoll.m.mSpeedRate + mpHIO->mFrontRoll.m.mInitSpeed;
 
     f32 max_speed = mpHIO->mFrontRoll.m.mInitSpeed + mpHIO->mMove.m.mMaxSpeed * mpHIO->mFrontRoll.m.mSpeedRate;
@@ -16742,10 +16753,19 @@ int daAlink_c::procFrontRollInit() {
     }
 
     if (checkNoResetFlg0(FLG0_WATER_IN_MOVE)) {
-        mNormalSpeed *= mpHIO->mItem.mIronBoots.m.mWaterVelocityX;
+#if TARGET_PC
+        if (!(dusk::getSettings().game.enableFastIronBoots))
+#endif
+        {
+            mNormalSpeed *= mpHIO->mItem.mIronBoots.m.mWaterVelocityX;
+        }
     } else if (checkHeavyStateOn(TRUE, TRUE)) {
         mNormalSpeed *= mHeavySpeedMultiplier;
     }
+
+#ifdef TARGET_PC        
+    mNormalSpeed *= fastRollMultiplier;
+#endif
 
     current.angle.y = shape_angle.y;
     voiceStart(Z2SE_AL_V_BACKTEN);
@@ -16877,8 +16897,13 @@ int daAlink_c::procFrontRollCrashInit() {
     speed.y = mpHIO->mFrontRoll.m.mCrashSpeedV;
 
     if (checkNoResetFlg0(FLG0_WATER_IN_MOVE)) {
-        mNormalSpeed *= mpHIO->mItem.mIronBoots.m.mWaterVelocityX;
-        speed.y *= mpHIO->mItem.mIronBoots.m.mWaterVelocityY;
+#if TARGET_PC
+        if (!(dusk::getSettings().game.enableFastIronBoots))
+#endif
+        {
+            mNormalSpeed *= mpHIO->mItem.mIronBoots.m.mWaterVelocityX;
+            speed.y *= mpHIO->mItem.mIronBoots.m.mWaterVelocityY;
+        }
     }
 
     ANGLE_ADD_2(current.angle.y, 0x8000);
@@ -16972,6 +16997,9 @@ int daAlink_c::procFrontRollSuccess() {
 
 int daAlink_c::procSideRollInit(int param_0) {
     BOOL is_prev_guardAnm = checkUpperGuardAnime();
+#ifdef TARGET_PC            
+    const f32 fastRollMultiplier = dusk::getSettings().game.fastRoll ? 2.0f : 1.0f;
+#endif
 
     if (!commonProcInitNotSameProc(PROC_SIDE_ROLL)) {
         return 0;
@@ -16988,17 +17016,30 @@ int daAlink_c::procSideRollInit(int param_0) {
         current.angle.y = shape_angle.y + -0x4000;
     }
 
-    setSingleAnime(anmID, mpHIO->mGuard.mTurnMove.m.mSideRollAnmSpeed,
+    setSingleAnime(anmID, 
+#ifdef TARGET_PC        
+                   mpHIO->mGuard.mTurnMove.m.mSideRollAnmSpeed * fastRollMultiplier,
+#else
+                   mpHIO->mGuard.mTurnMove.m.mSideRollAnmSpeed,
+#endif
                    mpHIO->mGuard.mTurnMove.m.mTurnAnm.mStartFrame,
                    mpHIO->mGuard.mTurnMove.m.mTurnAnm.mEndFrame,
                    mpHIO->mGuard.mTurnMove.m.mTurnAnm.mInterpolation);
     mNormalSpeed = mpHIO->mGuard.mTurnMove.m.mSideRollSpeed;
 
     if (checkNoResetFlg0(FLG0_WATER_IN_MOVE)) {
-        mNormalSpeed *= mpHIO->mItem.mIronBoots.m.mWaterVelocityX;
+#if TARGET_PC
+        if (!(dusk::getSettings().game.enableFastIronBoots))
+#endif
+        {
+            mNormalSpeed *= mpHIO->mItem.mIronBoots.m.mWaterVelocityX;
+        }
     } else if (checkHeavyStateOn(TRUE, TRUE)) {
         mNormalSpeed *= mHeavySpeedMultiplier;
     }
+#ifdef TARGET_PC        
+    mNormalSpeed *= fastRollMultiplier;
+#endif
 
     setFootEffectProcType(0);
     field_0x2f9d = 4;
@@ -20351,7 +20392,7 @@ int daAlink_c::draw() {
                 dComIfGd_getOpaListDark()->entryImm(mpHookChain, 0);
 
 #if TARGET_PC
-                if (dusk::getSettings().game.enableFrameInterpolation &&
+                if (dusk::frame_interp::is_enabled() &&
                     mEquipItem == dItemNo_IRONBALL_e &&
                     mIronBallChainPos != NULL && mIronBallChainAngle != NULL)
                 {

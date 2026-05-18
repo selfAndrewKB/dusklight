@@ -793,6 +793,10 @@ static void duskExecute() {
         dComIfGs_setArrowNum(dComIfGs_getArrowMax());
     }
 
+    if (dusk::getSettings().game.infiniteSeeds) {
+        dComIfGs_setPachinkoNum(dComIfGs_getPachinkoMax());
+    }
+
     if (dusk::getSettings().game.infiniteBombs) {
         dComIfGs_setBombNum(0, 99);
         dComIfGs_setBombNum(1, 99);
@@ -804,7 +808,7 @@ static void duskExecute() {
     }
 
     if (dusk::getSettings().game.infiniteRupees) {
-        dComIfGs_setRupee(9999);
+        dComIfGs_setRupee(dComIfGs_getRupeeMax());
     }
 
     if (dusk::getSettings().game.infiniteOxygen) {
