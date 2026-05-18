@@ -4,6 +4,7 @@
 #include "d/actor/d_a_alink.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_item.h"
+#include "dusk/coop/camera.h"
 #include "dusk/coop/input.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/dusk.h"
@@ -11,6 +12,7 @@
 #include "dusk/logging.h"
 #include "dusk/main.h"
 #include "f_op/f_op_actor_mng.h"
+#include "f_op/f_op_camera_mng.h"
 #include "fmt/format.h"
 #include "m_Do/m_Do_controller_pad.h"
 #include "nlohmann/json.hpp"
@@ -577,6 +579,49 @@ json eventKeyForProvider(const char* provider, const json& data) {
     if (name == "render.stats") {
         return renderStatsEventKey(data);
     }
+    if (name == "render.windows") {
+        return {
+            {"enabled", data.value("split_screen_enabled", false)},
+            {"window_count", data.value("window_count", 0)},
+            {"secondary_ready", data.value("secondary_ready", false)},
+            {"secondary_requested", data.value("secondary_requested", false)},
+            {"layout", data.value("layout", "")},
+            {"windows", data.value("windows", json::array())},
+        };
+    }
+    if (name == "camera.state") {
+        const json camera0 = data.value("camera0", json::object());
+        const json camera1 = data.value("camera1", json::object());
+        const auto camera_body_key = [](const json& camera) {
+            const json body = camera.value("body", json::object());
+            return json{
+                {"camera_id", body.value("camera_id", 0u)},
+                {"type", body.value("type", 0)},
+                {"mode", body.value("mode", 0)},
+                {"active", body.value("active", false)},
+                {"state", body.value("state", 0)},
+                {"style", body.value("style", 0)},
+                {"trim_size", body.value("trim_size", 0)},
+                {"gear", body.value("gear", 0)},
+            };
+        };
+        return {
+            {"enabled", data.value("split_screen_enabled", false)},
+            {"window_count", data.value("window_count", 0)},
+            {"secondary_ready", data.value("secondary_ready", false)},
+            {"secondary_requested", data.value("secondary_requested", false)},
+            {"camera0_available", camera0.value("available", false)},
+            {"camera1_available", camera1.value("available", false)},
+            {"camera0_initialized", camera0.value("initialized", false)},
+            {"camera1_initialized", camera1.value("initialized", false)},
+            {"camera0_win", camera0.value("win_id", 0)},
+            {"camera1_win", camera1.value("win_id", 0)},
+            {"camera0_player", camera0.value("player1_id", 0)},
+            {"camera1_player", camera1.value("player1_id", 0)},
+            {"camera0_body", camera_body_key(camera0)},
+            {"camera1_body", camera_body_key(camera1)},
+        };
+    }
     if (name == "attention.state") {
         return attentionStateEventKey(data);
     }
@@ -616,6 +661,124 @@ json collectRenderStats() {
         {"last_index_size", stats.lastIndexSize},
         {"last_storage_size", stats.lastStorageSize},
         {"last_texture_upload_size", stats.lastTextureUploadSize},
+    };
+}
+
+json windowSummary(int idx) {
+    json data = {
+        {"index", idx},
+        {"available", false},
+    };
+
+    dDlst_window_c* window = dComIfGp_getWindow(idx);
+    if (window == nullptr) {
+        return data;
+    }
+
+    view_port_class* viewport = window->getViewPort();
+    data["available"] = true;
+    data["camera_id"] = static_cast<int>(window->getCameraID());
+    data["viewport"] = {
+        {"x", viewport->x_orig},
+        {"y", viewport->y_orig},
+        {"width", viewport->width},
+        {"height", viewport->height},
+        {"near_z", viewport->near_z},
+        {"far_z", viewport->far_z},
+    };
+    data["scissor"] = {
+        {"x", viewport->scissor.x_orig},
+        {"y", viewport->scissor.y_orig},
+        {"width", viewport->scissor.width},
+        {"height", viewport->scissor.height},
+    };
+    return data;
+}
+
+json cameraSummary(int idx) {
+    json data = {
+        {"index", idx},
+        {"available", false},
+        {"win_id", static_cast<int>(dComIfGp_getCameraWinID(idx))},
+        {"player1_id", static_cast<int>(dComIfGp_getCameraPlayer1ID(idx))},
+        {"player2_id", static_cast<int>(dComIfGp_getCameraPlayer2ID(idx))},
+        {"attention_status", static_cast<unsigned int>(dComIfGp_getCameraAttentionStatus(idx))},
+    };
+
+    camera_process_class* camera = dComIfGp_getCamera(idx);
+    if (camera == nullptr) {
+        data["ptr"] = ptrString(0);
+        data["initialized"] = false;
+        return data;
+    }
+
+    data["available"] = true;
+    data["ptr"] = ptrString(reinterpret_cast<uintptr_t>(camera));
+    data["initialized"] = camera->mCamera.field_0xb0c != 0;
+    if (camera->mCamera.field_0xb0c == 0) {
+        return data;
+    }
+
+    data["near"] = camera->view.near_;
+    data["far"] = camera->view.far_;
+    data["fovy"] = camera->view.fovy;
+    data["aspect"] = camera->view.aspect;
+    data["eye"] = {camera->view.lookat.eye.x, camera->view.lookat.eye.y, camera->view.lookat.eye.z};
+    data["center"] = {camera->view.lookat.center.x, camera->view.lookat.center.y,
+                      camera->view.lookat.center.z};
+    data["distance"] = camera->view.lookat.eye.abs(camera->view.lookat.center);
+    data["body"] = {
+        {"camera_id", static_cast<unsigned int>(camera->mCamera.CameraID())},
+        {"type", camera->mCamera.Type()},
+        {"type_name", camera->mCamera.mCamTypeData != nullptr
+                          ? camera->mCamera.mCamTypeData[camera->mCamera.Type()].name
+                          : ""},
+        {"mode", camera->mCamera.Mode()},
+        {"active", camera->mCamera.Active()},
+        {"state", camera->mCamera.mCurState},
+        {"style", camera->mCamera.mCamStyle},
+        {"style_timer", camera->mCamera.mCurCamStyleTimer},
+        {"trim_height", camera->mCamera.TrimHeight()},
+        {"trim_size", camera->mCamera.mTrimSize},
+        {"gear", camera->mCamera.Gear()},
+        {"window_width", camera->mCamera.mWindowWidth},
+        {"window_height", camera->mCamera.mWindowHeight},
+        {"window_aspect", camera->mCamera.mWindowAspect},
+        {"view_cache_distance", camera->mCamera.iEye().abs(camera->mCamera.iCenter())},
+    };
+    return data;
+}
+
+json collectRenderWindows() {
+    const int windowCount = dComIfGp_getWindowNum();
+    json windows = json::array();
+    for (int i = 0; i < windowCount; i++) {
+        windows.push_back(windowSummary(i));
+    }
+
+    return {
+        {"schema_version", 1},
+        {"split_screen_enabled", dusk::coop::camera::isSplitScreenEnabled()},
+        {"window_count", windowCount},
+        {"secondary_ready", dusk::coop::camera::isSecondaryCameraReady()},
+        {"secondary_requested", dusk::coop::camera::isSecondaryCameraRequested()},
+        {"layout", dusk::coop::camera::getSplitScreenLayout() ==
+                       dusk::coop::camera::SplitScreenLayout::Horizontal
+                       ? "horizontal"
+                       : "vertical"},
+        {"windows", windows},
+    };
+}
+
+json collectCameraState() {
+    return {
+        {"schema_version", 1},
+        {"split_screen_enabled", dusk::coop::camera::isSplitScreenEnabled()},
+        {"window_count", dComIfGp_getWindowNum()},
+        {"secondary_ready", dusk::coop::camera::isSecondaryCameraReady()},
+        {"secondary_requested", dusk::coop::camera::isSecondaryCameraRequested()},
+        {"camera0", cameraSummary(0)},
+        {"camera1", cameraSummary(1)},
     };
 }
 
@@ -927,6 +1090,8 @@ json collectAlinkSecondary() {
 Provider s_providers[] = {
     {"scene.current", 1, "cheap", 30, true, 20, 4096, collectSceneCurrent},
     {"render.stats", 1, "cheap", 30, true, 20, 4096, collectRenderStats},
+    {"render.windows", 1, "cheap", 1, true, 20, 8192, collectRenderWindows},
+    {"camera.state", 1, "cheap", 1, true, 20, 8192, collectCameraState},
     {"player.slots", 1, "cheap", 1, true, 120, 8192, collectPlayerSlots},
     {"input.pad", 1, "cheap", 1, true, 120, 4096, collectInputPad},
     {"attention.state", 1, "medium", 5, true, 60, 12288, collectAttentionState},

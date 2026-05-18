@@ -306,6 +306,8 @@ The smallest useful implementation starts with:
 
 - `scene.current`: stage, room, layer, frame, event/pause/transition basics.
 - `render.stats`: existing Aurora frame/backend stats.
+- `render.windows`: split-screen layout, active render-window count, viewport/scissor rectangles, and camera id per window.
+- `camera.state`: camera 0/1 assignment, readiness, player/window ids, camera mode/type, FOV/aspect, and latest eye/center vectors.
 - `player.slots`: sidecar co-op slots, actor UID/pointer, profile, room, position, angle, speed.
 - `input.pad`: raw pad state and current co-op input snapshot for player slots 0 and 1.
 - `coop.probes`: current secondary ALINK probe flags.
@@ -326,6 +328,8 @@ First profile candidate:
   "providers": [
     {"name": "scene.current", "sample_every_frames": 30},
     {"name": "render.stats", "sample_every_frames": 30},
+    {"name": "render.windows", "sample_every_frames": 1, "emit_on_change": true},
+    {"name": "camera.state", "sample_every_frames": 1, "emit_on_change": true},
     {"name": "player.slots", "sample_every_frames": 1, "emit_on_change": true},
     {"name": "input.pad", "sample_every_frames": 1, "emit_on_change": true},
     {"name": "attention.state", "sample_every_frames": 5, "emit_on_change": true},
@@ -354,7 +358,7 @@ Implemented:
 - `include/dusk/diagnostics.h` and `src/dusk/diagnostics.cpp` define a small Dusk-owned recorder.
 - The hardcoded profile is `coop.secondary_alink.action_mirror`.
 - The recorder emits one stable event envelope with `event_version`, `session_id`, `role`, `frame`, `time_us`, `profile`, `provider`, `provider_schema_version`, `kind`, and `data`.
-- The output path is under Dusk's config path:
+- The output path is under the runtime config path, currently the rebranded Dusklight app path:
   - `diagnostics/latest/`
   - `diagnostics/sessions/<session-id>/local/`
 - Per-session `events.jsonl` is append-only. The convenience `diagnostics/latest/events.jsonl` is reset when a new session starts so captures from previous runs do not mix with the newest manifest.
@@ -366,9 +370,12 @@ Implemented:
 - `diagnostics.stats` is written into `latest.json` as recorder health, not as a normal spam-prone JSONL provider. It reports buffered event count and per-provider written/throttled/oversized counts plus active budgets.
 - The ring buffer keeps the latest 3600 emitted events in memory and is flushed through the same event path.
 - Actor Spawner exposes `Record action mirror diagnostics`, `Flush diagnostics`, and the active output path near the secondary ALINK controls.
-- `Ctrl+F12` is the fast co-op capture setup: enable the diagnostics profile, reset secondary ALINK probes to default, spawn P2 if possible, and show a Dusk toast. Use the manual UI controls for recovery, alternate probe combinations, or flushing.
+- `Ctrl+F12` is the fast co-op capture setup: enable the diagnostics profile and native split-screen prototype, reset secondary ALINK probes to default, spawn P2 if possible, and show a Dusk toast. Use the manual UI controls for recovery, alternate probe combinations, or flushing.
 - The existing ALINK action-mirror helper now also feeds `alink.secondary` structured state whenever it emits the human-readable `secondary action-mirror` log. Its `"phase"` field is informational; identical state is not re-emitted just because the helper saw a new before/after phase.
 - `attention.state` records the shared `dAttention_c` object directly: owner actor, pad number, flags, lock truth, lock/action/check counts and offsets, primary targets, and active lock/action/check list entries with actor metadata. It samples every five frames and intentionally omits empty list slots plus noisy list weights/distances in this profile. This exists because the current shield/target mirror evidence points at shared attention state, not P2 raw input leakage.
+- `camera.state` records camera 0/1 assignment, player ids, window ids, attention status, pointers, initialization readiness, aspect/FOV, eye/center, camera distance, native `dCamera_c` type id/name, mode/state/style, trim, gear, and window dimensions. It samples every frame during the active profile so half-initialized camera processes and P2 camera-behavior differences are visible, but its event key intentionally uses assignment/readiness/mode/style facts, not exact camera vectors, distance, style timers, or window dimensions.
+- `render.windows` records active render-window count, split-screen layout, viewport/scissor rectangles, and camera id per window. It samples every frame during the active profile so bootstrap failures are visible, but emits JSONL only when layout/window facts change.
+- The Actor Spawner split-screen controls expose the current secondary camera readiness/request state so a capture can distinguish "P2 did not spawn" from "camera 1 has not finished init" from "render window 1 did not draw."
 
 Still deferred:
 

@@ -4,6 +4,7 @@
 #include "ImGuiMenuTools.hpp"
 #include "d/actor/d_a_alink.h"
 #include "d/d_com_inf_game.h"
+#include "dusk/coop/camera.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/diagnostics.h"
 #include "dusk/hotkeys.h"
@@ -67,6 +68,7 @@ void tryCoopHotkeySpawnSecondary() {
     }
 
     dusk::diagnostics::setSecondaryAlinkActionMirrorProfileEnabled(true);
+    dusk::coop::camera::setSplitScreenEnabled(true);
     dusk::coop::setSecondaryAlinkProbeFlags(dusk::coop::kDefaultSecondaryAlinkProbeFlags);
 
     daAlink_c* player = (daAlink_c*)dComIfGp_getPlayer(0);
@@ -76,7 +78,8 @@ void tryCoopHotkeySpawnSecondary() {
     }
 
     if (dusk::coop::getPlayer(dusk::coop::PlayerSlot::Secondary) != nullptr) {
-        DuskToast("Co-op diagnostics enabled; secondary Link already exists");
+        dusk::coop::camera::ensureSecondaryCamera();
+        DuskToast("Co-op diagnostics and split screen enabled; secondary Link already exists");
         return;
     }
 
@@ -85,9 +88,9 @@ void tryCoopHotkeySpawnSecondary() {
     s_state.hasResult = true;
 
     if (s_state.lastResult != 0) {
-        DuskToast("Co-op diagnostics enabled; spawned secondary Link");
+        DuskToast("Co-op diagnostics and split screen enabled; spawned secondary Link");
     } else {
-        DuskToast("Co-op diagnostics enabled; secondary Link spawn failed");
+        DuskToast("Co-op diagnostics and split screen enabled; secondary Link spawn failed");
     }
 }
 
@@ -155,7 +158,22 @@ void ImGuiMenuTools::ShowActorSpawner() {
     if (ImGui::Checkbox("Record action mirror diagnostics", &diagnosticsEnabled)) {
         dusk::diagnostics::setSecondaryAlinkActionMirrorProfileEnabled(diagnosticsEnabled);
     }
-    ImGui::TextDisabled("Hotkey: %s enables diagnostics, resets probes, and spawns P2",
+    bool splitScreenEnabled = dusk::coop::camera::isSplitScreenEnabled();
+    if (ImGui::Checkbox("Native split screen", &splitScreenEnabled)) {
+        dusk::coop::camera::setSplitScreenEnabled(splitScreenEnabled);
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Ensure P2 camera")) {
+        if (dusk::coop::camera::ensureSecondaryCamera()) {
+            DuskToast("Secondary camera ready");
+        } else {
+            DuskToast("Secondary camera not ready");
+        }
+    }
+    ImGui::TextDisabled("P2 camera: %s%s",
+                        dusk::coop::camera::isSecondaryCameraReady() ? "ready" : "not ready",
+                        dusk::coop::camera::isSecondaryCameraRequested() ? " (requested)" : "");
+    ImGui::TextDisabled("Hotkey: %s enables diagnostics/split screen, resets probes, and spawns P2",
                         dusk::hotkeys::COOP_SPAWN_SECONDARY_LINK);
     if (diagnosticsEnabled) {
         if (ImGui::SmallButton("Flush diagnostics")) {

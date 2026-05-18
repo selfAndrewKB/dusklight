@@ -50,6 +50,7 @@
 #include <SDL3/SDL_video.h>
 #include "aurora/lib/window.hpp"
 #include "d/actor/d_a_horse.h"
+#include "dusk/coop/camera.h"
 #include "dusk/dusk.h"
 #include "dusk/endian.h"
 #include "dusk/frame_interpolation.h"
@@ -2148,8 +2149,11 @@ int mDoGph_Painter() {
     fapGm_HIO_c::stopCpuTimer("画面キャプチャー用２Ｄ描画まで（レンダリング）");
     #endif
 
-    if (dComIfGp_getWindowNum() != 0) {
-        dDlst_window_c* window_p = dComIfGp_getWindow(0);
+    const int window_num = dComIfGp_getWindowNum();
+    if (window_num != 0) {
+        // Co-op: render each active game window so native camera 1 can draw into its own viewport.
+        auto draw_window = [&](int window_idx) {
+        dDlst_window_c* window_p = dComIfGp_getWindow(window_idx);
         int camera_id = window_p->getCameraID();
         camera_process_class* camera_p = dComIfGp_getCamera(camera_id);
 
@@ -2169,7 +2173,11 @@ int mDoGph_Painter() {
 
             view_port_class* view_port = window_p->getViewPort();
 
-            if (view_port->x_orig != 0.0f || view_port->y_orig != 0.0f) {
+            if (
+#if TARGET_PC
+                !dusk::coop::camera::isSplitScreenEnabled() &&
+#endif
+                (view_port->x_orig != 0.0f || view_port->y_orig != 0.0f)) {
                 view_port_class new_port;
                 new_port.x_orig = 0.0f;
                 new_port.y_orig = 0.0f;
@@ -2182,14 +2190,23 @@ int mDoGph_Painter() {
                 view_port = &new_port;
             }
 
+            auto set_window_viewport = [&]() {
+                GXSetViewport(view_port->x_orig, view_port->y_orig, view_port->width,
+                              view_port->height, view_port->near_z, view_port->far_z);
+                GXSetScissor(view_port->x_orig, view_port->y_orig, view_port->width,
+                             view_port->height);
+            };
+#if TARGET_PC
+            const bool split_screen_active = dusk::coop::camera::isSplitScreenEnabled();
+#else
+            const bool split_screen_active = false;
+#endif
+
             #if DEBUG
             captureScreenSetScissor(&view_port->scissor);
             #endif
 
-            GXSetViewport(view_port->x_orig, view_port->y_orig, view_port->width,
-                          view_port->height, view_port->near_z, view_port->far_z);
-            GXSetScissor(view_port->x_orig, view_port->y_orig, view_port->width,
-                         view_port->height);
+            set_window_viewport();
 
 #ifdef TARGET_PC
             // FRAME INTERP NOTE: Call setViewMtx earlier so that it's interpolated in time for draw_info to use it
@@ -2356,7 +2373,8 @@ int mDoGph_Painter() {
             }
 #endif
 
-            if (!dComIfGp_isPauseFlag()) {
+            // Co-op: the post-effect tail owns fullscreen framebuffer captures; keep it out of split-screen V1.
+            if (!dComIfGp_isPauseFlag() && !split_screen_active) {
                 #if DEBUG
                 fapGm_HIO_c::startCpuTimer();
                 #endif
@@ -2493,13 +2511,14 @@ int mDoGph_Painter() {
                                        dComIfGp_getCameraZoomForcus(camera_id));
                 }
 
-                GXSetViewport(0.0f, 0.0f, FB_WIDTH, FB_HEIGHT, 0.0f, 1.0f);
+                // Co-op: keep screen-space 3D effects inside the active native render window.
+                set_window_viewport();
 
                 Mtx m2;
                 Mtx44 m;
 
                 #if TARGET_PC
-                C_MTXPerspective(m, AREG_F(8) + 60.0f, 1.3571428f, 1.0f, 100000.0f);
+                C_MTXPerspective(m, AREG_F(8) + 60.0f, camera_p->view.aspect, 1.0f, 100000.0f);
                 #else
                 C_MTXPerspective(m, AREG_F(8) + 60.0f, mDoGph_gInf_c::getAspect(), 1.0f, 100000.0f);
                 #endif
@@ -2542,6 +2561,8 @@ int mDoGph_Painter() {
                 #endif
 
                 GX_DEBUG_GROUP(mDoGph_gInf_c::getBloom()->draw);
+                // Co-op: bloom helpers can restore fullscreen GX state; return to this window before tail overlays.
+                set_window_viewport();
                 j3dSys.setViewMtx(camera_p->view.viewMtx);
                 GXSetProjection(camera_p->view.projMtx, GX_PERSPECTIVE);
 
@@ -2598,6 +2619,11 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::stopCpuTimer("カラーフェード描画（レンダリング）");
                 #endif
             }
+        }
+        };
+
+        for (int window_idx = 0; window_idx < window_num; window_idx++) {
+            draw_window(window_idx);
         }
     }
 
@@ -2667,10 +2693,26 @@ int mDoGph_Painter() {
                    mDoGph_gInf_c::getWidthF(), mDoGph_gInf_c::getHeightF(),
                    100000.0f, -100000.0f);
     ortho.setPort();
+#if TARGET_PC
+    auto set_hud_viewport = [&]() {
+        if (dusk::coop::camera::isSplitScreenEnabled()) {
+            view_port_class* view_port = dComIfGp_getWindow(0)->getViewPort();
+            // Co-op: V1 HUD is P1-owned; draw it into P1's window instead of spanning both views.
+            GXSetViewport(view_port->x_orig, view_port->y_orig, view_port->width,
+                          view_port->height, view_port->near_z, view_port->far_z);
+            GXSetScissor(view_port->x_orig, view_port->y_orig, view_port->width,
+                         view_port->height);
+        }
+    };
+    set_hud_viewport();
+#endif
 
     #if DEBUG
     captureScreenSetPort();
     #endif
+#if TARGET_PC
+    set_hud_viewport();
+#endif
 
     if (fapGmHIO_get2Ddraw()) {
         Mtx m4;
@@ -2687,14 +2729,23 @@ int mDoGph_Painter() {
 
         GX_DEBUG_GROUP(dComIfGp_particle_draw2DmenuBack, &draw_info3);
         ortho.setPort();
+#if TARGET_PC
+        set_hud_viewport();
+#endif
 
         GX_DEBUG_GROUP(dComIfGd_draw2DOpa);
         GX_DEBUG_GROUP(drawItem3D);
         ortho.setPort();
+#if TARGET_PC
+        set_hud_viewport();
+#endif
 
         #if DEBUG
         captureScreenSetPort();
         #endif
+#if TARGET_PC
+        set_hud_viewport();
+#endif
 
         GX_DEBUG_GROUP(dComIfGd_draw2DOpaTop);
         GX_DEBUG_GROUP(dComIfGd_draw2DXlu);

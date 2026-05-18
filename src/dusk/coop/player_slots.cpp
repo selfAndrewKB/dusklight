@@ -1,5 +1,6 @@
 #include "dusk/coop/player_slots.h"
 
+#include "dusk/coop/camera.h"
 #include "dusk/logging.h"
 #include "f_op/f_op_actor.h"
 #include "m_Do/m_Do_controller_pad.h"
@@ -46,6 +47,11 @@ void registerPlayer(PlayerSlot slot, fopAc_ac_c* actor) {
         CoopLog.debug("registered player slot {} actor 0x{:x}", index,
                       reinterpret_cast<uintptr_t>(actor));
     }
+
+    if (slot == PlayerSlot::Secondary) {
+        camera::syncSecondaryPlayerAssignment();
+        camera::ensureSecondaryCamera();
+    }
 }
 
 void unregisterPlayer(PlayerSlot slot, const fopAc_ac_c* actor) {
@@ -59,6 +65,9 @@ void unregisterPlayer(PlayerSlot slot, const fopAc_ac_c* actor) {
         registered_actor = nullptr;
         CoopLog.debug("unregistered player slot {} actor 0x{:x}", index,
                       reinterpret_cast<uintptr_t>(actor));
+        if (slot == PlayerSlot::Secondary) {
+            camera::syncSecondaryPlayerAssignment();
+        }
     } else {
         CoopLog.debug("ignored unregister for player slot {} actor 0x{:x}; registered actor is 0x{:x}",
                       index, reinterpret_cast<uintptr_t>(actor),

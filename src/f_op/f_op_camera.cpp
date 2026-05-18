@@ -75,10 +75,11 @@ static int fopCam_Create(void* i_this) {
         a_this->submethod = profile->sub_method;
 
         fopDwTg_Init(&a_this->create_tag, a_this);
-        u32* append = (u32*)fpcM_GetAppend(a_this);
+        fopCamM_prm_class* append = (fopCamM_prm_class*)fpcM_GetAppend(a_this);
 
         if (append != NULL) {
-            fpcM_SetParam(a_this, *append);
+            // Co-op: camera slot 1 needs the typed BE parameter read on PC; raw u32 access turns 1 into 0x01000000.
+            fpcM_SetParam(a_this, append->base.parameters);
         }
     }
 

@@ -29,6 +29,7 @@
 #endif
 
 #if TARGET_PC
+#include "dusk/coop/camera.h"
 #include "dusk/frame_interpolation.h"
 #include "dusk/logging.h"
 #include "dusk/action_bindings.h"
@@ -253,7 +254,13 @@ dCamera_c::dCamera_c(camera_class* i_camera) : mCamParam(0) {
 }
 
 dCamera_c::~dCamera_c() {
-    if (!daPy_py_c::checkPeepEndSceneChange()) {
+    if (
+#if TARGET_PC
+        // Co-op: secondary cameras are view state only and must not overwrite single-player restart state.
+        CameraID() == 0 &&
+#endif
+        !daPy_py_c::checkPeepEndSceneChange())
+    {
         dComIfGs_getTurnRestart().setCameraCtr(mCenter);
         dComIfGs_getTurnRestart().setCameraEye(mEye);
         dComIfGs_getTurnRestart().setCameraUp(mUp);
@@ -318,10 +325,22 @@ static f32 WideTurnSaving = 0.86f + OREG_F(1);
 #endif
 
 inline static u32 check_owner_action(u32 param_0, u32 param_1) {
+#if TARGET_PC
+    if (param_0 != 0) {
+        // Co-op: vanilla has one player-status row; camera 1 keeps controller 1 input but must not read past it.
+        param_0 = 0;
+    }
+#endif
     return dComIfGp_checkPlayerStatus0(param_0, param_1);
 }
 
 inline static u32 check_owner_action1(u32 param_0, u32 param_1) {
+#if TARGET_PC
+    if (param_0 != 0) {
+        // Co-op: vanilla has one player-status row; camera 1 keeps controller 1 input but must not read past it.
+        param_0 = 0;
+    }
+#endif
     return dComIfGp_checkPlayerStatus1(param_0, param_1);
 }
 
@@ -2744,6 +2763,12 @@ void dCamera_c::setView(f32 i_xOrig, f32 i_yOrig, f32 i_width, f32 i_height) {
 
 #if TARGET_PC
 void dCamera_c::ResetView() {
+    if (dusk::coop::camera::isSplitScreenEnabled()) {
+        // Co-op: PC resets the camera's window every Run(); keep the split layout authoritative.
+        dusk::coop::camera::refreshWindowLayout();
+        return;
+    }
+
     setView(0.0f, 0.0f, mDoGph_gInf_c::getWidth(), mDoGph_gInf_c::getHeight());
 }
 #endif
@@ -11070,6 +11095,12 @@ static void preparation(camera_process_class* i_this) {
     dDlst_window_c* window = get_window(camera_id);
     view_port_class* viewport = window->getViewPort();
     f32 aspect = mDoGph_gInf_c::getAspect();
+#if TARGET_PC
+    if (dusk::coop::camera::isSplitScreenEnabled()) {
+        // Co-op: each native camera should use its own viewport aspect in split screen.
+        aspect = dusk::coop::camera::getWindowAspect(camera_id);
+    }
+#endif
 
     camera->SetWindow(viewport->width, viewport->height);
     fopCamM_SetAspect((camera_class*)i_this, aspect);
@@ -11295,8 +11326,9 @@ void widezoom_correction(camera_process_class* i_this, float trim_height) {
 
     trim_width *= viewport->width / FB_WIDTH_BASE;
     trim_height *= viewport->height / FB_HEIGHT_BASE;
-    window->setScissor(trim_width, trim_height, viewport->width - trim_width * 2.0f,
-        viewport->height - trim_height * 2.0f);
+    window->setScissor(viewport->x_orig + trim_width, viewport->y_orig + trim_height,
+                       viewport->width - trim_width * 2.0f,
+                       viewport->height - trim_height * 2.0f);
 }
 #endif
 
@@ -11307,7 +11339,8 @@ static int camera_execute(camera_process_class* i_this) {
         i_this->mCamera.ResetView();
     }
 
-    dComIfGp_offCameraAttentionStatus(0, 0x40);
+    // Co-op: each native camera owns its sidecar attention flags; do not clear only camera 0.
+    dComIfGp_offCameraAttentionStatus(get_camera_id(i_this), 0x40);
 
     if (i_this->mCamera.Active()) {
         i_this->mCamera.Run();
@@ -11423,16 +11456,20 @@ static int camera_draw(camera_process_class* i_this) {
     j3dSys.setViewMtx(process->view.viewMtx);
     cMtx_inverse(process->view.viewMtx, process->view.invViewMtx);
 
-    Z2GetAudience()->setAudioCamera(process->view.viewMtx, process->view.lookat.eye, process->view.lookat.center,
-                                    process->view.fovy, process->view.aspect, getComStat(0x80), camera_id,
-                                    false);
+    // Co-op: Z2Audience stores one audio camera/mic; camera 1 is visual-only for V1.
+    if (camera_id == 0) {
+        Z2GetAudience()->setAudioCamera(process->view.viewMtx, process->view.lookat.eye, process->view.lookat.center,
+                                        process->view.fovy, process->view.aspect, getComStat(0x80), camera_id,
+                                        false);
+    }
 
     dBgS_GndChk gndchk;
     gndchk.OnWaterGrp();
     gndchk.SetPos(&process->view.lookat.eye);
 
     f32 cross = dComIfG_Bgsp().GroundCross(&gndchk);
-    if (cross != -G_CM3D_F_INF) {
+    // Co-op: keep global camera-map/polygon audio state tied to camera 0 until audio is made multi-camera aware.
+    if (camera_id == 0 && cross != -G_CM3D_F_INF) {
         if (dComIfG_Bgsp().ChkGrpInf(gndchk, 0x100)) {
             mDoAud_getCameraMapInfo(6);
         } else {
@@ -11446,7 +11483,7 @@ static int camera_draw(camera_process_class* i_this) {
         spDC.z = process->view.lookat.eye.z;
 
         Z2AudioMgr::getInterface()->setCameraPolygonPos(&spDC);
-    } else {
+    } else if (camera_id == 0) {
         Z2AudioMgr::getInterface()->setCameraPolygonPos(NULL);
     }
 
@@ -11457,6 +11494,15 @@ static int camera_draw(camera_process_class* i_this) {
     cMtx_concatProjView(process->view.projMtx, process->view.viewMtx, process->view.projViewMtx);
 
     body->Draw();
+#if TARGET_PC
+    if (camera_id != 0 && dusk::coop::camera::isSplitScreenEnabled()) {
+        camera_process_class* primary_camera = dComIfGp_getCamera(0);
+        if (primary_camera != NULL) {
+            // Co-op: camera 1 draw updates global GX/J3D camera state; leave camera 0 authoritative.
+            j3dSys.setViewMtx(primary_camera->view.viewMtx);
+        }
+    }
+#endif
     return 1;
 }
 
@@ -11468,7 +11514,14 @@ static int init_phase1(camera_class* i_this) {
     fopCamM_SetPrm1(i_this, dComIfGp_getCameraWinID(camera_id));
     fopCamM_SetPrm2(i_this, dComIfGp_getCameraPlayer1ID(camera_id));
     fopCamM_SetPrm3(i_this, dComIfGp_getCameraPlayer2ID(camera_id));
+#if TARGET_PC
+    // Co-op: camera 1 initializes inside the active split-screen layout; do not blank camera 0's window.
+    if (camera_id == 0 || !dusk::coop::camera::isSplitScreenEnabled()) {
+        dComIfGp_setWindowNum(0);
+    }
+#else
     dComIfGp_setWindowNum(0);
+#endif
 
     i_this->field_0x238 = 0;
     i_this->field_0x22f = 71;
@@ -11509,7 +11562,12 @@ static int init_phase2(camera_class* i_this) {
     }
 
     fopAcM_setStageLayer(player);
+#if TARGET_PC
+    // Co-op: when the secondary camera finishes init, the active render window count is derived by the sidecar.
     dComIfGp_setWindowNum(1);
+#else
+    dComIfGp_setWindowNum(1);
+#endif
 
     JKR_NEW_ARGS (body) dCamera_c(i_this);
 
@@ -11529,7 +11587,12 @@ static int init_phase2(camera_class* i_this) {
     fopCamM_SetNear(i_this, var_f31);
     fopCamM_SetFar(i_this, var_f30);
     fopCamM_SetFovy(i_this, 30.0f);
+#if TARGET_PC
+    // Co-op: split-screen cameras need the aspect of their own viewport, not the fullscreen backend.
+    fopCamM_SetAspect(i_this, dusk::coop::camera::getWindowAspect(camera_id));
+#else
     fopCamM_SetAspect(i_this, mDoGph_gInf_c::getAspect());
+#endif
     fopCamM_SetCenter(i_this, player->current.pos.x, player->current.pos.y, player->current.pos.z);
     fopCamM_SetBank(i_this, 0);
 
@@ -11543,7 +11606,14 @@ static int init_phase2(camera_class* i_this) {
 #endif
     }
     i_this->field_0x238 = 0;
+#if TARGET_PC
+    // Co-op: camera 1 follows P2 but should not reinitialize the global P1 attention object.
+    if (camera_id == 0) {
+        dComIfGp_getAttention()->Init(player, PAD_1);
+    }
+#else
     dComIfGp_getAttention()->Init(player, PAD_1);
+#endif
     return cPhs_NEXT_e;
 }
 
@@ -11565,15 +11635,17 @@ static int camera_create(camera_class* i_this) {
 
 static int camera_delete(camera_process_class* i_this) {
     dCamera_c* camera = &i_this->mCamera;
+    const int camera_id = camera->CameraID();
 
-    if (camera->CameraID() == 0) {
+    if (camera_id == 0) {
 #if DEBUG
         dDbgCamera.Finish();
 #endif
     }
 
     camera->~dCamera_c();
-    dComIfGp_setCamera(0, NULL);
+    // Co-op: deleting camera 1 should clear sidecar camera slot 1, not vanilla slot 0.
+    dComIfGp_setCamera(camera_id, NULL);
     return 1;
 }
 

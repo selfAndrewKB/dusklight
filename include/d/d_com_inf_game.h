@@ -17,6 +17,10 @@
 #include "m_Do/m_Do_graphic.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/coop/camera.h"
+#endif
+
 #include "tracy/Tracy.hpp"
 
 enum dComIfG_ButtonStatus {
@@ -523,67 +527,248 @@ public:
 
     dPa_control_c* getParticle() { return mParticle; }
     dSmplMdl_draw_c* getSimpleModel() { return mSimpleModel; }
-    int getWindowNum() { return mWindowNum; }
+    int getWindowNum() {
+#if TARGET_PC
+        return dusk::coop::camera::getEffectiveWindowNum(mWindowNum);
+#else
+        return mWindowNum;
+#endif
+    }
     void setWindowNum(u8 num) { mWindowNum = num; }
     s8 getLayerOld() { return mLayerOld; }
     s32 checkStatus(u16 flags) { return flags & mStatus; }
     void setStatus(u16 status) { mStatus = status; }
     void onStatus(u16 i_status) { mStatus |= i_status; }
-    dDlst_window_c* getWindow(int i) { return &mWindow[i]; }
+    dDlst_window_c* getWindow(int i) {
+#if TARGET_PC
+        // Co-op: keep the vanilla array size while exposing a Dusk-owned second render window.
+        if (dusk::coop::camera::isExtensionIndex(i)) {
+            return dusk::coop::camera::getWindow(i);
+        }
+#endif
+        return &mWindow[i];
+    }
     void setWindow(int i, f32 param_1, f32 param_2, f32 param_3, f32 param_4, f32 param_5,
                    f32 param_6, int camID, int mode) {
+#if TARGET_PC
+        // Co-op: route camera/window index 1 to sidecar storage instead of resizing game structs.
+        if (dusk::coop::camera::isExtensionIndex(i)) {
+            dusk::coop::camera::setWindow(i, param_1, param_2, param_3, param_4, param_5,
+                                          param_6, camID, mode);
+            return;
+        }
+#endif
         mWindow[i].setViewPort(param_1, param_2, param_3, param_4, param_5, param_6);
         mWindow[i].setScissor(param_1, param_2, param_3, param_4);
         mWindow[i].setCameraID(camID);
         mWindow[i].setMode(mode);
     }
 
-    camera_class* getCamera(int idx) { return mCameraInfo[idx].mCamera; }
-    void setCamera(int i, camera_class* cam) { mCameraInfo[i].mCamera = cam; }
-    int getCameraWinID(int i) { return mCameraInfo[i].field_0x4; }
-    int getCameraPlayer1ID(int i) { return mCameraInfo[i].field_0x5; }
-    int getCameraPlayer2ID(int i) { return mCameraInfo[i].field_0x6; }
-    u32 getCameraAttentionStatus(int i) { return mCameraInfo[i].mCameraAttentionStatus; }
+    camera_class* getCamera(int idx) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(idx)) {
+            return dusk::coop::camera::getCamera(idx);
+        }
+#endif
+        return mCameraInfo[idx].mCamera;
+    }
+    void setCamera(int i, camera_class* cam) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(i)) {
+            dusk::coop::camera::setCamera(i, cam);
+            return;
+        }
+#endif
+        mCameraInfo[i].mCamera = cam;
+    }
+    int getCameraWinID(int i) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(i)) {
+            return dusk::coop::camera::getCameraWinID(i);
+        }
+#endif
+        return mCameraInfo[i].field_0x4;
+    }
+    int getCameraPlayer1ID(int i) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(i)) {
+            return dusk::coop::camera::getCameraPlayer1ID(i);
+        }
+#endif
+        return mCameraInfo[i].field_0x5;
+    }
+    int getCameraPlayer2ID(int i) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(i)) {
+            return dusk::coop::camera::getCameraPlayer2ID(i);
+        }
+#endif
+        return mCameraInfo[i].field_0x6;
+    }
+    u32 getCameraAttentionStatus(int i) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(i)) {
+            return dusk::coop::camera::getCameraAttentionStatus(i);
+        }
+#endif
+        return mCameraInfo[i].mCameraAttentionStatus;
+    }
     BOOL checkCameraAttentionStatus(int i, u32 flag) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(i)) {
+            return dusk::coop::camera::checkCameraAttentionStatus(i, flag);
+        }
+#endif
         return mCameraInfo[i].mCameraAttentionStatus & flag;
     }
-    void setCameraAttentionStatus(int i, u32 flag) { mCameraInfo[i].mCameraAttentionStatus = flag; }
-    void onCameraAttentionStatus(int i, u32 flag) { mCameraInfo[i].mCameraAttentionStatus |= flag; }
+    void setCameraAttentionStatus(int i, u32 flag) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(i)) {
+            dusk::coop::camera::setCameraAttentionStatus(i, flag);
+            return;
+        }
+#endif
+        mCameraInfo[i].mCameraAttentionStatus = flag;
+    }
+    void onCameraAttentionStatus(int i, u32 flag) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(i)) {
+            dusk::coop::camera::onCameraAttentionStatus(i, flag);
+            return;
+        }
+#endif
+        mCameraInfo[i].mCameraAttentionStatus |= flag;
+    }
     void offCameraAttentionStatus(int i, u32 flag) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(i)) {
+            dusk::coop::camera::offCameraAttentionStatus(i, flag);
+            return;
+        }
+#endif
         mCameraInfo[i].mCameraAttentionStatus &= ~flag;
     }
     void setCameraInfo(int camIdx, camera_class* p_cam, int param_2, int param_3, int param_4) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(camIdx)) {
+            dusk::coop::camera::setCameraInfo(camIdx, p_cam, param_2, param_3, param_4);
+            return;
+        }
+#endif
         mCameraInfo[camIdx].mCamera = p_cam;
         mCameraInfo[camIdx].field_0x4 = param_2;
         mCameraInfo[camIdx].field_0x5 = param_3;
         mCameraInfo[camIdx].field_0x6 = param_4;
         setCameraAttentionStatus(camIdx, 0);
     }
-    f32 getCameraZoomScale(int i_no) { return mCameraInfo[i_no].mCameraZoomScale; }
-    void setCameraZoomScale(int i_no, f32 i_scale) { mCameraInfo[i_no].mCameraZoomScale = i_scale; }
-    f32 getCameraZoomForcus(int i_no) { return mCameraInfo[i_no].mCameraZoomForcus; }
+    f32 getCameraZoomScale(int i_no) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(i_no)) {
+            return dusk::coop::camera::getCameraZoomScale(i_no);
+        }
+#endif
+        return mCameraInfo[i_no].mCameraZoomScale;
+    }
+    void setCameraZoomScale(int i_no, f32 i_scale) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(i_no)) {
+            dusk::coop::camera::setCameraZoomScale(i_no, i_scale);
+            return;
+        }
+#endif
+        mCameraInfo[i_no].mCameraZoomScale = i_scale;
+    }
+    f32 getCameraZoomForcus(int i_no) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(i_no)) {
+            return dusk::coop::camera::getCameraZoomForcus(i_no);
+        }
+#endif
+        return mCameraInfo[i_no].mCameraZoomForcus;
+    }
     void setCameraZoomForcus(int i_no, f32 i_focus) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(i_no)) {
+            dusk::coop::camera::setCameraZoomForcus(i_no, i_focus);
+            return;
+        }
+#endif
         mCameraInfo[i_no].mCameraZoomForcus = i_focus;
     }
-    const char* getCameraParamFileName(int i) { return mCameraInfo[i].mCameraParamFileName; }
-    void setCameraParamFileName(int i, char* name) { mCameraInfo[i].mCameraParamFileName = name; }
+    const char* getCameraParamFileName(int i) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(i)) {
+            return dusk::coop::camera::getCameraParamFileName(i);
+        }
+#endif
+        return mCameraInfo[i].mCameraParamFileName;
+    }
+    void setCameraParamFileName(int i, char* name) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(i)) {
+            dusk::coop::camera::setCameraParamFileName(i, name);
+            return;
+        }
+#endif
+        mCameraInfo[i].mCameraParamFileName = name;
+    }
     void saveCameraPosition(int i, cXyz* i_pos, cXyz* i_target, f32 i_fovy, s16 i_bank) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(i)) {
+            dusk::coop::camera::saveCameraPosition(i, i_pos, i_target, i_fovy, i_bank);
+            return;
+        }
+#endif
         mCameraInfo[i].mCamInfo.mCameraPos = *i_pos;
         mCameraInfo[i].mCamInfo.mCameraTarget = *i_target;
         mCameraInfo[i].mCamInfo.mCameraFovy = i_fovy;
         mCameraInfo[i].mCamInfo.mCameraBank = i_bank;
     }
     void loadCameraPosition(int i, cXyz* o_pos, cXyz* o_target, f32* o_fovy, s16* o_bank) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(i)) {
+            dusk::coop::camera::loadCameraPosition(i, o_pos, o_target, o_fovy, o_bank);
+            return;
+        }
+#endif
         *o_pos = mCameraInfo[i].mCamInfo.mCameraPos;
         *o_target = mCameraInfo[i].mCamInfo.mCameraTarget;
         *o_fovy = mCameraInfo[i].mCamInfo.mCameraFovy;
         *o_bank = mCameraInfo[i].mCamInfo.mCameraBank;
     }
 
-    fopAc_ac_c* getPlayer(int idx) { return mPlayerInfo[idx].mpPlayer; }
-    void setPlayer(int i, fopAc_ac_c* player) { mPlayerInfo[i].mpPlayer = player; }
-    int getPlayerCameraID(int i) { return mPlayerInfo[i].mCameraID; }
+    fopAc_ac_c* getPlayer(int idx) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(idx)) {
+            return dusk::coop::camera::getPlayer(idx);
+        }
+#endif
+        return mPlayerInfo[idx].mpPlayer;
+    }
+    void setPlayer(int i, fopAc_ac_c* player) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(i)) {
+            dusk::coop::camera::setPlayer(i, player);
+            return;
+        }
+#endif
+        mPlayerInfo[i].mpPlayer = player;
+    }
+    int getPlayerCameraID(int i) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(i)) {
+            return dusk::coop::camera::getPlayerCameraID(i);
+        }
+#endif
+        return mPlayerInfo[i].mCameraID;
+    }
     void setPlayerInfo(int i, fopAc_ac_c* player, int cam) {
+#if TARGET_PC
+        if (dusk::coop::camera::isExtensionIndex(i)) {
+            dusk::coop::camera::setPlayerInfo(i, player, cam);
+            return;
+        }
+#endif
         mPlayerInfo[i].mpPlayer = player;
         mPlayerInfo[i].mCameraID = cam;
     }

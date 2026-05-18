@@ -1,6 +1,6 @@
 # Co-op Secondary ALINK Item Ownership Plan
 
-This is the active co-op milestone after `docs/coop-secondary-alink-input-routing-plan.md`.
+This was the active co-op milestone after `docs/coop-secondary-alink-input-routing-plan.md`. The main item/action ownership pass is now complete enough to move on; the current active milestone is `docs/coop-native-split-screen-camera-plan.md`.
 
 ## Purpose
 
@@ -33,7 +33,7 @@ Keep P2 basic input working while classifying and fixing the first item/action o
 - Slingshot showed a create-time owner variant of the bow fix. P2 sling stones were visible only when P1 also had slingshot equipped. Letting secondary slingshot set the legacy global slingshot status was rejected because it reintroduced P1 first-person/facing leakage. The current containment keeps secondary bow/sling status suppressed and gives `daArrow_c` a pending owner during `fopAcM_fastCreate()` so sling-stone launch math can resolve P2 before `makeSlingStone()` returns. User validation confirmed P2 slingshot visibility, direction, and camera behavior are fixed.
 - Iron Boots showed an equipment-model visibility variant. Equipping P2 boots hid P1's feet, then skipping only secondary shape changes let P1 boots hide P2's regular legs. The current containment skips the shared feet/leg `J3DShape::show()/hide()` calls for all PC ALINKs until per-player equipment model data exists. The follow-up audio patch routes heavy-boot footstep selection through the owning `Z2CreatureLink` instead of global `Z2GetLink()`. User validation confirmed cross-player leg visibility and P1/P2 heavy boot sounds are fixed.
 - Item-specific `alink.secondary` blocks are gated to actual item context. `copy_rod`, `bomb`, and any future `bow` or `arrow` block should be absent during unrelated item tests; generic `equip_item`, `item_actor`, `ride_actor`, and `proc_name` remain always available for current ALINK state.
-- The remaining failures are item/action ownership failures, not the original "can P2 receive input?" problem.
+- The remaining known item-adjacent failure is P2 bomb pickup/object pickup, which is likely part of the broader object interaction/carry lane rather than this first item/action owner-routing pass.
 
 ## Working Assumptions
 

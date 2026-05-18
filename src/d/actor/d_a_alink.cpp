@@ -54,6 +54,7 @@
 
 #if TARGET_PC
 #include "dusk/action_bindings.h"
+#include "dusk/coop/camera.h"
 #include "dusk/coop/input.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/diagnostics.h"
@@ -5364,7 +5365,16 @@ int daAlink_c::create() {
 #endif
 
         mAttention = dComIfGp_getAttention();
+#if TARGET_PC
+        // Co-op: secondary ALINK uses camera 1 only after the native split-screen camera exists.
+        const bool use_secondary_camera =
+            coop_secondary && dusk::coop::camera::isSplitScreenEnabled() &&
+            dusk::coop::camera::isSecondaryCameraReady();
+        field_0x317c = use_secondary_camera ? dComIfGp_getPlayerCameraID(1) :
+                                              dComIfGp_getPlayerCameraID(0);
+#else
         field_0x317c = dComIfGp_getPlayerCameraID(0);
+#endif
 
         playerInit();
 #if TARGET_PC
@@ -18437,7 +18447,18 @@ int daAlink_c::execute() {
         mSwordUpTimer--;
     }
 
+#if TARGET_PC
+    // Co-op: keep secondary movement/aiming on camera 1 once it exists, with a safe camera 0 fallback.
+    const bool use_secondary_camera =
+        dusk::coop::isSecondaryPlayerPrototype(this) &&
+        dusk::coop::camera::isSplitScreenEnabled() &&
+        dusk::coop::camera::isSecondaryCameraReady();
+    const int camera_id = use_secondary_camera ? dComIfGp_getPlayerCameraID(1) :
+                                                 dComIfGp_getPlayerCameraID(0);
+    field_0x317c = camera_id;
+#else
     field_0x317c = dComIfGp_getPlayerCameraID(0);
+#endif
     field_0x3510 = current.pos;
 
     if (checkMagneBootsOn()) {

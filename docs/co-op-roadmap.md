@@ -59,7 +59,9 @@ Runtime evidence showed that secondary ALINK attention could be gated successful
 
 The follow-up duplication audit is documented in `docs/coop-alink-duplication-audit-plan.md`. It confirmed scoped model-data ownership and shared attention lock as the first major singleton hazards. The input-routing milestone in `docs/coop-secondary-alink-input-routing-plan.md` then confirmed that secondary ALINK can consume controller 2 input for movement, rolling, and a basic combat swing.
 
-The current plan is `docs/coop-secondary-alink-item-ownership-plan.md`. Fishing hook and boomerang tests show the next blocker is item/action ownership: visible held-item state, return/catch state, and item availability still route through P1/global state in some item paths. A proxy remains a fallback or temporary diagnostic tool, not the preferred plan by default.
+The first item/action ownership pass is documented in `docs/coop-secondary-alink-item-ownership-plan.md`. Boomerang, fishing rod, Dominion Rod, bow/arrow, Spinner, bombs, slingshot, and Iron Boots all confirmed the same broad lesson: item actors often know their concrete owning ALINK, but still reach through P1/global helpers for matrices, counters, camera/status, sound, or lifecycle cleanup. Narrow owner-routing fixes made those item families usable for P2 without regressing P1.
+
+The current active plan is `docs/coop-native-split-screen-camera-plan.md`. Shared camera is now the testing bottleneck: P2 can do enough that keeping both players inside P1's view makes further camera, object interaction, AI, and world-acknowledgement work slower than necessary. The next milestone should use native `dCamera_c` and render-window concepts, with a Dusk-owned extension layer for slot 1 rather than a hand-written camera imitation.
 
 ## Design Principles
 
@@ -202,27 +204,24 @@ Acceptance:
 
 Why this phase matters: it tests the largest unknown before networking or enemy sync are attempted.
 
-### Phase 4: Camera And View Policy
+### Phase 4: Native Split-Screen Camera
 
-Goal: keep the game playable with two local actors without pretending every camera mode is solved.
+Goal: keep the game playable and testable with two local actors by giving P1 and P2 real native cameras and render viewports.
 
-The current player camera path is singleton-shaped: `mCameraInfo[1]`, `dComIfGp_getPlayerCameraID(0)`, and `field_0x317c` in `daAlink_c`. Many actors and bosses directly fetch player camera 0. Do not try to solve split-screen first.
+The original camera path is still singleton-shaped in storage: `mWindow[1]`, `mCameraInfo[1]`, `mPlayerInfo[1]`, and many camera-0 call sites. However, the code also exposes indexed camera/window/player accessors and a camera manager table that can represent more than one camera process. The current plan is to preserve original layout for slot 0 and add a Dusk-owned extension layer for slot 1 behind the existing accessors.
 
-Start with a shared camera policy:
-
-- Player 1 owns the actual game camera.
-- Player 2 is tethered, warped, or constrained near player 1.
-- If player 2 drifts beyond a configured debug threshold, snap or soft-warp them near player 1.
-
-Only after the local vertical slice is fun should split-screen be considered. Split-screen likely requires deeper viewport/window work because `dComIfG_play_c` currently has `mWindow[1]`, `mCameraInfo[1]`, and a current view/viewport set.
+Do not build a cheap camera imitation. Use native `dCamera_c`, camera process creation, and `dDlst_window_c` render windows where possible. Event cameras, boss cameras, message cameras, cutscene cameras, HUD layout, fades, and restart/save camera state are diagnostic targets first, not V1 fixes.
 
 Acceptance:
 
-- Two local actors remain visible and controllable in a simple field or test room.
-- Camera behavior is predictable and does not fight player 1's existing camera modes.
-- Camera changes are isolated; boss cameras, cutscene cameras, and event cameras still target primary player unless explicitly converted.
+- Split-screen disabled preserves normal P1 camera/rendering.
+- Split-screen enabled creates or assigns camera 1 to P2 and render window 1 to camera 1.
+- The painter can draw two active render windows during normal field gameplay.
+- P1 and P2 can move apart and remain visible through their own cameras.
+- HUD/fullscreen overlays may remain P1/global for the first milestone.
+- Camera 0 call sites encountered during validation are classified rather than blindly replaced.
 
-Why this phase matters: camera scope can consume the whole project. A shared-camera first slice creates playable proof without multiplying rendering complexity.
+Why this phase matters: shared camera is now the test bottleneck. A native split-screen foundation makes future camera, object interaction, AI, and online-readiness work easier without pretending every special camera mode is already solved.
 
 ### Phase 5: Local Co-op Gameplay Slice
 
