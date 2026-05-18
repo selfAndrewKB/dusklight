@@ -217,6 +217,18 @@ inline static fopAc_ac_c* get_player_actor(camera_class* i_camera) {
     return dComIfGp_getPlayer(dComIfGp_getCameraPlayer1ID(get_camera_id(i_camera)));
 }
 
+inline static int get_owner_room_no(fopAc_ac_c* i_player) {
+#if TARGET_PC
+    // Co-op: secondary cameras should select room camera data from their own player actor.
+    if (i_player != NULL) {
+        return fopAcM_GetRoomNo(i_player);
+    }
+#else
+    UNUSED(i_player);
+#endif
+    return dComIfGp_roomControl_getStayNo();
+}
+
 inline static dDlst_window_c* get_window(int param_0) {
     return dComIfGp_getWindow(dComIfGp_getCameraWinID(param_0));
 }
@@ -390,7 +402,7 @@ void dCamera_c::initialize(camera_class* i_camera, fopAc_ac_c* i_player, u32 i_c
     initPad();
     mFocusLine.Init();
 
-    mRoomCtx.mRoomNo = dComIfGp_roomControl_getStayNo();
+    mRoomCtx.mRoomNo = get_owner_room_no(mpPlayerActor);
     const char* stage_name = dComIfGp_getStartStageName();
     if (strcmp(stage_name, "D_MN01A") == 0) {
         Stage = 0x68;
@@ -521,7 +533,7 @@ void dCamera_c::initialize(camera_class* i_camera, fopAc_ac_c* i_player, u32 i_c
     }
 
     int sp108 = 0xFF;
-    s32 sp10C = dComIfGp_roomControl_getStayNo();
+    s32 sp10C = get_owner_room_no(mpPlayerActor);
 
     dStage_roomDt_c* room_dt = dComIfGp_roomControl_getStatusRoomDt(sp10C);
     if (room_dt != NULL) {
@@ -1092,7 +1104,7 @@ bool dCamera_c::Run() {
     clrFlag(0x10168C21);
     clrFlag(0x10);
     mpAuxTargetActor1 = mpAuxTargetActor2 = NULL;
-    s32 stay_no = dComIfGp_roomControl_getStayNo();
+    s32 stay_no = get_owner_room_no(mpPlayerActor);
     if (stay_no != mRoomCtx.mRoomNo) {
         onRoomChange(stay_no);
     }
@@ -1651,7 +1663,7 @@ void dCamera_c::setStageMapToolData() {
 }
 
 void dCamera_c::setMapToolData() {
-    int room_no = dComIfGp_roomControl_getStayNo();
+    int room_no = get_owner_room_no(mpPlayerActor);
     stage_camera_class* camera = dComIfGp_getRoomCamera(room_no);
     stage_arrow_class* arrow = dComIfGp_getRoomArrow(room_no);
 
@@ -2025,7 +2037,7 @@ s32 dCamera_c::nextType(s32 i_curType) {
                     next_type = specialType[CAM_TYPE_WATER_SURF];
                     var_r28 = 0x77;
                 } else if (mBG.field_0xc0.field_0x3c != 0xff) {
-                    s32 stayNo = dComIfGp_roomControl_getStayNo();
+                    s32 stayNo = get_owner_room_no(mpPlayerActor);
                     setRoomMapToolData(&mRoomMapTool, mBG.field_0xc0.field_0x3c, stayNo);
                     s32 type = GetCameraTypeFromToolData(&mRoomMapTool.mCamData);
                     if (type != 0xff) {

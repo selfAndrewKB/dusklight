@@ -7,6 +7,10 @@
 #include "d/d_com_inf_game.h"
 #include "d/d_debug_viewer.h"
 #include "d/d_s_play.h"
+#if TARGET_PC
+#include "dusk/coop/camera.h"
+#include "dusk/coop/player_slots.h"
+#endif
 
 namespace {
 bool always_true() {
@@ -101,6 +105,58 @@ bool is_player_in_water() {
 
 bool is_player_hugging_eal() {
     return Player->checkOctaIealHang();
+}
+
+bool check_tag_area(daTag_Cam_c* tag, cXyz pos) {
+    bool hit = false;
+
+    if (tag->getAreaNoChk()) {
+        hit = true;
+    } else if (tag->getAreaType() == 0) {
+        if (tag->home.angle.y != 0) {
+            mDoMtx_stack_c::transS(tag->current.pos);
+            mDoMtx_stack_c::YrotM(-tag->home.angle.y);
+
+            cXyz offset = pos - tag->current.pos;
+            mDoMtx_stack_c::multVec(&offset, &pos);
+        }
+
+        if (tag->mBoundsLo.x <= pos.x && pos.x <= tag->mBoundsHi.x &&
+            tag->mBoundsLo.y <= pos.y && pos.y <= tag->mBoundsHi.y &&
+            tag->mBoundsLo.z <= pos.z && pos.z <= tag->mBoundsHi.z)
+        {
+            hit = true;
+        }
+    } else {
+        f32 temp_f31 = tag->current.pos.x - pos.x;
+        f32 temp_f30 = tag->current.pos.z - pos.z;
+        f32 sq_dist = std::sqrt(temp_f31 * temp_f31 + temp_f30 * temp_f30);
+        if (sq_dist < tag->scale.x && tag->mBoundsLo.y <= pos.y && pos.y <= tag->mBoundsHi.y) {
+            hit = true;
+        }
+    }
+
+    return hit;
+}
+
+bool should_apply_tag_camera(daTag_Cam_c* tag, u16* priority) {
+    *priority = tag->getPrio();
+    u8 condition = tag->getCondition();
+    bool set_camera = tag->mCheckFunc();
+
+    if (condition == 0xFF) {
+#if PLATFORM_SHIELD
+        *priority |= (u16)0x8000;
+#else
+        *priority |= 0x8000;
+#endif
+    } else if (condition == 0xFA) {
+        if (dCam_getBody()->CheckFlag(0x8000000)) {
+            set_camera = true;
+        }
+    }
+
+    return set_camera;
 }
 }  // namespace
 
@@ -225,55 +281,38 @@ int daTag_Cam_c::execute() {
             pos.y -= 80.0f;
         }
 
-        if (getAreaNoChk()) {
-            var_r29 = true;
-        } else if (getAreaType() == 0) {
-            if (home.angle.y != 0) {
-                mDoMtx_stack_c::transS(current.pos);
-                mDoMtx_stack_c::YrotM(-home.angle.y);
-
-                cXyz sp84 = pos - current.pos;
-                mDoMtx_stack_c::multVec(&sp84, &pos);
-            }
-
-            if (mBoundsLo.x <= pos.x && pos.x <= mBoundsHi.x && mBoundsLo.y <= pos.y &&
-                pos.y <= mBoundsHi.y && mBoundsLo.z <= pos.z && pos.z <= mBoundsHi.z)
-            {
-                var_r29 = true;
-            }
-        } else {
-            f32 temp_f31 = current.pos.x - pos.x;
-            f32 temp_f30 = current.pos.z - pos.z;
-            f32 sq_dist = std::sqrt(temp_f31 * temp_f31 + temp_f30 * temp_f30);
-            if (sq_dist < scale.x && mBoundsLo.y <= pos.y && pos.y <= mBoundsHi.y) {
-                var_r29 = true;
-            }
-        }
+        var_r29 = check_tag_area(this, pos);
     }
 
     if (var_r29) {
-        u16 priority = getPrio();
-        u8 condition = getCondition();
-        bool set_camera = mCheckFunc();
-
-        if (condition == 0xFF) {
-#if PLATFORM_SHIELD
-            priority |= (u16)0x8000;
-#else
-            priority |= 0x8000;
-#endif
-        } else if (condition == 0xFA) {
-            if (dCam_getBody()->CheckFlag(0x8000000)) {
-                set_camera = true;
-            }
-        }
-
-        if (set_camera) {
+        u16 priority;
+        if (should_apply_tag_camera(this, &priority)) {
             u8 cam_id = getCameraId();
             u8 rail_id = getRailID();
             dCam_getBody()->SetTagData(this, cam_id, priority, rail_id);
         }
     }
+
+#if TARGET_PC
+    if (dusk::coop::camera::isSplitScreenEnabled() && dusk::coop::camera::isSecondaryCameraReady()) {
+        fopAc_ac_c* secondary = dusk::coop::getPlayer(dusk::coop::PlayerSlot::Secondary);
+        camera_process_class* camera = dComIfGp_getCamera(dusk::coop::camera::kSecondaryCameraId);
+        if (secondary != NULL && camera != NULL && fopAcM_GetRoomNo(this) == fopAcM_GetRoomNo(secondary) &&
+            check_tag_area(this, secondary->current.pos))
+        {
+            daAlink_c* previous_player = Player;
+            // Co-op: native camera tags are P1-global, so split screen evaluates the same tag for P2.
+            Player = static_cast<daAlink_c*>(secondary);
+            u16 priority;
+            if (should_apply_tag_camera(this, &priority)) {
+                u8 cam_id = getCameraId();
+                u8 rail_id = getRailID();
+                camera->mCamera.SetTagData(this, cam_id, priority, rail_id);
+            }
+            Player = previous_player;
+        }
+    }
+#endif
 
     return 1;
 }

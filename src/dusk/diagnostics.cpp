@@ -695,6 +695,9 @@ json windowSummary(int idx) {
     return data;
 }
 
+json cameraMapSummary(dCamera_c& camera);
+json cameraToolSummary(dCamera_c& camera, dCamMapToolData const& tool);
+
 json cameraSummary(int idx) {
     json data = {
         {"index", idx},
@@ -729,6 +732,10 @@ json cameraSummary(int idx) {
     data["distance"] = camera->view.lookat.eye.abs(camera->view.lookat.center);
     data["body"] = {
         {"camera_id", static_cast<unsigned int>(camera->mCamera.CameraID())},
+        {"owner_room", camera->mCamera.mpPlayerActor != nullptr
+                           ? static_cast<int>(fopAcM_GetRoomNo(camera->mCamera.mpPlayerActor))
+                           : -1},
+        {"global_stay_room", static_cast<int>(dComIfGp_roomControl_getStayNo())},
         {"type", camera->mCamera.Type()},
         {"type_name", camera->mCamera.mCamTypeData != nullptr
                           ? camera->mCamera.mCamTypeData[camera->mCamera.Type()].name
@@ -745,6 +752,41 @@ json cameraSummary(int idx) {
         {"window_height", camera->mCamera.mWindowHeight},
         {"window_aspect", camera->mCamera.mWindowAspect},
         {"view_cache_distance", camera->mCamera.iEye().abs(camera->mCamera.iCenter())},
+        {"map", cameraMapSummary(camera->mCamera)},
+    };
+    return data;
+}
+
+json cameraToolSummary(dCamera_c& camera, dCamMapToolData const& tool) {
+    json data = {
+        {"camera_index", tool.mCameraIndex},
+        {"arrow_index", tool.mArrowIndex},
+        {"flags", tool.mFlags},
+        {"priority", tool.mPriority},
+        {"path_id", tool.mPathId},
+        {"actor", ptrString(reinterpret_cast<uintptr_t>(tool.mpActor))},
+    };
+    if (tool.mCameraIndex != 0xFF) {
+        data["type_name"] = tool.mCamData.m_cam_type;
+        data["resolved_type"] = static_cast<unsigned int>(tool.mCamData.field_0x16);
+        if (camera.mCamTypeData != nullptr && tool.mCamData.field_0x16 < camera.mCamTypeNum) {
+            data["resolved_type_name"] = camera.mCamTypeData[tool.mCamData.field_0x16].name;
+        }
+    }
+    return data;
+}
+
+json cameraMapSummary(dCamera_c& camera) {
+    json data = {
+        {"map_tool_type", camera.mMapToolType},
+        {"map_tool_type_name", camera.mCamTypeData != nullptr && camera.mMapToolType >= 0 &&
+                                   camera.mMapToolType < camera.mCamTypeNum
+                                   ? camera.mCamTypeData[camera.mMapToolType].name
+                                   : ""},
+        {"room_tool", cameraToolSummary(camera, camera.mRoomMapTool)},
+        {"stage_tool", cameraToolSummary(camera, camera.mStageCamTool)},
+        {"default_room_tool", cameraToolSummary(camera, camera.mDefRoomCamTool)},
+        {"tag_tool", cameraToolSummary(camera, camera.mTagCamTool)},
     };
     return data;
 }
@@ -1242,7 +1284,13 @@ void tick(u32 frame) {
             continue;
         }
 
-        emitProviderEvent(provider, "snapshot", data);
+        json eventData = data;
+        if (std::string(provider.name) == "camera.state") {
+            eventData["event_context"] = {
+                {"player_slots", collectPlayerSlots()},
+            };
+        }
+        emitProviderEvent(provider, "snapshot", eventData);
     }
     updateLatestFileIfDue(false);
 }
