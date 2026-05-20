@@ -84,7 +84,7 @@ struct EnemyTargetContext {
 
 struct EnemyTargetResult {
     PlayerSlot slot = PlayerSlot::Invalid;
-    fopAc_ac_c* actor = nullptr;
+    fopAc_ac_c* localActor = nullptr;
     f32 distance = 0.0f;
     f32 distanceXZ = 0.0f;
     s16 angleY = 0;
@@ -100,9 +100,21 @@ void clearAllEnemyTargets(fopAc_ac_c* observer);
 }  // namespace dusk::coop
 ```
 
+`EnemyTargetResult::slot` is the durable target identity. `localActor` is only the local process pointer resolved from that slot so original enemy code can keep using actor position, distance, and angle helpers. Future host-authoritative networking should replicate slot/scope/reason and re-resolve `localActor` locally; do not treat the pointer as portable target truth.
+
 The selected-target state helpers should be added only as needed; they are intentionally not part of V1 so wolf/guard/speed checks are not mislabeled as permanently primary-player-only or implemented speculatively.
 
 Retention is expressed as simulation seconds, not frame counts. V1 uses `retainSeconds = 2.0f` by default and advances elapsed retention with `frameDelta * dusk::game_clock::sim_pace()`. Do not use raw wall-clock time or presentation frame count for gameplay target retention; `std::chrono` remains for diagnostics timestamps only.
+
+`enemy_targeting` should not become a catch-all for every P1 singleton read. When a conversion finds a related but non-targeting read, route it into the correct future API family:
+
+- selected-target state helpers for facts about the chosen target, such as form, speed, facing, guard, horse, swim, or damage-wait state;
+- damage-owner helpers for facts about the player/weapon that actually struck an enemy, such as cut type and hit reaction ownership;
+- caught/grab-owner helpers for a player currently captured, carried, eaten, or otherwise retained by an enemy;
+- collision-owner helpers for contact-driven actors with no explicit search/chase targeting surface;
+- render/visibility or split-screen culling helpers for distance checks that only gate model calculation or presentation work.
+
+Leaving such reads conservative during an enemy-targeting patch is intentional when the owning API does not exist yet. Add them to the appropriate future pass instead of faking them with nearest-player guesses.
 
 ## V1 Policy
 
@@ -185,7 +197,7 @@ Bokoblin is also the first validation surface for the foundation rewrite:
 - attack commitment freezes the active combat target.
 - wake/search checks use immediate acquisition on the same combat owner so stale retention cannot suppress a closer eligible player.
 
-After Bokoblin validates, port the same pattern to Tektite (`src/d/actor/d_a_e_tt.cpp`, `E_TT`). Tektite is the first non-Bokoblin proof because its search/chase/attack callsites are compact and mostly isolated. Pick one accessible compact ground enemy after that (`E_KG`, `E_BS`, or `E_SH`) before tackling target-state-sensitive families such as White Wolfos.
+Tektite (`src/d/actor/d_a_e_tt.cpp`, `E_TT`) is the first non-Bokoblin proof because its search/chase/attack callsites are compact and mostly isolated. Its first pass uses the same actor-local helper pattern for `checkPlayerSearch`, `executeChase`, `executeAttack`, and `executeOutRange`, while leaving damage/cut-type, first-attack horse/speed state, and culling reads conservative. Those conservative reads are not abandoned: damage/cut-type belongs to the future damage-owner pass, first-attack horse/speed belongs to selected-target state helpers, and culling belongs to render/visibility or split-screen culling work. Pick one accessible compact ground enemy after Tektite validation (`E_KG`, `E_BS`, or `E_SH`) before tackling target-state-sensitive families such as White Wolfos.
 
 ## Future Policy Knobs
 
@@ -222,6 +234,7 @@ This prevents designing the policy exclusively around Bokoblin while still keepi
 - Start an attack and confirm the target is retained through the committed attack/follow-through path.
 - Flush diagnostics and confirm `enemy.targeting` explains selected target, reason, committed hint, and candidate facts.
 - Confirm `events.jsonl` does not grow from distance/angle drift while players stand still.
+- For Tektite, confirm P2 can wake, chase, face, and be attacked by Tektites without changing the conservative first-attack/damage-owner paths.
 
 ## Implementation Progress
 
@@ -236,4 +249,5 @@ This prevents designing the policy exclusively around Bokoblin while still keepi
 - [x] Add callsite modes so Bokoblin wake/search gates can immediately acquire without creating separate retention state.
 - [x] Make committed attack frames pause sticky retention instead of refreshing the post-attack window.
 - [x] Add latest-only nearest-vs-selected diagnostics for retention mismatch analysis.
-- [ ] Convert Tektite in a separate follow-up patch after Bokoblin validates.
+- [x] Convert Tektite in a separate follow-up patch after Bokoblin validates.
+- [ ] Validate Tektite in game and inspect `enemy.targeting` labels `e_tt.search`, `e_tt.chase`, `e_tt.attack`, and `e_tt.out_range`.

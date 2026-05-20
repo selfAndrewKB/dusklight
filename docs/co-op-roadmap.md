@@ -12,7 +12,7 @@ The first real target is two-player co-op. A design that supports more slots lat
 
 The initial co-op mode should share campaign state, save data, quest flags, rupees, most inventory, scene transitions, and story progress. Per-player inventory, independent scene travel, independent cutscenes, and independent save files are later design choices, not the baseline.
 
-The online model should be host-authoritative. A host-authoritative model means one process owns the truth for game state; clients send input or action commands, and the host decides what actually happens. This avoids relying on deterministic lockstep across machines. Deterministic lockstep means every machine simulates the same game from the same inputs and must stay bit-identical; this codebase was not built around that constraint.
+The online model should be host-authoritative, effectively an authoritative server model. The first server can be the host player's Dusk process, but the boundary should stay server-shaped: clients send input or action commands, the host/server owns game truth, and clients render replicated results. This avoids relying on deterministic lockstep or peer/client-relay across machines. Deterministic lockstep means every machine simulates the same game from the same inputs and must stay bit-identical; this codebase was not built around that constraint.
 
 ## Minimal Planning Practice
 
@@ -61,7 +61,7 @@ The follow-up duplication audit is documented in `docs/coop-alink-duplication-au
 
 The first item/action ownership pass is documented in `docs/coop-secondary-alink-item-ownership-plan.md`. Boomerang, fishing rod, Dominion Rod, bow/arrow, Spinner, bombs, slingshot, and Iron Boots all confirmed the same broad lesson: item actors often know their concrete owning ALINK, but still reach through P1/global helpers for matrices, counters, camera/status, sound, or lifecycle cleanup. Narrow owner-routing fixes made those item families usable for P2 without regressing P1.
 
-The current active plan is `docs/coop-enemy-targeting-plan.md`. Split-screen is now usable enough for co-op testing, with known V1 render/HUD limitations documented in `docs/coop-native-split-screen-camera-plan.md`. The first world-acknowledgement proof exists: Dusk-owned player-query helpers can let ordinary enemy logic react to P2 without mass-rewriting global player helpers. The next gate is validating the small `enemy_targeting` V1 policy layer on Bokoblin, then converting Tektite, then one accessible compact ground enemy.
+The current active plan is `docs/coop-enemy-targeting-plan.md`. Split-screen is now usable enough for co-op testing, with known V1 render/HUD limitations documented in `docs/coop-native-split-screen-camera-plan.md`. The first world-acknowledgement proof exists: Dusk-owned player-query helpers can let ordinary enemy logic react to P2 without mass-rewriting global player helpers. Bokoblin has validated the small `enemy_targeting` V1 policy layer; Tektite is the first non-Bokoblin port and should be validated before choosing one accessible compact ground enemy.
 
 The secondary Link experiment has graduated into the supported local additional-player path for current co-op testing. Runtime systems should identify player actors through the slot registry, not by inspecting ALINK's spawn argument. Spawn arguments now encode requested extra slots (`-2` for slot 1, `-3` for slot 2, `-4` for slot 3) only as a create-time bootstrap so `daAlink_c::create()` can avoid claiming vanilla player 0 before it has registered in the sidecar.
 
@@ -78,6 +78,8 @@ Keep APIs narrow. The first player-slot API only needs to answer: who is the pri
 Treat input as commands early. The player actor should consume a per-slot input snapshot rather than reading `PAD_1` everywhere. This is useful for local co-op immediately and becomes the same shape clients send to the host later.
 
 Do not make enemies deterministic across machines. Enemies should be simulated by the host. Clients should receive enemy state or event results from the host once online play exists.
+
+Network-readiness notes live in `docs/coop-network-multiplayer-readiness.md`. In particular, preserve `PlayerSlot` as the replicated player identity, treat raw actor pointers as process-local metadata, and add explicit apply-replicated-state seams before clients are allowed to render host-owned enemy or world truth.
 
 Treat cutscenes, scene transitions, menus, and save data as global at first. These systems are deeply singleton-shaped in the current code. Early co-op should pause, park, hide, or tether secondary players during global sequences instead of trying to make every story event multiplayer-native immediately.
 

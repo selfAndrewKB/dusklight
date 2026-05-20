@@ -41,8 +41,11 @@ struct EnemyTargetContext {
 };
 
 struct EnemyTargetResult {
+    // Co-op: slot is the durable target identity. localActor is a process-local cache resolved
+    // from that slot for original enemy code that needs position, distance, and angle. Future
+    // network payloads should carry slot/scope/reason and re-resolve this pointer locally.
     PlayerSlot slot = PlayerSlot::Invalid;
-    fopAc_ac_c* actor = nullptr;
+    fopAc_ac_c* localActor = nullptr;
     f32 distance = 0.0f;
     f32 distanceXZ = 0.0f;
     s16 angleY = 0;

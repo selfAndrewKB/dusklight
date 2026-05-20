@@ -10,6 +10,9 @@
 #include "d/d_com_inf_game.h"
 #include "f_op/f_op_actor_enemy.h"
 #include "f_op/f_op_camera_mng.h"
+#if TARGET_PC
+#include "dusk/coop/enemy_targeting.h"
+#endif
 
 class daE_TT_HIO_c : public JORReflexible {
 public:
@@ -155,6 +158,44 @@ static u8 hio_set;
 static daE_TT_HIO_c l_HIO;
 
 static daE_TT_c* m_attack_tt;
+
+#if TARGET_PC
+// Co-op: keep Tektite's original state machine intact while letting combat callsites share one
+// Dusk-owned target decision instead of asking the P1 singleton independently.
+static bool coOpSelectCombatTarget(daE_TT_c* i_this, const char* label, bool committed,
+                                   dusk::coop::EnemyTargetMode mode, fopAc_ac_c** player,
+                                   f32* distance, f32* distance_xz, s16* angle_y) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    if (!target.found) {
+        return false;
+    }
+
+    if (player != NULL) {
+        *player = target.localActor;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (distance_xz != NULL) {
+        *distance_xz = target.distanceXZ;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    return true;
+}
+
+static void coOpClearEnemyTargets(daE_TT_c* i_this) {
+    dusk::coop::clearAllEnemyTargets(i_this);
+}
+#endif
 
 void daE_TT_c::setActionMode(int i_action, int i_mode) {
     if (m_attack_tt == this) {
@@ -475,6 +516,26 @@ void daE_TT_c::setDeathFootEffect() {
 }
 
 bool daE_TT_c::checkPlayerSearch() {
+#if TARGET_PC
+    fopAc_ac_c* player = NULL;
+    f32 playerDist = 0.0f;
+    // Co-op: wake/search is an awareness gate, so use immediate acquisition rather than letting
+    // stale chase stickiness hide a closer player from Tektite's vanilla range/LOS checks.
+    if (!coOpSelectCombatTarget(this, "e_tt.search", false,
+                                dusk::coop::EnemyTargetMode::ImmediateAcquire, &player,
+                                &playerDist, NULL, NULL))
+    {
+        return false;
+    }
+
+    if (field_0x6d4 && current.pos.absXZ(home.pos) > field_0x6d4 + 300.0f ||
+        playerDist > l_HIO.player_detection_range + 300.0f ||
+        fopAcM_otherBgCheck(this, player))
+    {
+        return false;
+    }
+    return true;
+#else
     if (field_0x6d4 && current.pos.absXZ(home.pos) > field_0x6d4 + 300.0f ||
         fopAcM_searchPlayerDistance(this) > l_HIO.player_detection_range + 300.0f ||
         fopAcM_otherBgCheck(this, daPy_getPlayerActorClass()))
@@ -482,6 +543,7 @@ bool daE_TT_c::checkPlayerSearch() {
         return false;
     }
     return true;
+#endif
 }
 
 void daE_TT_c::executeWait() {
@@ -575,7 +637,20 @@ void daE_TT_c::executeWait() {
 }
 
 void daE_TT_c::executeChase() {
+#if TARGET_PC
+    fopAc_ac_c* player = NULL;
+    f32 playerDist = 0.0f;
+    s16 playerAngle = 0;
+    if (!coOpSelectCombatTarget(this, "e_tt.chase", false,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &player, &playerDist,
+                                NULL, &playerAngle))
+    {
+        setActionMode(ACTION_WAIT, 0);
+        return;
+    }
+#else
     f32 playerDist = fopAcM_searchPlayerDistance(this);
+#endif
 
     switch (mMode) {
     case 0:
@@ -594,7 +669,11 @@ void daE_TT_c::executeChase() {
         if (mGenericTimer == 0 && field_0x6d4 && home.pos.absXZ(current.pos) > field_0x6d4) {
             setActionMode(ACTION_OUT_RANGE, 0);
         } else {
+#if TARGET_PC
+            cLib_addCalcAngleS(&shape_angle.y, playerAngle, 0x8, 0x800, 0x100);
+#else
             cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 0x8, 0x800, 0x100);
+#endif
             current.angle.y = shape_angle.y;
             if (playerDist > l_HIO.player_attack_distance) {
                 mMode = 5;
@@ -604,9 +683,14 @@ void daE_TT_c::executeChase() {
                     setActionMode(ACTION_WAIT, 0);
                 }
                 if (mAttackTimer == 0 && !fopAcM_CheckCondition(this, fopAcCnd_NODRAW_e)) {
+#if TARGET_PC
+                    if ((s16)abs((s16)(player->shape_angle.y - playerAngle)) > l_HIO.attack_angle &&
+                        m_attack_tt == NULL)
+#else
                     if ((s16)abs((s16)(daPy_getPlayerActorClass()->shape_angle.y -
                                        fopAcM_searchPlayerAngleY(this))) > l_HIO.attack_angle &&
                         m_attack_tt == NULL)
+#endif
                     {
                         setActionMode(ACTION_ATTACK, 0);
                         m_attack_tt = this;
@@ -620,7 +704,11 @@ void daE_TT_c::executeChase() {
         if (mpMorfSO->checkFrame(4.0f)) {
             mSound.startCreatureSound(Z2SE_EN_TT_JUMP, 0, -1);
         }
+#if TARGET_PC
+        cLib_addCalcAngleS(&shape_angle.y, playerAngle, 0x8, 0x800, 0x100);
+#else
         cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 0x8, 0x800, 0x100);
+#endif
         current.angle.y = shape_angle.y;
         if (mpMorfSO->isStop()) {
             setBck(0xC, 0, 3.0f, 1.0f);
@@ -676,7 +764,20 @@ void daE_TT_c::executeChase() {
 }
 
 void daE_TT_c::executeAttack() {
+#if TARGET_PC
+    fopAc_ac_c* player = NULL;
+    s16 playerAngle = 0;
+    if (!coOpSelectCombatTarget(this, "e_tt.attack", true,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &player, NULL, NULL,
+                                &playerAngle))
+    {
+        setActionMode(ACTION_CHASE, 0);
+        return;
+    }
+    cXyz playerPos(player->current.pos);
+#else
     cXyz playerPos(daPy_getPlayerActorClass()->current.pos);
+#endif
 
     switch (mMode) {
     case 0:
@@ -688,7 +789,11 @@ void daE_TT_c::executeAttack() {
         break;
 
     case 1:
+#if TARGET_PC
+        cLib_addCalcAngleS(&shape_angle.y, playerAngle, 0x8, 0x400, 0x100);
+#else
         cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 0x8, 0x400, 0x100);
+#endif
         if (mpMorfSO->checkFrame(35.0f)) {
             mSound.startCreatureSound(Z2SE_EN_TT_JUMP, 0, -1);
         }
@@ -894,6 +999,19 @@ void daE_TT_c::executeDeath() {
 }
 
 void daE_TT_c::executeOutRange() {
+#if TARGET_PC
+    fopAc_ac_c* player = NULL;
+    f32 playerDistXZ = 0.0f;
+    s16 playerAngle = 0;
+    if (!coOpSelectCombatTarget(this, "e_tt.out_range", false,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &player, NULL,
+                                &playerDistXZ, &playerAngle))
+    {
+        setActionMode(ACTION_WAIT, 0);
+        return;
+    }
+#endif
+
     switch (mMode) {
     case 0:
         setBck(0x10, 2, 3.0f, 1.0f);
@@ -903,7 +1021,11 @@ void daE_TT_c::executeOutRange() {
         if (mpMorfSO->checkFrame(0.0f)) {
             mSound.startCreatureVoice(Z2SE_EN_TT_V_WAIT, -1);
         }
+#if TARGET_PC
+        cLib_addCalcAngleS(&shape_angle.y, playerAngle, 0x8, 0x800, 0x100);
+#else
         cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 0x8, 0x800, 0x100);
+#endif
         current.angle.y = shape_angle.y;
         if (!fopAcM_CheckCondition(this, fopAcCnd_NODRAW_e) &&
             abs((s16)(shape_angle.y - cLib_targetAngleY(&current.pos, &home.pos))) < 0x2000)
@@ -911,14 +1033,22 @@ void daE_TT_c::executeOutRange() {
             setActionMode(ACTION_CHASE, 0);
             break;
         }
-        if (fopAcM_searchPlayerDistanceXZ(this) > 2000.0f) {
+#if TARGET_PC
+        f32 targetDistXZ = playerDistXZ;
+#else
+        f32 targetDistXZ = fopAcM_searchPlayerDistanceXZ(this);
+#endif
+        if (targetDistXZ > 2000.0f) {
             setActionMode(ACTION_WAIT, 0);
             break;
         }
-        if (fopAcM_searchPlayerDistanceXZ(this) < 500.0f &&
-            !fopAcM_CheckCondition(this, fopAcCnd_NODRAW_e) &&
+        if (targetDistXZ < 500.0f && !fopAcM_CheckCondition(this, fopAcCnd_NODRAW_e) &&
+#if TARGET_PC
+            (s16)abs((s16)(player->shape_angle.y - playerAngle)) > l_HIO.attack_angle &&
+#else
             (s16)abs((s16)(daPy_getPlayerActorClass()->shape_angle.y -
                            fopAcM_searchPlayerAngleY(this))) > l_HIO.attack_angle &&
+#endif
             m_attack_tt == NULL)
         {
             setActionMode(ACTION_ATTACK, 0);
@@ -1175,6 +1305,10 @@ int daE_TT_c::_delete() {
     if (m_attack_tt == this) {
         m_attack_tt = NULL;
     }
+#if TARGET_PC
+    // Co-op: Tektite target state is Dusk sidecar data keyed by this actor pointer.
+    coOpClearEnemyTargets(this);
+#endif
 
     dComIfG_resDelete(&mPhaseReq, mpResName);
     dComIfG_resDelete(&mPhaseReq2, "E_TT");

@@ -226,7 +226,7 @@ static bool coOpSelectCombatTarget(daE_OC_c* i_this, const char* label, bool com
     }
 
     if (player != NULL) {
-        *player = target.actor;
+        *player = target.localActor;
     }
     if (distance != NULL) {
         *distance = target.distance;

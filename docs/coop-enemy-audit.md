@@ -274,11 +274,11 @@ Use these groups to minimize manual per-enemy work. Each group should map to reu
 
 ## First Policy-Backed Wave
 
-The audit was sufficient to begin the `enemy_targeting` V1 module without broad enemy conversion. Bokoblin now has the reusable policy spine on only the existing raw-query proof systems. Validate sticky retention, committed attack retention, and diagnostics before adding Tektite as the second variable.
+The audit was sufficient to begin the `enemy_targeting` V1 module without broad enemy conversion. Bokoblin now has the reusable policy spine on only the existing raw-query proof systems. Tektite has been ported as the first compact non-Bokoblin specimen and still needs in-game validation before choosing the next ground enemy.
 
 After Bokoblin validates, use one clean ground enemy to prove the pattern ports well:
 
-1. **Tektite (`E_TT`)** - best next specimen. The search/chase/attack callsites are compact and isolated in `checkPlayerSearch`, `executeChase`, and `executeAttack`. It also forces us to thread target pose/direction without touching story/demo systems.
+1. **Tektite (`E_TT`)** - first non-Bokoblin specimen. The search/chase/attack callsites are compact and isolated in `checkPlayerSearch`, `executeChase`, `executeAttack`, and `executeOutRange`. It also forces us to thread target pose/direction without touching story/demo systems.
 2. **Non-flying ground melee backup (`E_KG`, `E_BS`, or `E_SH`)** - choose based on accessible test location. These have smaller lookup counts and should prove the policy is not Bokoblin-specific.
 3. **Do not pick White Wolfos (`E_WW`) for the first port.** It is valuable, but its wolf-form and target-state checks should wait until selected-target state helpers exist.
 

@@ -37,6 +37,7 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
 - `docs/coop-secondary-alink-input-routing-plan.md`: completed secondary ALINK input-routing milestone: P2 moves from controller 2 and basic rolling/combat swing works.
 - `docs/coop-secondary-alink-item-ownership-plan.md`: completed item/action ownership pass: boomerang, fishing rod, Dominion Rod, bow/arrow, Spinner, bombs, slingshot, and Iron Boots owner-routing findings.
 - `docs/coop-native-split-screen-camera-plan.md`: completed split-screen camera prototype milestone and known V1 render/HUD limitations.
+- `docs/coop-network-multiplayer-readiness.md`: host-authoritative multiplayer readiness notes, especially player-slot identity, enemy-target replication seams, and pointer-vs-slot rules.
 - `docs/coop-world-acknowledgement-plan.md`: completed world-acknowledgement proof: player-query helpers, diagnostics, Hanging Helmasaur proof, and Bokoblin raw-query evidence.
 - `docs/coop-player-owner-lookup-audit.md`: reusable audit table for item/weapon actors that still ask global P1 when they should ask the owning ALINK slot.
 - `docs/coop-enemy-audit.md`: enemy/world acknowledgement map, actor triage table, and the target-policy layering for `actor patches -> enemy_targeting -> player_query`.

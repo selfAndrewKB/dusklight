@@ -114,7 +114,7 @@ int decisionPriority(const EnemyTargetDecisionDebug& decision) {
 bool shouldDrawDecision(const EnemyTargetDecisionDebug& decision) {
     return decision.observer != nullptr && decision.selected.found &&
            decision.selected.slot != PlayerSlot::Invalid &&
-           decision.selected.actor != nullptr;
+           decision.selected.localActor != nullptr;
 }
 
 bool shouldDrawWorldDecision(const EnemyTargetDecisionDebug& decision, int priority) {
@@ -144,7 +144,7 @@ bool shouldDrawConeDecision(const EnemyTargetDecisionDebug& decision, int priori
 }
 
 bool sameSelectedActor(const EnemyTargetDecisionDebug& lhs, const EnemyTargetDecisionDebug& rhs) {
-    return lhs.selected.actor == rhs.selected.actor && lhs.selected.slot == rhs.selected.slot;
+    return lhs.selected.localActor == rhs.selected.localActor && lhs.selected.slot == rhs.selected.slot;
 }
 
 void drawWorldDecision(const EnemyTargetDecisionDebug& decision, int priority) {
@@ -155,7 +155,7 @@ void drawWorldDecision(const EnemyTargetDecisionDebug& decision, int priority) {
     GXColor color = lineColor(decision, priority);
     GXColor targetColor = slotColor(decision.selected.slot, false);
     cXyz observerPos = debugPos(decision.observer, 80.0f);
-    cXyz targetPos = debugPos(decision.selected.actor, 120.0f);
+    cXyz targetPos = debugPos(decision.selected.localActor, 120.0f);
     dDbVw_drawLineXlu(observerPos, targetPos, color, TRUE, 12);
     dDbVw_drawSphereXlu(observerPos, 22.0f, color, TRUE);
     dDbVw_drawSphereXlu(targetPos, 18.0f, targetColor, TRUE);
@@ -228,7 +228,7 @@ void captureLineLabel(const EnemyTargetDecisionDebug& decision, int priority, co
     }
 
     cXyz observerPos = debugPos(decision.observer, 80.0f);
-    cXyz targetPos = debugPos(decision.selected.actor, 120.0f);
+    cXyz targetPos = debugPos(decision.selected.localActor, 120.0f);
     cXyz midpoint;
     midpoint.x = (observerPos.x + targetPos.x) * 0.5f;
     midpoint.y = (observerPos.y + targetPos.y) * 0.5f;

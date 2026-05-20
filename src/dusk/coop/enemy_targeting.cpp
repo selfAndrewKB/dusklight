@@ -141,7 +141,7 @@ void recordDecision(const EnemyTargetContext& context, const EnemyTargetResult& 
     decision->observer = context.observer;
     decision->observerDebug = actorDebug(context.observer);
     decision->selected = result;
-    decision->selectedActorDebug = actorDebug(result.actor);
+    decision->selectedActorDebug = actorDebug(result.localActor);
     decision->nearest = nearest;
     decision->nearestActorDebug = actorDebug(nearest.actor);
     decision->reason = result.reason;
@@ -150,7 +150,7 @@ void recordDecision(const EnemyTargetContext& context, const EnemyTargetResult& 
     decision->changed = result.changed;
     decision->retainedValid = retainedValid;
     decision->retentionBlockedNearest =
-        nearest.found && result.found && nearest.actor != result.actor &&
+        nearest.found && result.found && nearest.actor != result.localActor &&
         (result.reason == EnemyTargetReason::RetainSticky ||
          result.reason == EnemyTargetReason::RetainCommitted);
     decision->retainSeconds = context.retainSeconds;
@@ -175,20 +175,20 @@ EnemyTargetResult targetResultFromQuery(const PlayerQueryResult& query, EnemyTar
                                         const TargetState& previous) {
     EnemyTargetResult result;
     result.slot = query.slot;
-    result.actor = query.actor;
+    result.localActor = query.actor;
     result.distance = query.distance;
     result.distanceXZ = query.distanceXZ;
     result.angleY = query.angleY;
     result.found = query.found;
     result.reason = reason;
-    result.changed = previous.slot != result.slot || previous.actor != result.actor || !query.found;
+    result.changed = previous.slot != result.slot || previous.actor != result.localActor || !query.found;
     return result;
 }
 
 void updateStateFromResult(TargetState* state, const EnemyTargetResult& result) {
     if (result.found) {
         state->slot = result.slot;
-        state->actor = result.actor;
+        state->actor = result.localActor;
     } else {
         state->slot = PlayerSlot::Invalid;
         state->actor = nullptr;
