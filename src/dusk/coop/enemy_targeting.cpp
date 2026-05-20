@@ -124,7 +124,15 @@ void recordDecision(const EnemyTargetContext& context, const EnemyTargetResult& 
         if (s_debugState.decisionCount < kDebugDecisionCount) {
             decision = &s_debugState.decisions[s_debugState.decisionCount++];
         } else {
+            // Evict the oldest entry by simulation frame rather than silently clobbering slot 0.
+            CoopEnemyTargetingLog.warn("enemy targeting debug buffer full ({} entries); evicting oldest",
+                                       kDebugDecisionCount);
             decision = &s_debugState.decisions[0];
+            for (int i = 1; i < kDebugDecisionCount; i++) {
+                if (s_debugState.decisions[i].lastUpdatedSimFrame < decision->lastUpdatedSimFrame) {
+                    decision = &s_debugState.decisions[i];
+                }
+            }
         }
     }
 
@@ -262,10 +270,17 @@ EnemyTargetResult selectEnemyTarget(const EnemyTargetContext& context) {
                                            ? EnemyTargetReason::RetainSticky
                                            : EnemyTargetReason::AcquireNearest,
                                        previous);
-        if (result.changed) {
-            state->stickyElapsedSeconds = 0.0f;
-        }
+        // Co-op: reset unconditionally — confirming the same target is still fresh information.
+        // Without this, prolonged awareness (head-search loops) pre-drains the combat window
+        // before the enemy has engaged, causing a spurious AcquireNearest on the first chase frame.
+        state->stickyElapsedSeconds = 0.0f;
     } else if (retainedValid && state->stickyElapsedSeconds < context.retainSeconds) {
+        // Co-op: sticky combat is for continuity after the enemy has engaged. Chase, close-range
+        // gates, retreat/re-engage, and attack setup should not flicker between players just
+        // because nearest distance crosses back and forth by small amounts.
+        // Note: ImmediateAcquire falls through here when no candidate is found. The retained target
+        // is kept because there is no fresher candidate to replace it. The diagnostic record will
+        // show mode=ImmediateAcquire alongside reason=RetainSticky in that case.
         result = targetResultFromQuery(retained, EnemyTargetReason::RetainSticky, previous);
     } else if (nearest.found) {
         // Co-op: when the sticky window expires but the nearest player is still the retained target,
@@ -275,21 +290,15 @@ EnemyTargetResult selectEnemyTarget(const EnemyTargetContext& context) {
         result = targetResultFromQuery(nearest, sameRetainedTarget ? EnemyTargetReason::RetainSticky
                                                                    : EnemyTargetReason::AcquireNearest,
                                        previous);
-        state->slot = nearest.slot;
-        state->actor = nearest.actor;
         state->stickyElapsedSeconds = 0.0f;
     } else if (getPlayer(PlayerSlot::Slot0) != nullptr) {
         result = targetResultFromQuery(resultForTarget(context.observer, PlayerSlot::Slot0,
                                                        getPlayer(PlayerSlot::Slot0)),
                                        EnemyTargetReason::FallbackPrimary, previous);
-        state->slot = result.slot;
-        state->actor = result.actor;
         state->stickyElapsedSeconds = 0.0f;
     } else {
         result.reason = EnemyTargetReason::LostTarget;
         result.changed = previous.slot != PlayerSlot::Invalid || previous.actor != nullptr;
-        state->slot = PlayerSlot::Invalid;
-        state->actor = nullptr;
         state->stickyElapsedSeconds = 0.0f;
     }
 
