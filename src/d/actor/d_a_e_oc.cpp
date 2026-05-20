@@ -641,6 +641,13 @@ void daE_OC_c::setGroundAngle() {
 }
 
 void daE_OC_c::setActionMode(int i_action, int i_state) {
+#if TARGET_PC
+    if (i_action == E_OC_ACTION_ATTACK) {
+        // Co-op: a new attack must commit from the current chase/search target, not a stale
+        // target retained by the previous attack action.
+        dusk::coop::clearEnemyTarget(this, "e_oc.attack");
+    }
+#endif
     mOldActionMode = mActionMode;
     mActionMode = i_action;
     mOcState = i_state;

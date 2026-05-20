@@ -102,7 +102,9 @@ For each `(observer actor, system)` pair:
 5. Otherwise acquire the nearest active player.
 6. Record the reason and reset/update the retain timer.
 
-V1 should treat "committed" as actor-supplied context. For Bokoblin, the patch can pass `committed = true` from attack/follow-through paths where retargeting would look wrong. Do not try to infer committed attack state generically from unknown enemy internals.
+V1 should treat "committed" as actor-supplied context. For Bokoblin, the patch passes `committed = true` from attack/follow-through paths where retargeting would look wrong. Do not try to infer committed attack state generically from unknown enemy internals.
+
+Committed systems must be reset at the start of a new attack action when the actor can leave and later re-enter that action. Bokoblin clears `e_oc.attack` on entry so a fresh attack commits from the current chase/search target instead of retaining the target from a previous attack after players have swapped positions.
 
 ## Diagnostics
 
@@ -128,6 +130,12 @@ V1 should treat "committed" as actor-supplied context. For Bokoblin, the patch c
 - committed state entered/exited.
 
 Distance, angle, animation frame, and timer drift may appear in latest/context but must not emit every frame by themselves.
+
+## Live Overlay
+
+`dusk::coop::debug_overlay` is a visual aid over `enemy_targeting` debug state. It draws selected-target lines/spheres in the active 3D view and a compact text list with system, selected slot, reason, committed flag, and sticky retention timing.
+
+The overlay is currently on by default during enemy conversion work and can be toggled from Actor Spawner or `Ctrl+Shift+F12`. It must remain read-only: do not make it select targets, update policy state, or emit diagnostics. JSON diagnostics remain the durable evidence for later review.
 
 ## First Implementation Target
 
@@ -184,5 +192,6 @@ This prevents designing the policy exclusively around Bokoblin while still keepi
 - [x] Added `dusk::coop::enemy_targeting` V1 as a sidecar policy over `player_query`.
 - [x] Added `enemy.targeting` diagnostics with rich latest snapshots and semantic per-decision events.
 - [x] Converted only the existing Bokoblin raw-query proof systems to policy-backed targeting.
-- [ ] Validate Bokoblin sticky retention and committed attack retention in game.
+- [x] Validate Bokoblin sticky retention and committed attack retention in game.
+- [x] Add read-only in-game overlay for live `enemy_targeting` decisions.
 - [ ] Convert Tektite in a separate follow-up patch after Bokoblin validates.

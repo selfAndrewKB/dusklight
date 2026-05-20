@@ -1416,6 +1416,7 @@ set(DUSK_FILES
         include/dusk/config.hpp
         include/dusk/coop/alink_probes.h
         include/dusk/coop/camera.h
+        include/dusk/coop/debug_overlay.h
         include/dusk/coop/enemy_targeting.h
         include/dusk/coop/input.h
         include/dusk/coop/player_query.h
@@ -1425,6 +1426,7 @@ set(DUSK_FILES
         include/dusk/scope_guard.hpp
         src/dusk/coop/alink_probes.cpp
         src/dusk/coop/camera.cpp
+        src/dusk/coop/debug_overlay.cpp
         src/dusk/coop/enemy_targeting.cpp
         src/dusk/coop/player_query.cpp
         src/dusk/coop/player_slots.cpp

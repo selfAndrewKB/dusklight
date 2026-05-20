@@ -16,6 +16,7 @@
 #include "dusk/action_bindings.h"
 #include "dusk/audio/DuskAudioSystem.h"
 #include "dusk/config.hpp"
+#include "dusk/coop/debug_overlay.h"
 #include "dusk/data.hpp"
 #include "dusk/dusk.h"
 #include "dusk/frame_interpolation.h"
@@ -396,6 +397,7 @@ namespace dusk {
 
     void ImGuiConsole::PostDraw() {
         m_menuTools.afterDraw();
+        coop::debug_overlay::drawEnemyTargetTextOverlay();
         ShowPipelineProgress();
     }
 

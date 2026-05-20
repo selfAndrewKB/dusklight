@@ -51,6 +51,7 @@
 #include "aurora/lib/window.hpp"
 #include "d/actor/d_a_horse.h"
 #include "dusk/coop/camera.h"
+#include "dusk/coop/debug_overlay.h"
 #include "dusk/dusk.h"
 #include "dusk/endian.h"
 #include "dusk/frame_interpolation.h"
@@ -844,6 +845,10 @@ static void dScnPly_BeforeOfPaint() {
     dComIfGd_reset();
 
     dDbVw_deleteDrawPacketList();
+#if TARGET_PC
+    // Co-op: queue AI target debug packets before the 3D draw buffers are rendered.
+    dusk::coop::debug_overlay::drawEnemyTargetOverlay();
+#endif
 }
 
 int mDoGph_BeforeOfDraw() {
@@ -2252,6 +2257,11 @@ int mDoGph_Painter() {
             #endif
 
             PPCSync();
+
+#if TARGET_PC
+            // Co-op: capture AI target label positions while this camera's projection is active.
+            dusk::coop::debug_overlay::captureEnemyTargetOverlayLabels(&camera_p->view, view_port);
+#endif
 
 #ifndef TARGET_PC
             j3dSys.setViewMtx(camera_p->view.viewMtx);

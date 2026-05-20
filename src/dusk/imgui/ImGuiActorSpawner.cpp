@@ -6,6 +6,7 @@
 #include "d/d_com_inf_game.h"
 #include "dusk/coop/alink_probes.h"
 #include "dusk/coop/camera.h"
+#include "dusk/coop/debug_overlay.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/diagnostics.h"
 #include "dusk/hotkeys.h"
@@ -38,7 +39,8 @@ struct ActorSpawnerState {
 ActorSpawnerState s_state;
 
 void tryCoopHotkeySpawnSecondary() {
-    if (!ImGui::GetIO().KeyCtrl || !ImGui::IsKeyPressed(ImGuiKey_F12)) {
+    const ImGuiIO& io = ImGui::GetIO();
+    if (!io.KeyCtrl || io.KeyShift || io.KeyAlt || !ImGui::IsKeyPressed(ImGuiKey_F12)) {
         return;
     }
 
@@ -69,6 +71,18 @@ void tryCoopHotkeySpawnSecondary() {
     }
 }
 
+void tryCoopHotkeyToggleEnemyTargetOverlay() {
+    const ImGuiIO& io = ImGui::GetIO();
+    if (!io.KeyCtrl || !io.KeyShift || io.KeyAlt || !ImGui::IsKeyPressed(ImGuiKey_F12)) {
+        return;
+    }
+
+    dusk::coop::debug_overlay::toggleEnemyTargetOverlay();
+    DuskToast(dusk::coop::debug_overlay::isEnemyTargetOverlayEnabled()
+                  ? "Co-op enemy target overlay enabled"
+                  : "Co-op enemy target overlay disabled");
+}
+
 void secondaryAlinkProbeCheckbox(const char* label, dusk::coop::SecondaryAlinkProbeFlag flag) {
     unsigned int flags = dusk::coop::getSecondaryAlinkProbeFlags();
     bool enabled = (flags & static_cast<unsigned int>(flag)) != 0;
@@ -95,6 +109,7 @@ void secondaryAlinkProbeCheckbox(const char* label, dusk::coop::SecondaryAlinkPr
 
 void ImGuiMenuTools::ShowActorSpawner() {
     tryCoopHotkeySpawnSecondary();
+    tryCoopHotkeyToggleEnemyTargetOverlay();
 
     if (!m_showActorSpawner) {
         return;
@@ -150,6 +165,12 @@ void ImGuiMenuTools::ShowActorSpawner() {
                         dusk::coop::camera::isSecondaryCameraRequested() ? " (requested)" : "");
     ImGui::TextDisabled("Hotkey: %s enables diagnostics/split screen, resets probes, and spawns P2",
                         dusk::hotkeys::COOP_SPAWN_SECONDARY_LINK);
+    bool enemyTargetOverlayEnabled = dusk::coop::debug_overlay::isEnemyTargetOverlayEnabled();
+    if (ImGui::Checkbox("Show enemy target overlay", &enemyTargetOverlayEnabled)) {
+        dusk::coop::debug_overlay::setEnemyTargetOverlayEnabled(enemyTargetOverlayEnabled);
+    }
+    ImGui::TextDisabled("Hotkey: %s toggles enemy target overlay",
+                        dusk::hotkeys::COOP_TOGGLE_ENEMY_TARGET_OVERLAY);
     if (diagnosticsEnabled) {
         if (ImGui::SmallButton("Flush diagnostics")) {
             dusk::diagnostics::flush("manual-ui");
