@@ -7,6 +7,7 @@
 #include "dusk/coop/alink_probes.h"
 #include "dusk/coop/camera.h"
 #include "dusk/coop/input.h"
+#include "dusk/coop/player_query.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/dusk.h"
 #include "dusk/io.hpp"
@@ -188,14 +189,18 @@ void updateProviderLatest(const char* provider, const json& data) {
     s_state.latestDirty = true;
 }
 
-bool shouldEmitProviderEvent(const char* provider, const json& data) {
-    const auto result = s_state.lastEmittedData.find(provider);
+bool shouldEmitProviderEvent(const std::string& providerKey, const json& data) {
+    const auto result = s_state.lastEmittedData.find(providerKey);
     if (result != s_state.lastEmittedData.end() && result->second == data) {
         return false;
     }
 
-    s_state.lastEmittedData[provider] = data;
+    s_state.lastEmittedData[providerKey] = data;
     return true;
+}
+
+bool shouldEmitProviderEvent(const char* provider, const json& data) {
+    return shouldEmitProviderEvent(std::string(provider != nullptr ? provider : ""), data);
 }
 
 const Provider* findProvider(const char* name);
@@ -443,6 +448,70 @@ json playerStatusEventKey(const json& data) {
     };
 }
 
+json playerQueryDecisionEventKey(const json& decision);
+
+json playerQueryEventKey(const json& data) {
+    json decisions = json::array();
+    if (data.contains("decisions") && data["decisions"].is_array()) {
+        for (const json& decision : data["decisions"]) {
+            decisions.push_back(playerQueryDecisionEventKey(decision));
+        }
+    }
+
+    return {
+        {"schema_version", data.value("schema_version", 1)},
+        {"decisions", decisions},
+    };
+}
+
+json playerQueryDecisionEventKey(const json& decision) {
+    json candidates = json::array();
+    for (const json& candidate : decision.value("candidates", json::array())) {
+        candidates.push_back({
+            {"slot", candidate.value("slot", -1)},
+            {"actor", actorIdentityEventData(candidate.value("actor", json::object()))},
+        });
+    }
+
+    return {
+        {"system", decision.value("system", std::string())},
+        {"observer", actorIdentityEventData(decision.value("observer", json::object()))},
+        {"found", decision.value("found", false)},
+        {"selected_slot", decision.value("selected_slot", -1)},
+        {"selected_actor", actorIdentityEventData(decision.value("selected_actor", json::object()))},
+        {"candidates", candidates},
+    };
+}
+
+std::string playerQueryDecisionEventStateKey(const json& decision) {
+    const json observer = decision.value("observer", json::object());
+    const std::string system = decision.value("system", std::string());
+    const std::string observerPtr = observer.value("ptr", std::string("0x0"));
+    return fmt::format(FMT_STRING("coop.player_query:{}:{}:{}"),
+                       system, observerPtr, observer.value("id", 0));
+}
+
+void emitPlayerQueryEvents(const Provider& provider, const json& data) {
+    if (!data.contains("decisions") || !data["decisions"].is_array()) {
+        return;
+    }
+
+    for (const json& decision : data["decisions"]) {
+        const json eventKey = playerQueryDecisionEventKey(decision);
+        if (provider.emitOnChange &&
+            !shouldEmitProviderEvent(playerQueryDecisionEventStateKey(decision), eventKey))
+        {
+            continue;
+        }
+
+        const json eventData = {
+            {"schema_version", data.value("schema_version", 1)},
+            {"decision", eventKey},
+        };
+        emitProviderEvent(provider, "decision", eventData);
+    }
+}
+
 json alinkSecondaryEventKey(const json& data) {
     json copyRodKey = nullptr;
     if (data.contains("copy_rod")) {
@@ -628,6 +697,9 @@ json eventKeyForProvider(const char* provider, const json& data) {
     }
     if (name == "player.status") {
         return playerStatusEventKey(data);
+    }
+    if (name == "coop.player_query") {
+        return playerQueryEventKey(data);
     }
     if (name == "alink.secondary") {
         return alinkSecondaryEventKey(data);
@@ -1014,6 +1086,70 @@ json collectPlayerStatus() {
     return data;
 }
 
+json playerQueryActorSummary(const coop::PlayerQueryActorDebug& actor) {
+    json data = {
+        {"actor_uid", nullptr},
+        {"ptr", ptrString(actor.ptr)},
+        {"stable_actor_uid_deferred", true},
+        {"available", actor.available},
+    };
+    if (!actor.available) {
+        return data;
+    }
+
+    data["profile"] = actor.profile;
+    data["id"] = actor.id;
+    data["room"] = actor.room;
+    data["argument"] = actor.argument;
+    data["pos"] = {actor.pos[0], actor.pos[1], actor.pos[2]};
+    data["angle_y"] = static_cast<int>(actor.angleY);
+    return data;
+}
+
+json playerQueryCandidateSummary(const coop::PlayerQueryCandidateDebug& candidate) {
+    return {
+        {"slot", candidate.slot != coop::PlayerSlot::Invalid ? static_cast<int>(candidate.slot) : -1},
+        {"actor", playerQueryActorSummary(candidate.actorDebug)},
+        {"distance", candidate.distance},
+        {"distance_xz", candidate.distanceXZ},
+        {"angle_y", static_cast<int>(candidate.angleY)},
+    };
+}
+
+json playerQueryDecisionSummary(const coop::PlayerQueryDecisionDebug& decision) {
+    json candidates = json::array();
+    for (int i = 0; i < decision.candidateCount && i < coop::kPlayerSlotCount; i++) {
+        candidates.push_back(playerQueryCandidateSummary(decision.candidates[i]));
+    }
+
+    return {
+        {"system", decision.system},
+        {"observer", playerQueryActorSummary(decision.observerDebug)},
+        {"found", decision.selected.found},
+        {"selected_slot", decision.selected.slot != coop::PlayerSlot::Invalid
+                              ? static_cast<int>(decision.selected.slot)
+                              : -1},
+        {"selected_actor", playerQueryActorSummary(decision.selectedActorDebug)},
+        {"distance", decision.selected.distance},
+        {"distance_xz", decision.selected.distanceXZ},
+        {"angle_y", static_cast<int>(decision.selected.angleY)},
+        {"candidates", candidates},
+    };
+}
+
+json collectPlayerQuery() {
+    const coop::PlayerQueryDebugState& state = coop::getPlayerQueryDebugState();
+    json decisions = json::array();
+    for (int i = 0; i < state.decisionCount; i++) {
+        decisions.push_back(playerQueryDecisionSummary(state.decisions[i]));
+    }
+
+    return {
+        {"schema_version", 1},
+        {"decisions", decisions},
+    };
+}
+
 json inputForSlot(coop::PlayerSlot slot) {
     const coop::PlayerInputState input = coop::readLocalInput(slot);
     return {
@@ -1139,6 +1275,7 @@ Provider s_providers[] = {
     {"input.pad", 1, "cheap", 1, true, 120, 4096, collectInputPad},
     {"attention.state", 1, "medium", 5, true, 60, 12288, collectAttentionState},
     {"player.status", 1, "cheap", 1, true, 120, 8192, collectPlayerStatus},
+    {"coop.player_query", 1, "cheap", 5, true, 60, 8192, collectPlayerQuery},
     {"coop.probes", 1, "cheap", 30, true, 20, 4096, collectCoopProbes},
     {"alink.secondary", 4, "cheap", 1, true, 120, 8192, collectAlinkSecondary},
 };
@@ -1280,6 +1417,11 @@ void tick(u32 frame) {
 
         json data = provider.collect();
         updateProviderLatest(provider.name, data);
+        if (std::string(provider.name) == "coop.player_query") {
+            emitPlayerQueryEvents(provider, data);
+            continue;
+        }
+
         json eventKey = eventKeyForProvider(provider.name, data);
         if (provider.emitOnChange && !shouldEmitProviderEvent(provider.name, eventKey)) {
             continue;

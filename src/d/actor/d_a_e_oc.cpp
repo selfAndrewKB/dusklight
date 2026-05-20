@@ -14,6 +14,9 @@
 #include "d/d_cc_uty.h"
 #include "f_op/f_op_actor_enemy.h"
 #include "f_op/f_op_camera_mng.h"
+#if TARGET_PC
+#include "dusk/coop/player_query.h"
+#endif
 #include <cstring>
 
 
@@ -205,6 +208,27 @@ static u8 lbl_216_bss_58;
 
 static daE_OC_HIO_c l_HIO;
 
+#if TARGET_PC
+static bool coOpFindNearestPlayer(daE_OC_c* i_this, const char* system, fopAc_ac_c** player,
+                                  f32* distance, s16* angle_y) {
+    const dusk::coop::PlayerQueryResult query = dusk::coop::findNearestPlayer(i_this, system);
+    if (!query.found) {
+        return false;
+    }
+
+    if (player != NULL) {
+        *player = query.actor;
+    }
+    if (distance != NULL) {
+        *distance = query.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = query.angleY;
+    }
+    return true;
+}
+#endif
+
 static void* s_other_oc(void* arg_lhs, void* arg_rhs) {
     f32 dist;
     if (arg_lhs != arg_rhs && fopAcM_IsActor(arg_lhs)) {
@@ -305,21 +329,28 @@ bool daE_OC_c::setWatchMode() {
 }
 
 bool daE_OC_c::searchPlayer() {
-    if (fopAcM_searchPlayerDistance(this) < mPlayerRange) {
-        s16 diff = shape_angle.y - fopAcM_searchPlayerAngleY(this);
-        if (fopAcM_searchPlayerDistance(this) < l_HIO.plyr_srch_min_radius) {
-            if (daPy_getPlayerActorClass()->speedF > 12.0f) {
+    fopAc_ac_c* player = dComIfGp_getPlayer(0);
+    f32 player_distance = fopAcM_searchPlayerDistance(this);
+    s16 player_angle = fopAcM_searchPlayerAngleY(this);
+#if TARGET_PC
+    // Co-op: Bokoblin sight checks should wake for the nearest active player, not only P1.
+    coOpFindNearestPlayer(this, "e_oc.search", &player, &player_distance, &player_angle);
+#endif
+    if (player_distance < mPlayerRange) {
+        s16 diff = shape_angle.y - player_angle;
+        if (player_distance < l_HIO.plyr_srch_min_radius) {
+            if (player != NULL && player->speedF > 12.0f) {
                 return true;
             }
 
             if (abs(diff) < 0x5000) {
-                if (fopAcM_otherBgCheck(this, dComIfGp_getPlayer(0)) == 0) {
+                if (fopAcM_otherBgCheck(this, player) == 0) {
                     return true;
                 }
             }
         } else {
             if (abs(diff) < 0x4000) {
-                if (fopAcM_otherBgCheck(this, dComIfGp_getPlayer(0)) == 0) {
+                if (fopAcM_otherBgCheck(this, player) == 0) {
                     return true;
                 }
             }
@@ -394,10 +425,17 @@ bool daE_OC_c::searchPlayerShakeHead() {
         return false;
     }
 
-    if (fopAcM_searchPlayerDistance(this) < mPlayerRange) {
-        s16 diff = getHeadAngle() - fopAcM_searchPlayerAngleY(this);
+    fopAc_ac_c* player = dComIfGp_getPlayer(0);
+    f32 player_distance = fopAcM_searchPlayerDistance(this);
+    s16 player_angle = fopAcM_searchPlayerAngleY(this);
+#if TARGET_PC
+    // Co-op: use the same nearest-player sight policy for the idle head-search animation.
+    coOpFindNearestPlayer(this, "e_oc.search_head", &player, &player_distance, &player_angle);
+#endif
+    if (player_distance < mPlayerRange) {
+        s16 diff = getHeadAngle() - player_angle;
         if (abs(diff) < 0x2000) {
-            if (fopAcM_otherBgCheck(this, dComIfGp_getPlayer(0)) == FALSE) {
+            if (fopAcM_otherBgCheck(this, player) == FALSE) {
                 return true;
             }
         }
@@ -1138,6 +1176,10 @@ void daE_OC_c::executeTalk() {
 void daE_OC_c::executeFind() {
     s16 pl_ang = fopAcM_searchPlayerAngleY(this);
     f32 pl_dist = fopAcM_searchPlayerDistance(this);
+#if TARGET_PC
+    // Co-op: once alerted, keep basic chase steering on the same nearest active player.
+    coOpFindNearestPlayer(this, "e_oc.find", NULL, &pl_dist, &pl_ang);
+#endif
     if (mOcState < 3 || !setWatchMode()) {
         if (field_0x6b4 == 2 && !dComIfGp_event_runCheck()) {
             fopAcM_OffStatus(this, fopAcStts_UNK_0x4000_e);
@@ -1229,7 +1271,7 @@ void daE_OC_c::executeFind() {
                         }
 
                         if (pl_dist < 400.0f && pl_dist > 200.0f) {
-                            if (abs(shape_angle.y - fopAcM_searchPlayerAngleY(this)) < 0x1000) {
+                            if (abs(shape_angle.y - pl_ang) < 0x1000) {
                                 if (!dComIfGp_event_runCheck()) {
                                     setActionMode(E_OC_ACTION_ATTACK, 0);
                                 }
@@ -1378,6 +1420,12 @@ void daE_OC_c::setWeaponGroundAngle() {
 
 void daE_OC_c::executeAttack() {
     f32 my_float = 0.0f;
+#if TARGET_PC
+    f32 target_dist = fopAcM_searchPlayerDistance(this);
+    s16 target_angle = fopAcM_searchPlayerAngleY(this);
+    // Co-op: attack follow-through should stay aimed at the same nearest active player selected by chase.
+    coOpFindNearestPlayer(this, "e_oc.attack", NULL, &target_dist, &target_angle);
+#endif
     int frame_ctrl = (mpMorf->getFrame() - 9.0f);
     if (frame_ctrl >= 0) {
         if (frame_ctrl >= 9) {
@@ -1457,7 +1505,11 @@ void daE_OC_c::executeAttack() {
             }
 
             if (mpMorf->getFrame() >= 22.0f) {
+#if TARGET_PC
+                mPrevShapeAngle = target_angle;
+#else
                 mPrevShapeAngle = fopAcM_searchPlayerAngleY(this);
+#endif
             }
 
             u8 my_bool = 0;
@@ -1490,7 +1542,11 @@ void daE_OC_c::executeAttack() {
                 mSound.startCreatureVoice(Z2SE_EN_OC_V_WAIT_ST, -1);
                 if (field_0x6e3) {
                     setActionMode(E_OC_ACTION_MOVE_OUT, 0);
+#if TARGET_PC
+                } else if (field_0x6ca && target_dist < 500.0f) {
+#else
                 } else if (field_0x6ca && fopAcM_searchPlayerDistance(this) < 500.0f) {
+#endif
                     mOcState = 0;
                 } else {
                     setActionMode(E_OC_ACTION_FIND, 0);
@@ -1515,12 +1571,21 @@ void daE_OC_c::executeAttack() {
                 break;
             }
 
+#if TARGET_PC
+            if (field_0x6ca && target_dist < 500.0f) {
+                if (abs(shape_angle.y - target_angle) < 0x1000) {
+                    mOcState = 0;
+                    break;
+                }
+            }
+#else
             if (field_0x6ca && fopAcM_searchPlayerDistance(this) < 500.0f) {
                 if (abs(shape_angle.y - fopAcM_searchPlayerAngleY(this)) < 0x1000) {
                     mOcState = 0;
                     break;
                 }
             }
+#endif
 
             setActionMode(E_OC_ACTION_FIND, 0);
             int _; // forces b in dbg asm
@@ -2244,6 +2309,10 @@ void daE_OC_c::executeFall() {
 void daE_OC_c::executeFindStay() {
     s16 target_angle = fopAcM_searchPlayerAngleY(this);
     f32 target_dist = fopAcM_searchPlayerDistance(this);
+#if TARGET_PC
+    // Co-op: keep the close-range face/attack gate pointed at the nearest active player.
+    coOpFindNearestPlayer(this, "e_oc.find_stay", NULL, &target_dist, &target_angle);
+#endif
     mPrevShapeAngle = target_angle;
     mBattleOn = true;
 
@@ -2285,7 +2354,7 @@ void daE_OC_c::executeFindStay() {
 
             current.angle.y = shape_angle.y;
             if (target_dist < 400.0f && target_dist > 200.0f) {
-                if (abs(shape_angle.y - fopAcM_searchPlayerAngleY(this)) < 0x1000 && checkBeforeFloorBg(100.0f)
+                if (abs(shape_angle.y - target_angle) < 0x1000 && checkBeforeFloorBg(100.0f)
                     && !dComIfGp_event_runCheck()) {
                     setActionMode(E_OC_ACTION_ATTACK, 0);
                 }
@@ -2302,8 +2371,15 @@ void daE_OC_c::executeFindStay() {
 }
 
 void daE_OC_c::executeMoveOut() {
+#if TARGET_PC
+    fopAc_ac_c* target_player = dComIfGp_getPlayer(0);
+#endif
     f32 player_distance = fopAcM_searchPlayerDistance(this);
     s16 target_angle = fopAcM_searchPlayerAngleY(this);
+#if TARGET_PC
+    // Co-op: retreat/re-engage steering should use the active co-op target selected for this frame.
+    coOpFindNearestPlayer(this, "e_oc.move_out", &target_player, &player_distance, &target_angle);
+#endif
     s16 home_angle = cLib_targetAngleY(&home.pos, &current.pos);
     mBattleOn = true;
     mPrevShapeAngle = shape_angle.y;
@@ -2370,21 +2446,28 @@ void daE_OC_c::executeMoveOut() {
 
             current.angle.y = shape_angle.y;
             if (field_0x6c0 == 0) {
+#if TARGET_PC
+                if (target_player != NULL && home.pos.abs(target_player->current.pos) < (mMoveRange - 200.0f)) {
+#else
                 if (home.pos.abs(daPy_getPlayerActorClass()->current.pos) < (mMoveRange - 200.0f)) {
+#endif
                     setActionMode(E_OC_ACTION_FIND, 0);
                     return;
                 }
 
                 if (player_distance > l_HIO.standby_distance) {
+#if TARGET_PC
+                    if (target_player != NULL && home.pos.abs(target_player->current.pos) > mMoveRange + 200.0f) {
+#else
                     if (home.pos.abs(daPy_getPlayerActorClass()->current.pos) > mMoveRange + 200.0f) {
+#endif
                         setActionMode(E_OC_ACTION_WAIT, 0);
                         return;
                     }
                 }
 
                 if (player_distance < 400.0f && player_distance > 200.0f) {
-                    if (abs(shape_angle.y - fopAcM_searchPlayerAngleY(this)) < 0x1000
-                        && !dComIfGp_event_runCheck()) {
+                    if (abs(shape_angle.y - target_angle) < 0x1000 && !dComIfGp_event_runCheck()) {
                         setActionMode(E_OC_ACTION_ATTACK, 0);
                     }
 

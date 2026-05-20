@@ -9,6 +9,9 @@
 #include "d/d_cc_uty.h"
 #include "f_op/f_op_actor_enemy.h"
 #include "Z2AudioLib/Z2Instances.h"
+#if TARGET_PC
+#include "dusk/coop/player_query.h"
+#endif
 
 class daE_HM_HIO_c : public JORReflexible {
 public:
@@ -649,7 +652,16 @@ void daE_HM_c::UpWaitAction() {
             mSound.startCreatureSound(Z2SE_EN_HM_WAIT, 0, -1);
         }
 
-        if (fopAcM_searchPlayerDistanceXZ(this) < l_HIO.searchArea) {
+        bool playerInSearchArea = fopAcM_searchPlayerDistanceXZ(this) < l_HIO.searchArea;
+#if TARGET_PC
+        // Co-op: this first world-acknowledgement proof lets the hanging Helmasaur wake for P2.
+        const dusk::coop::PlayerQueryResult query =
+            dusk::coop::findNearestPlayer(this, "e_hm.up_wait");
+        if (query.found) {
+            playerInSearchArea = query.distanceXZ < l_HIO.searchArea;
+        }
+#endif
+        if (playerInSearchArea) {
             mSph.OffTgSetBit();
             mSound.startCreatureSound(Z2SE_EN_HM_FALL, 0, -1);
             field_0x5d4 = 3;

@@ -4,11 +4,25 @@ This audit tracks original-game actors that consult the canonical player through
 
 The goal is not to replace every global player lookup. The goal is to identify callsites where an actor already has a real owner relationship and should ask that owning ALINK instead of global P1.
 
+Enemy AI and world acknowledgement are adjacent, but they are not the same audit. Item actors usually need an owner resolver: "which ALINK owns this actor?" Enemy AI usually needs a target policy: "which player should this actor care about right now?" Track enemy coverage in `docs/coop-enemy-audit.md`.
+
 ## Classification Rules
 
 - Owner-specific: held-item matrices, return/catch ownership, item actor availability, owner action callbacks, owner animation/arm state, and owner sound emitted through Link.
 - Global/P1 policy: camera, HUD prompts, story/event state, save data, scene/minigame authority, and compatibility behavior that should remain tied to canonical P1 until a larger policy exists.
 - Ambiguous: anything that mixes owner animation with global camera/HUD/minigame state. Add diagnostics or isolate one smaller callsite before changing behavior.
+
+## Relationship To Enemy Targeting
+
+Do not treat `player_query` as the finished enemy AI policy. Its job is raw facts: active player slots, candidate actors, distances, angles, and diagnostics.
+
+Enemy actor patches should stay narrow and call a higher-level policy once it exists:
+
+```text
+actor patches -> enemy_targeting -> player_query
+```
+
+The first Bokoblin proof currently calls `player_query` directly because `enemy_targeting` does not exist yet. That is a deliberate proof-of-pipe step, not the final shape. After `docs/coop-enemy-audit.md` classifies regular-enemy coverage, the next AI implementation pass should move target stability, attack follow-through, recent attacker bias, and target-count pressure into `dusk::coop::enemy_targeting` so every enemy file does not grow its own version of multiplayer target selection.
 
 ## Current Pattern
 
