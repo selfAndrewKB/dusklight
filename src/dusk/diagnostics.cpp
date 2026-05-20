@@ -496,7 +496,7 @@ std::string playerQueryDecisionEventStateKey(const json& decision) {
 
 json enemyTargetingDecisionEventKey(const json& decision) {
     return {
-        {"system", decision.value("system", std::string())},
+        {"scope", decision.value("scope", std::string())},
         {"observer", actorIdentityEventData(decision.value("observer", json::object()))},
         {"found", decision.value("found", false)},
         {"selected_slot", decision.value("selected_slot", -1)},
@@ -508,10 +508,10 @@ json enemyTargetingDecisionEventKey(const json& decision) {
 
 std::string enemyTargetingDecisionEventStateKey(const json& decision) {
     const json observer = decision.value("observer", json::object());
-    const std::string system = decision.value("system", std::string());
+    const std::string scope = decision.value("scope", std::string());
     const std::string observerPtr = observer.value("ptr", std::string("0x0"));
     return fmt::format(FMT_STRING("enemy.targeting:{}:{}:{}"),
-                       system, observerPtr, observer.value("id", 0));
+                       scope, observerPtr, observer.value("id", 0));
 }
 
 void emitPlayerQueryEvents(const Provider& provider, const json& data) {
@@ -551,6 +551,8 @@ void emitEnemyTargetingEvents(const Provider& provider, const json& data) {
         const json eventData = {
             {"schema_version", data.value("schema_version", 1)},
             {"decision", eventKey},
+            {"label", decision.value("label", std::string())},
+            {"mode", decision.value("mode", std::string())},
             {"retain_seconds", decision.value("retain_seconds", 0.0f)},
             {"sticky_elapsed_seconds", decision.value("sticky_elapsed_seconds", 0.0f)},
             {"changed", decision.value("changed", false)},
@@ -1216,7 +1218,9 @@ json enemyTargetingDecisionSummary(const coop::EnemyTargetDecisionDebug& decisio
     }
 
     return {
-        {"system", decision.system},
+        {"scope", coop::enemyTargetScopeName(decision.scope)},
+        {"mode", coop::enemyTargetModeName(decision.mode)},
+        {"label", decision.label},
         {"observer", playerQueryActorSummary(decision.observerDebug)},
         {"found", decision.selected.found},
         {"selected_slot", decision.selected.slot != coop::PlayerSlot::Invalid
@@ -1226,9 +1230,19 @@ json enemyTargetingDecisionSummary(const coop::EnemyTargetDecisionDebug& decisio
         {"distance", decision.selected.distance},
         {"distance_xz", decision.selected.distanceXZ},
         {"angle_y", static_cast<int>(decision.selected.angleY)},
+        {"nearest_found", decision.nearest.found},
+        {"nearest_slot", decision.nearest.slot != coop::PlayerSlot::Invalid
+                             ? static_cast<int>(decision.nearest.slot)
+                             : -1},
+        {"nearest_actor", playerQueryActorSummary(decision.nearestActorDebug)},
+        {"nearest_distance", decision.nearest.distance},
+        {"nearest_distance_xz", decision.nearest.distanceXZ},
+        {"nearest_angle_y", static_cast<int>(decision.nearest.angleY)},
         {"reason", coop::enemyTargetReasonName(decision.reason)},
         {"committed", decision.committed},
         {"changed", decision.changed},
+        {"retained_valid", decision.retainedValid},
+        {"retention_blocked_nearest", decision.retentionBlockedNearest},
         {"retain_seconds", decision.retainSeconds},
         {"sticky_elapsed_seconds", decision.stickyElapsedSeconds},
         {"current_sim_frame", static_cast<unsigned int>(decision.currentSimFrame)},
@@ -1378,8 +1392,8 @@ Provider s_providers[] = {
     {"input.pad", 1, "cheap", 1, true, 120, 4096, collectInputPad},
     {"attention.state", 1, "medium", 5, true, 60, 12288, collectAttentionState},
     {"player.status", 1, "cheap", 1, true, 120, 8192, collectPlayerStatus},
-    {"coop.player_query", 1, "cheap", 5, true, 60, 8192, collectPlayerQuery},
-    {"enemy.targeting", 1, "cheap", 5, true, 60, 12288, collectEnemyTargeting},
+    {"coop.player_query", 1, "cheap", 5, true, 240, 8192, collectPlayerQuery},
+    {"enemy.targeting", 1, "cheap", 5, true, 240, 12288, collectEnemyTargeting},
     {"coop.probes", 1, "cheap", 30, true, 20, 4096, collectCoopProbes},
     {"alink.secondary", 4, "cheap", 1, true, 120, 8192, collectAlinkSecondary},
 };

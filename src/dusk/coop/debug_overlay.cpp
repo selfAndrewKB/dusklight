@@ -2,6 +2,7 @@
 
 #include "d/d_debug_viewer.h"
 #include "dusk/coop/enemy_targeting.h"
+#include "SSystem/SComponent/c_math.h"
 #include "f_op/f_op_actor.h"
 #include "f_op/f_op_view.h"
 #include "dolphin/gx.h"
@@ -20,6 +21,10 @@ constexpr int kMaxTextDecisions = 10;
 constexpr int kMaxChosenDecisions = 16;
 constexpr int kMaxLineLabels = 16;
 constexpr float kMaxActiveOverlayDistanceXZ = 5000.0f;
+constexpr float kVisionConeLengthXZ = 1200.0f;
+constexpr s16 kVisionConeHalfAngle = 0x4000;
+constexpr int kVisionConeSegments = 8;
+constexpr int kRecentDecisionMaxFrameAge = 10;
 
 struct ChosenDecision {
     const EnemyTargetDecisionDebug* decision = nullptr;
@@ -86,11 +91,11 @@ int latestSimFrame(const EnemyTargetingDebugState& state) {
 }
 
 bool isRecentDecision(const EnemyTargetDecisionDebug& decision, int latestFrame) {
-    return latestFrame - static_cast<int>(decision.currentSimFrame) <= 1;
+    return latestFrame - static_cast<int>(decision.currentSimFrame) <= kRecentDecisionMaxFrameAge;
 }
 
 bool systemContains(const EnemyTargetDecisionDebug& decision, const char* needle) {
-    return std::strstr(decision.system, needle) != nullptr;
+    return std::strstr(decision.label, needle) != nullptr;
 }
 
 int decisionPriority(const EnemyTargetDecisionDebug& decision) {
@@ -108,6 +113,7 @@ int decisionPriority(const EnemyTargetDecisionDebug& decision) {
 
 bool shouldDrawDecision(const EnemyTargetDecisionDebug& decision) {
     return decision.observer != nullptr && decision.selected.found &&
+           decision.selected.slot != PlayerSlot::Invalid &&
            decision.selected.actor != nullptr;
 }
 
@@ -116,6 +122,19 @@ bool shouldDrawWorldDecision(const EnemyTargetDecisionDebug& decision, int prior
         return false;
     }
     if (priority < 30) {
+        return false;
+    }
+    if (decision.selected.distanceXZ > kMaxActiveOverlayDistanceXZ) {
+        return false;
+    }
+    return true;
+}
+
+bool shouldDrawConeDecision(const EnemyTargetDecisionDebug& decision, int priority) {
+    if (!shouldDrawDecision(decision)) {
+        return false;
+    }
+    if (priority < 10) {
         return false;
     }
     if (decision.selected.distanceXZ > kMaxActiveOverlayDistanceXZ) {
@@ -142,6 +161,47 @@ void drawWorldDecision(const EnemyTargetDecisionDebug& decision, int priority) {
     dDbVw_drawSphereXlu(targetPos, 18.0f, targetColor, TRUE);
 }
 
+void endpointFromAngle(const cXyz& origin, s16 angle, float length, cXyz* out) {
+    out->x = origin.x + cM_ssin(angle) * length;
+    out->y = origin.y;
+    out->z = origin.z + cM_scos(angle) * length;
+}
+
+void drawVisionCone(const EnemyTargetDecisionDebug& decision, int priority) {
+    if (!shouldDrawConeDecision(decision, priority)) {
+        return;
+    }
+
+    cXyz origin = debugPos(decision.observer, 45.0f);
+    cXyz center;
+    cXyz left;
+    cXyz right;
+    // Co-op: this is an overlay approximation of the common Bokoblin forward wake cone. The
+    // policy still relies on the actor's real sight/range checks; this only makes "close but
+    // behind/outside cone" cases visible while debugging target handoffs.
+    const float length = kVisionConeLengthXZ;
+    endpointFromAngle(origin, decision.observer->shape_angle.y, length, &center);
+    endpointFromAngle(origin, decision.observer->shape_angle.y - kVisionConeHalfAngle, length, &left);
+    endpointFromAngle(origin, decision.observer->shape_angle.y + kVisionConeHalfAngle, length, &right);
+
+    const GXColor coneColor = {0xff, 0xff, 0x80, 0x70};
+    const GXColor centerColor = {0xff, 0xff, 0xff, 0x60};
+    dDbVw_drawLineXlu(origin, center, centerColor, TRUE, 10);
+    dDbVw_drawLineXlu(origin, left, coneColor, TRUE, 10);
+    dDbVw_drawLineXlu(origin, right, coneColor, TRUE, 10);
+
+    cXyz prev = left;
+    for (int i = 1; i <= kVisionConeSegments; i++) {
+        const s16 angle = decision.observer->shape_angle.y - kVisionConeHalfAngle +
+                          static_cast<s16>((static_cast<int>(kVisionConeHalfAngle) * 2 * i) /
+                                           kVisionConeSegments);
+        cXyz next;
+        endpointFromAngle(origin, angle, length, &next);
+        dDbVw_drawLineXlu(prev, next, coneColor, TRUE, 10);
+        prev = next;
+    }
+}
+
 bool projectPoint(const cXyz& pos, const view_class* view, const view_port_class* viewport,
                   f32* outX, f32* outY, f32* outZ) {
     f32 projection[7];
@@ -161,6 +221,9 @@ bool projectPoint(const cXyz& pos, const view_class* view, const view_port_class
 void captureLineLabel(const EnemyTargetDecisionDebug& decision, int priority, const view_class* view,
                       const view_port_class* viewport) {
     if (!shouldDrawWorldDecision(decision, priority) || s_lineLabelCount >= kMaxLineLabels) {
+        return;
+    }
+    if (decision.selected.slot == PlayerSlot::Invalid) {
         return;
     }
 
@@ -270,7 +333,7 @@ void drawText(const ChosenDecision* choices, int choiceCount) {
         const EnemyTargetDecisionDebug& decision = *choices[i].decision;
         char line[160];
         std::snprintf(line, sizeof(line), "%s slot %d %s%s %.2f/%.2fs xz %.0f",
-                      decision.system,
+                      decision.label,
                       slotIndex(decision.selected.slot),
                       enemyTargetReasonName(decision.reason),
                       decision.committed ? " committed" : "",
@@ -321,6 +384,7 @@ void drawEnemyTargetOverlay() {
     s_lineLabelCount = 0;
     s_lineLabelsCaptured = false;
     for (int i = 0; i < choiceCount; i++) {
+        drawVisionCone(*choices[i].decision, choices[i].priority);
         drawWorldDecision(*choices[i].decision, choices[i].priority);
     }
 }
@@ -329,6 +393,8 @@ void captureEnemyTargetOverlayLabels(const view_class* view, const view_port_cla
     if (!isEnemyTargetOverlayEnabled() || s_lineLabelsCaptured || view == nullptr || viewport == nullptr) {
         return;
     }
+    // Co-op: V1 captures labels from the first rendered camera pass only. World lines are drawn
+    // per viewport, but text projection is intentionally first-pass until labels become viewport-aware.
     s_lineLabelsCaptured = true;
 
     const EnemyTargetingDebugState& state = getEnemyTargetingDebugState();

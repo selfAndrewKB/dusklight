@@ -11,23 +11,25 @@ actor patches -> enemy_targeting -> player_query
 ```
 
 - `player_query`: raw facts about active players: candidates, distances, angles, slots, and diagnostics.
-- `enemy_targeting`: policy for choosing and retaining a target.
+- `enemy_targeting`: policy for choosing and retaining a target through reusable behavior scopes.
 - actor patches: narrow conversions at concrete enemy callsites, preserving vanilla behavior outside the scoped PC/co-op hook.
 
-The current Bokoblin proof calls `player_query` directly. Keep that direct call while the audit is still incomplete. `docs/coop-enemy-targeting-plan.md` may define the policy architecture now, but do not convert Bokoblin or any other enemy to `enemy_targeting` until the regular-enemy inventory has been classified well enough to pick a small first wave.
+The current Bokoblin proof now uses `enemy_targeting` over `player_query`. Bokoblin remains the first validation surface; do not convert additional enemies until the scoped-target foundation has been revalidated in game.
 
 ## Target Policy Requirements
 
 Nearest-player selection is a useful primitive, but it is too twitchy as a universal enemy policy. The policy layer should support at least:
 
 - target acquisition from nearest/visible active player candidates,
-- sticky target retention for a minimum number of frames,
+- sticky target retention for simulation seconds, not render frames,
 - attack follow-through that does not retarget mid-attack unless the target disappears or becomes invalid,
 - recent attacker bias so damage can pull attention,
 - optional target-pressure weighting so one player does not receive every enemy in a crowd,
 - diagnostics that show why a target was selected, retained, or changed.
 
 Do not build all of this before the audit is useful. Start with sticky retention and attack follow-through, then add bias/pressure only when a tested enemy needs it.
+
+Every converted enemy must use an actor-local helper near the top of the enemy file. The helper builds `EnemyTargetContext`, sets a reusable behavior scope such as `EnemyTargetScope::Combat`, and accepts a manual diagnostic label from the original callsite. The scope owns target state; labels explain which original callsite consumed that state. Do not key retention by labels or create independent per-callsite retention machines.
 
 ## Conversion Checklist
 
@@ -221,7 +223,7 @@ Remaining boss files (`d_a_b_bh`, `d_a_b_bq`, `d_a_b_dr`, `d_a_b_ds`, `d_a_b_gg`
 
 **E_IS, E_NZ, and E_CR have no obvious `selectEnemyTarget()` surface.** These enemies likely detect players via collision rather than explicit distance/angle search. That makes them poor proof targets for `enemy_targeting`, not necessarily easy enemies overall. Handle them in a later collision/world-interaction ownership pass.
 
-**The desired conversion shape is repeated, not bespoke.** For regular enemies, the target should be selected once per actor/system tick, then threaded through search/chase/attack/follow-through callsites that used to re-query P1. Per-file edits are still needed to hook each state machine, but the policy, retention, diagnostics, and target-state accessors should live in Dusk-owned reusable modules.
+**The desired conversion shape is repeated, not bespoke.** For regular enemies, the target should be owned once per actor behavior scope, then read through search/chase/attack/follow-through callsites that used to re-query P1. Per-file edits are still needed to hook each state machine, but the policy, retention, diagnostics, and target-state accessors should live in Dusk-owned reusable modules.
 
 ## Initial Actor Map
 
@@ -262,7 +264,7 @@ Use these groups to minimize manual per-enemy work. Each group should map to reu
 
 | Group | Pattern | Reusable API Direction | Good Candidates | Deferred Hazards |
 | --- | --- | --- | --- | --- |
-| Ground search/chase/attack | Enemy wakes, turns, chases, and gates an attack by player distance/angle | `selectEnemyTarget()` once per system tick, then use target actor/distance/angle through the state | `E_OC`, `E_TT`, `E_KG`, `E_BS`, `E_SH`, `E_AI` | Demo intros, guard/damage-owner paths |
+| Ground search/chase/attack | Enemy wakes, turns, chases, and gates an attack by player distance/angle | Actor-local helper over `EnemyTargetScope::Combat`; callsite labels are diagnostics only | `E_OC`, `E_TT`, `E_KG`, `E_BS`, `E_SH`, `E_AI` | Demo intros, guard/damage-owner paths |
 | Proximity/contact | Enemy reacts mostly through collision or a small wake radius | Collision-owner pass plus small query helpers where explicit search exists | `E_HM`, `E_BI`, `E_SM`, `E_SM2` | Hookshot/carry interactions, contact owner attribution |
 | Vertical/flying/ranged | Enemy needs height, line-of-sight, projectile aim, or flight behavior | Later policy profile with vertical scoring and target-state helpers | `E_BU`, `E_GE`, `E_PH`, `E_YK`, `E_YR`, `E_FB` | Camera/story flyers, rider-carry paths |
 | Target-state-sensitive | Enemy decision depends on target form/speed/guard/swim/damage state | Add selected-target state accessors after basic policy validates | `E_WW`, `E_GI`, `E_KK`, `E_BA` | Accidentally reading P1 state for P2, or replacing protagonist-only state |

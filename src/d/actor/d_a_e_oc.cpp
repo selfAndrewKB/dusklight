@@ -210,11 +210,14 @@ static daE_OC_HIO_c l_HIO;
 
 #if TARGET_PC
 // Co-op: keep Bokoblin patches thin by routing target policy through Dusk-owned enemy_targeting.
-static bool coOpSelectEnemyTarget(daE_OC_c* i_this, const char* system, bool committed,
-                                  fopAc_ac_c** player, f32* distance, s16* angle_y) {
+static bool coOpSelectCombatTarget(daE_OC_c* i_this, const char* label, bool committed,
+                                   dusk::coop::EnemyTargetMode mode, fopAc_ac_c** player,
+                                   f32* distance, s16* angle_y) {
     dusk::coop::EnemyTargetContext context;
     context.observer = i_this;
-    context.system = system;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
     context.committed = committed;
 
     const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
@@ -235,18 +238,7 @@ static bool coOpSelectEnemyTarget(daE_OC_c* i_this, const char* system, bool com
 }
 
 static void coOpClearEnemyTargets(daE_OC_c* i_this) {
-    static const char* systems[] = {
-        "e_oc.search",
-        "e_oc.search_head",
-        "e_oc.find",
-        "e_oc.find_stay",
-        "e_oc.move_out",
-        "e_oc.attack",
-    };
-
-    for (const char* system : systems) {
-        dusk::coop::clearEnemyTarget(i_this, system);
-    }
+    dusk::coop::clearAllEnemyTargets(i_this);
 }
 #endif
 
@@ -354,8 +346,10 @@ bool daE_OC_c::searchPlayer() {
     f32 player_distance = fopAcM_searchPlayerDistance(this);
     s16 player_angle = fopAcM_searchPlayerAngleY(this);
 #if TARGET_PC
-    // Co-op: Bokoblin sight checks should wake for the policy-selected target, not only P1.
-    coOpSelectEnemyTarget(this, "e_oc.search", false, &player, &player_distance, &player_angle);
+    // Co-op: sight checks are awareness reads. They update the same Combat owner when they notice
+    // someone, but stale chase stickiness must not hide a closer eligible player from the wake gate.
+    coOpSelectCombatTarget(this, "e_oc.search", false, dusk::coop::EnemyTargetMode::ImmediateAcquire,
+                           &player, &player_distance, &player_angle);
 #endif
     if (player_distance < mPlayerRange) {
         s16 diff = shape_angle.y - player_angle;
@@ -450,8 +444,10 @@ bool daE_OC_c::searchPlayerShakeHead() {
     f32 player_distance = fopAcM_searchPlayerDistance(this);
     s16 player_angle = fopAcM_searchPlayerAngleY(this);
 #if TARGET_PC
-    // Co-op: use the same target policy for the idle head-search animation.
-    coOpSelectEnemyTarget(this, "e_oc.search_head", false, &player, &player_distance, &player_angle);
+    // Co-op: head-search is also awareness, not combat commitment.
+    coOpSelectCombatTarget(this, "e_oc.search_head", false,
+                           dusk::coop::EnemyTargetMode::ImmediateAcquire, &player,
+                           &player_distance, &player_angle);
 #endif
     if (player_distance < mPlayerRange) {
         s16 diff = getHeadAngle() - player_angle;
@@ -641,13 +637,6 @@ void daE_OC_c::setGroundAngle() {
 }
 
 void daE_OC_c::setActionMode(int i_action, int i_state) {
-#if TARGET_PC
-    if (i_action == E_OC_ACTION_ATTACK) {
-        // Co-op: a new attack must commit from the current chase/search target, not a stale
-        // target retained by the previous attack action.
-        dusk::coop::clearEnemyTarget(this, "e_oc.attack");
-    }
-#endif
     mOldActionMode = mActionMode;
     mActionMode = i_action;
     mOcState = i_state;
@@ -1206,7 +1195,8 @@ void daE_OC_c::executeFind() {
     f32 pl_dist = fopAcM_searchPlayerDistance(this);
 #if TARGET_PC
     // Co-op: once alerted, keep basic chase steering on the policy-selected target.
-    coOpSelectEnemyTarget(this, "e_oc.find", false, NULL, &pl_dist, &pl_ang);
+    coOpSelectCombatTarget(this, "e_oc.find", false, dusk::coop::EnemyTargetMode::StickyCombat,
+                           NULL, &pl_dist, &pl_ang);
 #endif
     if (mOcState < 3 || !setWatchMode()) {
         if (field_0x6b4 == 2 && !dComIfGp_event_runCheck()) {
@@ -1452,7 +1442,8 @@ void daE_OC_c::executeAttack() {
     f32 target_dist = fopAcM_searchPlayerDistance(this);
     s16 target_angle = fopAcM_searchPlayerAngleY(this);
     // Co-op: attack follow-through should stay aimed at the committed co-op target.
-    coOpSelectEnemyTarget(this, "e_oc.attack", true, NULL, &target_dist, &target_angle);
+    coOpSelectCombatTarget(this, "e_oc.attack", true, dusk::coop::EnemyTargetMode::StickyCombat,
+                           NULL, &target_dist, &target_angle);
 #endif
     int frame_ctrl = (mpMorf->getFrame() - 9.0f);
     if (frame_ctrl >= 0) {
@@ -2339,7 +2330,9 @@ void daE_OC_c::executeFindStay() {
     f32 target_dist = fopAcM_searchPlayerDistance(this);
 #if TARGET_PC
     // Co-op: keep the close-range face/attack gate pointed at the policy-selected target.
-    coOpSelectEnemyTarget(this, "e_oc.find_stay", false, NULL, &target_dist, &target_angle);
+    coOpSelectCombatTarget(this, "e_oc.find_stay", false,
+                           dusk::coop::EnemyTargetMode::StickyCombat, NULL, &target_dist,
+                           &target_angle);
 #endif
     mPrevShapeAngle = target_angle;
     mBattleOn = true;
@@ -2406,7 +2399,9 @@ void daE_OC_c::executeMoveOut() {
     s16 target_angle = fopAcM_searchPlayerAngleY(this);
 #if TARGET_PC
     // Co-op: retreat/re-engage steering should use the active co-op target selected by policy.
-    coOpSelectEnemyTarget(this, "e_oc.move_out", false, &target_player, &player_distance, &target_angle);
+    coOpSelectCombatTarget(this, "e_oc.move_out", false,
+                           dusk::coop::EnemyTargetMode::StickyCombat, &target_player,
+                           &player_distance, &target_angle);
 #endif
     s16 home_angle = cLib_targetAngleY(&home.pos, &current.pos);
     mBattleOn = true;

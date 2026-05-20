@@ -34,8 +34,9 @@ The intended shape is still broad in spirit: every player should be eligible whe
 - Preserve single-player behavior when only slot 0 is active.
 - Avoid instant target flicker when two players cross nearest-player thresholds.
 - Preserve an attack target once an enemy has committed to an attack or follow-through, unless the target disappears or becomes invalid.
-- Keep policy state in a Dusk sidecar keyed by enemy actor identity and system name, not inside decompiled enemy structs.
-- Let actors select once per state/system tick and reuse that decision for distance, angle, position, and selected-target state so disjoint callsites agree.
+- Keep policy state in a scalable Dusk sidecar keyed by enemy actor identity and `EnemyTargetScope`, not inside decompiled enemy structs.
+- Let actors read one canonical target owner per behavior scope and reuse that decision for distance, angle, position, and selected-target state so disjoint callsites agree.
+- Keep actor-specific strings such as `e_oc.find` as diagnostic labels only; labels must never create independent retention machines.
 - Make diagnostics explain the policy decision: selected slot, reason, retain timer, committed hint, candidates, and fallback path.
 - Keep the shape online-friendly: the host should own enemy target selection, and clients should treat the selected target as replicated truth later.
 
@@ -63,9 +64,20 @@ enum class EnemyTargetReason : unsigned char {
     FallbackPrimary,
 };
 
+enum class EnemyTargetScope : unsigned char {
+    Combat,
+};
+
+enum class EnemyTargetMode : unsigned char {
+    StickyCombat,
+    ImmediateAcquire,
+};
+
 struct EnemyTargetContext {
     fopAc_ac_c* observer = nullptr;
-    const char* system = nullptr;
+    EnemyTargetScope scope = EnemyTargetScope::Combat;
+    EnemyTargetMode mode = EnemyTargetMode::StickyCombat;
+    const char* label = nullptr;
     bool committed = false;
     float retainSeconds = kDefaultEnemyTargetRetainSeconds;
 };
@@ -82,7 +94,8 @@ struct EnemyTargetResult {
 };
 
 EnemyTargetResult selectEnemyTarget(const EnemyTargetContext& context);
-void clearEnemyTarget(fopAc_ac_c* observer, const char* system);
+void clearEnemyTarget(fopAc_ac_c* observer, EnemyTargetScope scope);
+void clearAllEnemyTargets(fopAc_ac_c* observer);
 
 }  // namespace dusk::coop
 ```
@@ -93,18 +106,25 @@ Retention is expressed as simulation seconds, not frame counts. V1 uses `retainS
 
 ## V1 Policy
 
-For each `(observer actor, system)` pair:
+For each `(observer actor, EnemyTargetScope)` pair:
 
 1. Query active candidates through `player_query`.
 2. If no candidate is found, clear or mark the state lost.
-3. If the actor says it is committed, retain the previous valid target.
-4. If the previous target is still valid and the sticky timer has not expired, retain it.
-5. Otherwise acquire the nearest active player.
-6. Record the reason and reset/update the retain timer.
+3. If the actor says it is committed, retain the previous valid target and pause the sticky timer.
+4. If the callsite uses `EnemyTargetMode::ImmediateAcquire`, choose the nearest visible candidate immediately and write it back to the same scope. This is for awareness/wake gates that must not be blocked by stale chase stickiness.
+5. Otherwise, if the previous target is still valid and the sticky timer has not expired, retain it.
+6. Otherwise acquire the nearest active player.
+7. Record the reason, diagnostic label, mode, and retain timer.
 
 V1 should treat "committed" as actor-supplied context. For Bokoblin, the patch passes `committed = true` from attack/follow-through paths where retargeting would look wrong. Do not try to infer committed attack state generically from unknown enemy internals.
 
-Committed systems must be reset at the start of a new attack action when the actor can leave and later re-enter that action. Bokoblin clears `e_oc.attack` on entry so a fresh attack commits from the current chase/search target instead of retaining the target from a previous attack after players have swapped positions.
+Commitment belongs to the same behavior scope selected by search/chase/attack gates. Do not create separate attack-only retention state. For Bokoblin, all current `e_oc.*` combat labels share `EnemyTargetScope::Combat`, so attack follow-through freezes the active combat target instead of maintaining its own stale target. "Freezes" means pause elapsed retention time during the committed state, not reset it; after the attack, the enemy resumes from the pre-attack sticky elapsed time and can reconsider promptly.
+
+`EnemyTargetMode` is not a second state key. It is a read/update policy for the current callsite. This distinction matters: `e_oc.search` and `e_oc.search_head` use immediate acquisition because they answer "who can I notice right now?", while `e_oc.find`, `e_oc.find_stay`, `e_oc.move_out`, and `e_oc.attack` use sticky combat because they answer "who am I currently fighting?"
+
+Targeting state storage must scale with normal and multiplied enemy density. Do not reintroduce a small fixed gameplay pool or silent overwrite fallback. If an exceptional storage failure ever occurs, log it loudly and preserve vanilla-like behavior for that decision rather than making an enemy randomly stop acting.
+
+Every converted enemy should use an actor-local helper near the top of the file, such as `coOpSelectCombatTarget(...)`, to build `EnemyTargetContext`. The helper sets the reusable behavior scope and each original callsite passes a manual diagnostic label.
 
 ## Diagnostics
 
@@ -113,11 +133,14 @@ Committed systems must be reset at the start of a new attack action when the act
 `latest.json` should be rich:
 
 - observer pointer/profile/id/room,
-- system name,
+- scope and diagnostic label,
 - selected slot/actor,
+- nearest slot/actor,
 - reason,
+- mode,
 - committed hint,
 - retention seconds and sticky elapsed seconds,
+- whether retention blocked a nearer candidate,
 - candidate slots and distances from `player_query`,
 - whether the selected target changed.
 
@@ -133,9 +156,13 @@ Distance, angle, animation frame, and timer drift may appear in latest/context b
 
 ## Live Overlay
 
-`dusk::coop::debug_overlay` is a visual aid over `enemy_targeting` debug state. It draws selected-target lines/spheres in the active 3D view and a compact text list with system, selected slot, reason, committed flag, and sticky retention timing.
+`dusk::coop::debug_overlay` is a visual aid over `enemy_targeting` debug state. It draws selected-target lines/spheres in the active 3D view and a compact text list with label, selected slot, reason, committed flag, and sticky retention timing.
 
 The overlay is currently on by default during enemy conversion work and can be toggled from Actor Spawner or `Ctrl+Shift+F12`. It must remain read-only: do not make it select targets, update policy state, or emit diagnostics. JSON diagnostics remain the durable evidence for later review.
+
+The overlay also draws an approximate forward awareness cone for active enemy decisions. This is intentionally a visual debugging aid, not the policy source of truth; actor-specific range/LOS/cone gates still live in the original enemy logic. Use it to inspect cases where a player is very close but behind or outside the enemy's wake cone.
+
+V1 line labels are captured from the first rendered camera pass only. World lines draw per viewport, but label projection is intentionally first-pass until split-screen labels become viewport-aware.
 
 ## First Implementation Target
 
@@ -148,6 +175,15 @@ Why Bokoblin:
 - The current raw-query hooks provide a known-good baseline for behavior.
 
 Initial conversion should replace only the existing Bokoblin raw-query helper calls with `enemy_targeting`. Do not broaden to new Bokoblin systems in the same pass unless a test shows the old raw-query proof is incomplete.
+
+Bokoblin is also the first validation surface for the foundation rewrite:
+
+- state keyed by `{observer, EnemyTargetScope::Combat}`;
+- labels such as `e_oc.find`, `e_oc.find_stay`, and `e_oc.attack` are diagnostics only;
+- `_delete()` calls `clearAllEnemyTargets(this)` so targeting and overlay/debug state cannot outlive the actor;
+- invalid overlay slots must not render as `P0`;
+- attack commitment freezes the active combat target.
+- wake/search checks use immediate acquisition on the same combat owner so stale retention cannot suppress a closer eligible player.
 
 After Bokoblin validates, port the same pattern to Tektite (`src/d/actor/d_a_e_tt.cpp`, `E_TT`). Tektite is the first non-Bokoblin proof because its search/chase/attack callsites are compact and mostly isolated. Pick one accessible compact ground enemy after that (`E_KG`, `E_BS`, or `E_SH`) before tackling target-state-sensitive families such as White Wolfos.
 
@@ -180,7 +216,7 @@ This prevents designing the policy exclusively around Bokoblin while still keepi
 
 - Run `git diff --check`.
 - User builds with Visual Studio MSVC.
-- With only P1 active, confirm Bokoblin behavior matches the current raw-query proof and normal single-player behavior.
+- With only P1 active, confirm Bokoblin behavior matches the validated raw-query baseline and normal single-player behavior.
 - Spawn P2 and confirm Bokoblin can acquire P2.
 - Move P1/P2 across the nearest-player boundary and confirm the target does not flicker every frame.
 - Start an attack and confirm the target is retained through the committed attack/follow-through path.
@@ -194,4 +230,10 @@ This prevents designing the policy exclusively around Bokoblin while still keepi
 - [x] Converted only the existing Bokoblin raw-query proof systems to policy-backed targeting.
 - [x] Validate Bokoblin sticky retention and committed attack retention in game.
 - [x] Add read-only in-game overlay for live `enemy_targeting` decisions.
+- [x] Refactor targeting state to `{observer, EnemyTargetScope}` so Bokoblin combat callsite labels share one retained target.
+- [x] Replace the fixed gameplay targeting-state pool with scalable sidecar storage and explicit cleanup.
+- [x] Document the universal actor-local helper wrapper pattern for future enemy conversions.
+- [x] Add callsite modes so Bokoblin wake/search gates can immediately acquire without creating separate retention state.
+- [x] Make committed attack frames pause sticky retention instead of refreshing the post-attack window.
+- [x] Add latest-only nearest-vs-selected diagnostics for retention mismatch analysis.
 - [ ] Convert Tektite in a separate follow-up patch after Bokoblin validates.

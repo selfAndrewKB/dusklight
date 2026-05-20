@@ -19,6 +19,8 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
 - Additional player spawning should go through slot-based `dusk::coop::spawnPlayer(...)`; ImGui and hotkeys are debug callers, not the lifecycle owner.
 - Keep durable player-slot identity in `dusk::coop::player_slots`; slot-1 ALINK audit toggles live in `dusk::coop::alink_probes` so prototype probes do not become registry architecture.
 - Enemy co-op work must classify touched singleton reads before patching: targeting, selected-target state, primary/global state, damage-owner, caught/grab-owner, or collision-owner. Do not do naive global replacements; use `enemy_targeting` policy for repeated search/chase/attack patterns.
+- Enemy targeting conversions must use an actor-local helper near the top of each enemy file. The helper sets a reusable behavior scope such as `EnemyTargetScope::Combat`; callsite strings such as `e_oc.find` are diagnostic labels only and must not create independent retention state. Use target modes for callsite policy, e.g. awareness/wake reads may use immediate acquisition while chase/attack reads use sticky combat. Actor deletion must clear target sidecar state with `clearAllEnemyTargets`.
+- Do not propose or implement "temporary now, proper later" co-op fixes unless the user explicitly asks for a disposable experiment. Measure the engine behavior as much as needed, then choose the durable architecture first so prototype debt does not become the project foundation.
 
 ## Repository Map
 

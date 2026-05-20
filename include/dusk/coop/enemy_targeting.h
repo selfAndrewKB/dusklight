@@ -19,9 +19,22 @@ enum class EnemyTargetReason : u8 {
     FallbackPrimary,
 };
 
+enum class EnemyTargetScope : u8 {
+    Combat,
+};
+
+// Co-op: scope owns the retained target; mode only describes how one vanilla callsite may read or
+// update that scope. This keeps one combat target per enemy while allowing non-sticky wake checks.
+enum class EnemyTargetMode : u8 {
+    StickyCombat,
+    ImmediateAcquire,
+};
+
 struct EnemyTargetContext {
     fopAc_ac_c* observer = nullptr;
-    const char* system = nullptr;
+    EnemyTargetScope scope = EnemyTargetScope::Combat;
+    EnemyTargetMode mode = EnemyTargetMode::StickyCombat;
+    const char* label = nullptr;
     bool committed = false;
     // Co-op: tune enemy target stickiness in simulation seconds, not render frames.
     float retainSeconds = kDefaultEnemyTargetRetainSeconds;
@@ -39,16 +52,22 @@ struct EnemyTargetResult {
 };
 
 struct EnemyTargetDecisionDebug {
-    char system[64] = {};
+    EnemyTargetScope scope = EnemyTargetScope::Combat;
+    char label[64] = {};
     fopAc_ac_c* observer = nullptr;
     PlayerQueryActorDebug observerDebug;
     EnemyTargetResult selected;
     PlayerQueryActorDebug selectedActorDebug;
+    PlayerQueryResult nearest;
+    PlayerQueryActorDebug nearestActorDebug;
     PlayerQueryCandidateDebug candidates[kPlayerSlotCount] = {};
     int candidateCount = 0;
     EnemyTargetReason reason = EnemyTargetReason::LostTarget;
+    EnemyTargetMode mode = EnemyTargetMode::StickyCombat;
     bool committed = false;
     bool changed = false;
+    bool retainedValid = false;
+    bool retentionBlockedNearest = false;
     float retainSeconds = kDefaultEnemyTargetRetainSeconds;
     float stickyElapsedSeconds = 0.0f;
     u32 currentSimFrame = 0;
@@ -63,9 +82,12 @@ struct EnemyTargetingDebugState {
 // Co-op: called once per game simulation tick so retention is independent of presentation FPS.
 void advanceEnemyTargetingFrame(u32 frame);
 EnemyTargetResult selectEnemyTarget(const EnemyTargetContext& context);
-void clearEnemyTarget(fopAc_ac_c* observer, const char* system);
+void clearEnemyTarget(fopAc_ac_c* observer, EnemyTargetScope scope);
+void clearAllEnemyTargets(fopAc_ac_c* observer);
 
 const EnemyTargetingDebugState& getEnemyTargetingDebugState();
 const char* enemyTargetReasonName(EnemyTargetReason reason);
+const char* enemyTargetScopeName(EnemyTargetScope scope);
+const char* enemyTargetModeName(EnemyTargetMode mode);
 
 }  // namespace dusk::coop

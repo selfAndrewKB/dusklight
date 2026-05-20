@@ -1,45 +1,42 @@
 #include "dusk/coop/enemy_targeting.h"
 
 #include "dusk/game_clock.h"
+#include "dusk/logging.h"
 #include "f_op/f_op_actor.h"
 #include "f_op/f_op_actor_mng.h"
 
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 namespace dusk::coop {
 namespace {
 
 struct TargetState {
     fopAc_ac_c* observer = nullptr;
-    char system[64] = {};
+    EnemyTargetScope scope = EnemyTargetScope::Combat;
     PlayerSlot slot = PlayerSlot::Invalid;
     fopAc_ac_c* actor = nullptr;
     float stickyElapsedSeconds = 0.0f;
     u32 lastUpdatedSimFrame = 0;
-    bool inUse = false;
 };
 
-TargetState s_states[64];
+aurora::Module CoopEnemyTargetingLog("dusk::coop.enemy_targeting");
+std::vector<TargetState> s_states;
 EnemyTargetingDebugState s_debugState;
 u32 s_currentSimFrame = 0;
 
-constexpr int kSystemNameSize = 64;
+constexpr int kLabelSize = 64;
 constexpr int kDebugDecisionCount = sizeof(s_debugState.decisions) / sizeof(s_debugState.decisions[0]);
 
-void copySystemName(char* dst, const char* system) {
-    std::snprintf(dst, kSystemNameSize, "%s", system != nullptr ? system : "");
+void copyLabel(char* dst, const char* label) {
+    std::snprintf(dst, kLabelSize, "%s", label != nullptr ? label : "");
 }
 
-TargetState* findState(fopAc_ac_c* observer, const char* system, bool create) {
-    const char* systemName = system != nullptr ? system : "";
-    TargetState* freeState = nullptr;
+TargetState* findState(fopAc_ac_c* observer, EnemyTargetScope scope, bool create) {
     for (TargetState& state : s_states) {
-        if (state.inUse && state.observer == observer && std::strcmp(state.system, systemName) == 0) {
+        if (state.observer == observer && state.scope == scope) {
             return &state;
-        }
-        if (!state.inUse && freeState == nullptr) {
-            freeState = &state;
         }
     }
 
@@ -47,13 +44,18 @@ TargetState* findState(fopAc_ac_c* observer, const char* system, bool create) {
         return nullptr;
     }
 
-    TargetState* state = freeState != nullptr ? freeState : &s_states[0];
-    *state = TargetState{};
-    state->observer = observer;
-    copySystemName(state->system, systemName);
-    state->lastUpdatedSimFrame = s_currentSimFrame;
-    state->inUse = true;
-    return state;
+    try {
+        TargetState state;
+        state.observer = observer;
+        state.scope = scope;
+        state.lastUpdatedSimFrame = s_currentSimFrame;
+        s_states.push_back(state);
+    } catch (...) {
+        CoopEnemyTargetingLog.warn("failed to allocate enemy target state for observer {}",
+                                   static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(observer)));
+        return nullptr;
+    }
+    return &s_states.back();
 }
 
 bool isValidTarget(PlayerSlot slot, fopAc_ac_c* actor) {
@@ -94,12 +96,12 @@ PlayerQueryActorDebug actorDebug(const fopAc_ac_c* actor) {
     return debug;
 }
 
-const PlayerQueryDecisionDebug* findPlayerQueryDecision(const fopAc_ac_c* observer, const char* system) {
+const PlayerQueryDecisionDebug* findPlayerQueryDecision(const fopAc_ac_c* observer, const char* label) {
     const PlayerQueryDebugState& queryDebug = getPlayerQueryDebugState();
-    const char* systemName = system != nullptr ? system : "";
+    const char* labelName = label != nullptr ? label : "";
     for (int i = 0; i < queryDebug.decisionCount; i++) {
         const PlayerQueryDecisionDebug& decision = queryDebug.decisions[i];
-        if (decision.observer == observer && std::strcmp(decision.system, systemName) == 0) {
+        if (decision.observer == observer && std::strcmp(decision.system, labelName) == 0) {
             return &decision;
         }
     }
@@ -107,12 +109,12 @@ const PlayerQueryDecisionDebug* findPlayerQueryDecision(const fopAc_ac_c* observ
 }
 
 void recordDecision(const EnemyTargetContext& context, const EnemyTargetResult& result,
-                    const TargetState& state) {
-    const char* systemName = context.system != nullptr ? context.system : "";
+                    const PlayerQueryResult& nearest, const TargetState& state,
+                    bool retainedValid) {
     EnemyTargetDecisionDebug* decision = nullptr;
     for (int i = 0; i < s_debugState.decisionCount; i++) {
         if (s_debugState.decisions[i].observer == context.observer &&
-            std::strcmp(s_debugState.decisions[i].system, systemName) == 0)
+            s_debugState.decisions[i].scope == context.scope)
         {
             decision = &s_debugState.decisions[i];
             break;
@@ -126,20 +128,29 @@ void recordDecision(const EnemyTargetContext& context, const EnemyTargetResult& 
         }
     }
 
-    copySystemName(decision->system, systemName);
+    decision->scope = context.scope;
+    copyLabel(decision->label, context.label);
     decision->observer = context.observer;
     decision->observerDebug = actorDebug(context.observer);
     decision->selected = result;
     decision->selectedActorDebug = actorDebug(result.actor);
+    decision->nearest = nearest;
+    decision->nearestActorDebug = actorDebug(nearest.actor);
     decision->reason = result.reason;
+    decision->mode = context.mode;
     decision->committed = context.committed;
     decision->changed = result.changed;
+    decision->retainedValid = retainedValid;
+    decision->retentionBlockedNearest =
+        nearest.found && result.found && nearest.actor != result.actor &&
+        (result.reason == EnemyTargetReason::RetainSticky ||
+         result.reason == EnemyTargetReason::RetainCommitted);
     decision->retainSeconds = context.retainSeconds;
     decision->stickyElapsedSeconds = state.stickyElapsedSeconds;
     decision->currentSimFrame = s_currentSimFrame;
     decision->lastUpdatedSimFrame = state.lastUpdatedSimFrame;
 
-    const PlayerQueryDecisionDebug* queryDecision = findPlayerQueryDecision(context.observer, systemName);
+    const PlayerQueryDecisionDebug* queryDecision = findPlayerQueryDecision(context.observer, context.label);
     decision->candidateCount = 0;
     for (int i = 0; i < kPlayerSlotCount; i++) {
         decision->candidates[i] = PlayerQueryCandidateDebug{};
@@ -166,6 +177,42 @@ EnemyTargetResult targetResultFromQuery(const PlayerQueryResult& query, EnemyTar
     return result;
 }
 
+void updateStateFromResult(TargetState* state, const EnemyTargetResult& result) {
+    if (result.found) {
+        state->slot = result.slot;
+        state->actor = result.actor;
+    } else {
+        state->slot = PlayerSlot::Invalid;
+        state->actor = nullptr;
+    }
+}
+
+void clearDebugDecision(fopAc_ac_c* observer, EnemyTargetScope scope) {
+    for (int i = 0; i < s_debugState.decisionCount;) {
+        if (s_debugState.decisions[i].observer == observer && s_debugState.decisions[i].scope == scope) {
+            for (int j = i + 1; j < s_debugState.decisionCount; j++) {
+                s_debugState.decisions[j - 1] = s_debugState.decisions[j];
+            }
+            s_debugState.decisions[--s_debugState.decisionCount] = EnemyTargetDecisionDebug{};
+            continue;
+        }
+        i++;
+    }
+}
+
+void clearAllDebugDecisions(fopAc_ac_c* observer) {
+    for (int i = 0; i < s_debugState.decisionCount;) {
+        if (s_debugState.decisions[i].observer == observer) {
+            for (int j = i + 1; j < s_debugState.decisionCount; j++) {
+                s_debugState.decisions[j - 1] = s_debugState.decisions[j];
+            }
+            s_debugState.decisions[--s_debugState.decisionCount] = EnemyTargetDecisionDebug{};
+            continue;
+        }
+        i++;
+    }
+}
+
 }  // namespace
 
 void advanceEnemyTargetingFrame(u32 frame) {
@@ -177,29 +224,49 @@ EnemyTargetResult selectEnemyTarget(const EnemyTargetContext& context) {
         return EnemyTargetResult{};
     }
 
-    TargetState* state = findState(context.observer, context.system, true);
+    TargetState* state = findState(context.observer, context.scope, true);
+    if (state == nullptr) {
+        EnemyTargetResult fallback = targetResultFromQuery(
+            resultForTarget(context.observer, PlayerSlot::Slot0, getPlayer(PlayerSlot::Slot0)),
+            EnemyTargetReason::FallbackPrimary, TargetState{});
+        return fallback;
+    }
+
     const TargetState previous = *state;
-    // Co-op: actors can call the same targeting system more than once in a tick; only simulation
-    // frame deltas advance retention so uncapped/interpolated rendering cannot change AI timing.
+    // Co-op: an actor can read the same behavior scope from several original callsites in one
+    // tick. Only simulation frame deltas advance retention, so presentation FPS cannot change AI.
     const u32 frameDelta = s_currentSimFrame >= state->lastUpdatedSimFrame
                                ? s_currentSimFrame - state->lastUpdatedSimFrame
                                : 0;
     state->lastUpdatedSimFrame = s_currentSimFrame;
-    if (context.committed) {
-        state->stickyElapsedSeconds = 0.0f;
-    } else {
+    if (!context.committed) {
+        // Co-op: committed attack frames pause sticky aging instead of refreshing it. The target
+        // stays stable through follow-through, then resumes from the pre-attack elapsed time so a
+        // nearby player can be reconsidered promptly after the attack state ends.
         state->stickyElapsedSeconds += static_cast<float>(frameDelta) * game_clock::sim_pace();
     }
 
-    const PlayerQueryResult nearest = findNearestPlayer(context.observer, context.system);
+    const PlayerQueryResult nearest = findNearestPlayer(context.observer, context.label);
     EnemyTargetResult result;
     const bool retainedValid = isValidTarget(state->slot, state->actor);
+    const PlayerQueryResult retained =
+        retainedValid ? resultForTarget(context.observer, state->slot, state->actor) : PlayerQueryResult{};
     if (context.committed && retainedValid) {
-        result = targetResultFromQuery(resultForTarget(context.observer, state->slot, state->actor),
-                                       EnemyTargetReason::RetainCommitted, previous);
+        result = targetResultFromQuery(retained, EnemyTargetReason::RetainCommitted, previous);
+    } else if (context.mode == EnemyTargetMode::ImmediateAcquire && nearest.found) {
+        // Co-op: awareness/wake checks ask "who can this enemy notice right now?" They still write
+        // the Combat owner on acquisition, but they must not let old chase stickiness hide a closer
+        // eligible player from vanilla sight gates such as player_distance < mPlayerRange.
+        result = targetResultFromQuery(nearest, retainedValid && nearest.slot == state->slot &&
+                                       nearest.actor == state->actor
+                                           ? EnemyTargetReason::RetainSticky
+                                           : EnemyTargetReason::AcquireNearest,
+                                       previous);
+        if (result.changed) {
+            state->stickyElapsedSeconds = 0.0f;
+        }
     } else if (retainedValid && state->stickyElapsedSeconds < context.retainSeconds) {
-        result = targetResultFromQuery(resultForTarget(context.observer, state->slot, state->actor),
-                                       EnemyTargetReason::RetainSticky, previous);
+        result = targetResultFromQuery(retained, EnemyTargetReason::RetainSticky, previous);
     } else if (nearest.found) {
         // Co-op: when the sticky window expires but the nearest player is still the retained target,
         // refresh quietly instead of toggling diagnostics between acquire/retain every few seconds.
@@ -226,20 +293,31 @@ EnemyTargetResult selectEnemyTarget(const EnemyTargetContext& context) {
         state->stickyElapsedSeconds = 0.0f;
     }
 
-    if (result.found) {
-        state->slot = result.slot;
-        state->actor = result.actor;
-    }
+    updateStateFromResult(state, result);
 
-    recordDecision(context, result, *state);
+    recordDecision(context, result, nearest, *state, retainedValid);
     return result;
 }
 
-void clearEnemyTarget(fopAc_ac_c* observer, const char* system) {
-    TargetState* state = findState(observer, system, false);
-    if (state != nullptr) {
-        *state = TargetState{};
+void clearEnemyTarget(fopAc_ac_c* observer, EnemyTargetScope scope) {
+    for (auto it = s_states.begin(); it != s_states.end(); ++it) {
+        if (it->observer == observer && it->scope == scope) {
+            s_states.erase(it);
+            break;
+        }
     }
+    clearDebugDecision(observer, scope);
+}
+
+void clearAllEnemyTargets(fopAc_ac_c* observer) {
+    for (auto it = s_states.begin(); it != s_states.end();) {
+        if (it->observer == observer) {
+            it = s_states.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    clearAllDebugDecisions(observer);
 }
 
 const EnemyTargetingDebugState& getEnemyTargetingDebugState() {
@@ -258,6 +336,26 @@ const char* enemyTargetReasonName(EnemyTargetReason reason) {
         return "LostTarget";
     case EnemyTargetReason::FallbackPrimary:
         return "FallbackPrimary";
+    default:
+        return "";
+    }
+}
+
+const char* enemyTargetScopeName(EnemyTargetScope scope) {
+    switch (scope) {
+    case EnemyTargetScope::Combat:
+        return "combat";
+    default:
+        return "";
+    }
+}
+
+const char* enemyTargetModeName(EnemyTargetMode mode) {
+    switch (mode) {
+    case EnemyTargetMode::StickyCombat:
+        return "sticky_combat";
+    case EnemyTargetMode::ImmediateAcquire:
+        return "immediate_acquire";
     default:
         return "";
     }
