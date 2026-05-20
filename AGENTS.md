@@ -34,10 +34,10 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
 - `docs/coop-secondary-alink-input-routing-plan.md`: completed secondary ALINK input-routing milestone: P2 moves from controller 2 and basic rolling/combat swing works.
 - `docs/coop-secondary-alink-item-ownership-plan.md`: completed item/action ownership pass: boomerang, fishing rod, Dominion Rod, bow/arrow, Spinner, bombs, slingshot, and Iron Boots owner-routing findings.
 - `docs/coop-native-split-screen-camera-plan.md`: completed split-screen camera prototype milestone and known V1 render/HUD limitations.
-- `docs/coop-world-acknowledgement-plan.md`: current active co-op plan: add player-query helpers, diagnostics, and the first narrow enemy/world proof that P2 can be acknowledged.
+- `docs/coop-world-acknowledgement-plan.md`: completed world-acknowledgement proof: player-query helpers, diagnostics, Hanging Helmasaur proof, and Bokoblin raw-query evidence.
 - `docs/coop-player-owner-lookup-audit.md`: reusable audit table for item/weapon actors that still ask global P1 when they should ask the owning ALINK slot.
 - `docs/coop-enemy-audit.md`: enemy/world acknowledgement map, actor triage table, and the target-policy layering for `actor patches -> enemy_targeting -> player_query`.
-- `docs/coop-enemy-targeting-plan.md`: planned enemy targeting policy layer over `player_query`; V1 should stay to sticky target retention plus actor-supplied attack commitment.
+- `docs/coop-enemy-targeting-plan.md`: current active co-op plan: policy-backed enemy targeting over `player_query`; V1 stays to Bokoblin sticky target retention plus actor-supplied attack commitment, with Tektite next after validation.
 - `.codex/config.toml`: Codex hook wiring. Keep hook behavior narrow and documented in `docs/codex-hooks.md`.
 - `files.cmake`: explicit source-file list. Update it when adding C++ source/header files that must be built.
 

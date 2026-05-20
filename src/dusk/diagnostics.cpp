@@ -6,10 +6,12 @@
 #include "d/d_item.h"
 #include "dusk/coop/alink_probes.h"
 #include "dusk/coop/camera.h"
+#include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/input.h"
 #include "dusk/coop/player_query.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/dusk.h"
+#include "dusk/game_clock.h"
 #include "dusk/io.hpp"
 #include "dusk/logging.h"
 #include "dusk/main.h"
@@ -449,6 +451,7 @@ json playerStatusEventKey(const json& data) {
 }
 
 json playerQueryDecisionEventKey(const json& decision);
+json enemyTargetingDecisionEventKey(const json& decision);
 
 json playerQueryEventKey(const json& data) {
     json decisions = json::array();
@@ -491,6 +494,26 @@ std::string playerQueryDecisionEventStateKey(const json& decision) {
                        system, observerPtr, observer.value("id", 0));
 }
 
+json enemyTargetingDecisionEventKey(const json& decision) {
+    return {
+        {"system", decision.value("system", std::string())},
+        {"observer", actorIdentityEventData(decision.value("observer", json::object()))},
+        {"found", decision.value("found", false)},
+        {"selected_slot", decision.value("selected_slot", -1)},
+        {"selected_actor", actorIdentityEventData(decision.value("selected_actor", json::object()))},
+        {"reason", decision.value("reason", std::string())},
+        {"committed", decision.value("committed", false)},
+    };
+}
+
+std::string enemyTargetingDecisionEventStateKey(const json& decision) {
+    const json observer = decision.value("observer", json::object());
+    const std::string system = decision.value("system", std::string());
+    const std::string observerPtr = observer.value("ptr", std::string("0x0"));
+    return fmt::format(FMT_STRING("enemy.targeting:{}:{}:{}"),
+                       system, observerPtr, observer.value("id", 0));
+}
+
 void emitPlayerQueryEvents(const Provider& provider, const json& data) {
     if (!data.contains("decisions") || !data["decisions"].is_array()) {
         return;
@@ -507,6 +530,30 @@ void emitPlayerQueryEvents(const Provider& provider, const json& data) {
         const json eventData = {
             {"schema_version", data.value("schema_version", 1)},
             {"decision", eventKey},
+        };
+        emitProviderEvent(provider, "decision", eventData);
+    }
+}
+
+void emitEnemyTargetingEvents(const Provider& provider, const json& data) {
+    if (!data.contains("decisions") || !data["decisions"].is_array()) {
+        return;
+    }
+
+    for (const json& decision : data["decisions"]) {
+        const json eventKey = enemyTargetingDecisionEventKey(decision);
+        if (provider.emitOnChange &&
+            !shouldEmitProviderEvent(enemyTargetingDecisionEventStateKey(decision), eventKey))
+        {
+            continue;
+        }
+
+        const json eventData = {
+            {"schema_version", data.value("schema_version", 1)},
+            {"decision", eventKey},
+            {"retain_seconds", decision.value("retain_seconds", 0.0f)},
+            {"sticky_elapsed_seconds", decision.value("sticky_elapsed_seconds", 0.0f)},
+            {"changed", decision.value("changed", false)},
         };
         emitProviderEvent(provider, "decision", eventData);
     }
@@ -700,6 +747,18 @@ json eventKeyForProvider(const char* provider, const json& data) {
     }
     if (name == "coop.player_query") {
         return playerQueryEventKey(data);
+    }
+    if (name == "enemy.targeting") {
+        json decisions = json::array();
+        if (data.contains("decisions") && data["decisions"].is_array()) {
+            for (const json& decision : data["decisions"]) {
+                decisions.push_back(enemyTargetingDecisionEventKey(decision));
+            }
+        }
+        return {
+            {"schema_version", data.value("schema_version", 1)},
+            {"decisions", decisions},
+        };
     }
     if (name == "alink.secondary") {
         return alinkSecondaryEventKey(data);
@@ -1150,6 +1209,50 @@ json collectPlayerQuery() {
     };
 }
 
+json enemyTargetingDecisionSummary(const coop::EnemyTargetDecisionDebug& decision) {
+    json candidates = json::array();
+    for (int i = 0; i < decision.candidateCount && i < coop::kPlayerSlotCount; i++) {
+        candidates.push_back(playerQueryCandidateSummary(decision.candidates[i]));
+    }
+
+    return {
+        {"system", decision.system},
+        {"observer", playerQueryActorSummary(decision.observerDebug)},
+        {"found", decision.selected.found},
+        {"selected_slot", decision.selected.slot != coop::PlayerSlot::Invalid
+                              ? static_cast<int>(decision.selected.slot)
+                              : -1},
+        {"selected_actor", playerQueryActorSummary(decision.selectedActorDebug)},
+        {"distance", decision.selected.distance},
+        {"distance_xz", decision.selected.distanceXZ},
+        {"angle_y", static_cast<int>(decision.selected.angleY)},
+        {"reason", coop::enemyTargetReasonName(decision.reason)},
+        {"committed", decision.committed},
+        {"changed", decision.changed},
+        {"retain_seconds", decision.retainSeconds},
+        {"sticky_elapsed_seconds", decision.stickyElapsedSeconds},
+        {"current_sim_frame", static_cast<unsigned int>(decision.currentSimFrame)},
+        {"last_updated_sim_frame", static_cast<unsigned int>(decision.lastUpdatedSimFrame)},
+        {"candidates", candidates},
+    };
+}
+
+json collectEnemyTargeting() {
+    const coop::EnemyTargetingDebugState& state = coop::getEnemyTargetingDebugState();
+    json decisions = json::array();
+    for (int i = 0; i < state.decisionCount; i++) {
+        decisions.push_back(enemyTargetingDecisionSummary(state.decisions[i]));
+    }
+
+    return {
+        {"schema_version", 1},
+        {"default_retain_seconds", coop::kDefaultEnemyTargetRetainSeconds},
+        {"time_source", "simulation"},
+        {"sim_pace_seconds", game_clock::sim_pace()},
+        {"decisions", decisions},
+    };
+}
+
 json inputForSlot(coop::PlayerSlot slot) {
     const coop::PlayerInputState input = coop::readLocalInput(slot);
     return {
@@ -1276,6 +1379,7 @@ Provider s_providers[] = {
     {"attention.state", 1, "medium", 5, true, 60, 12288, collectAttentionState},
     {"player.status", 1, "cheap", 1, true, 120, 8192, collectPlayerStatus},
     {"coop.player_query", 1, "cheap", 5, true, 60, 8192, collectPlayerQuery},
+    {"enemy.targeting", 1, "cheap", 5, true, 60, 12288, collectEnemyTargeting},
     {"coop.probes", 1, "cheap", 30, true, 20, 4096, collectCoopProbes},
     {"alink.secondary", 4, "cheap", 1, true, 120, 8192, collectAlinkSecondary},
 };
@@ -1419,6 +1523,10 @@ void tick(u32 frame) {
         updateProviderLatest(provider.name, data);
         if (std::string(provider.name) == "coop.player_query") {
             emitPlayerQueryEvents(provider, data);
+            continue;
+        }
+        if (std::string(provider.name) == "enemy.targeting") {
+            emitEnemyTargetingEvents(provider, data);
             continue;
         }
 

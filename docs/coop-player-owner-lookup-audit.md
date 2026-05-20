@@ -16,13 +16,13 @@ Enemy AI and world acknowledgement are adjacent, but they are not the same audit
 
 Do not treat `player_query` as the finished enemy AI policy. Its job is raw facts: active player slots, candidate actors, distances, angles, and diagnostics.
 
-Enemy actor patches should stay narrow and call a higher-level policy once it exists:
+Enemy actor patches should stay narrow and call the higher-level policy for search/chase/attack decisions:
 
 ```text
 actor patches -> enemy_targeting -> player_query
 ```
 
-The first Bokoblin proof currently calls `player_query` directly because `enemy_targeting` does not exist yet. That is a deliberate proof-of-pipe step, not the final shape. After `docs/coop-enemy-audit.md` classifies regular-enemy coverage, the next AI implementation pass should move target stability, attack follow-through, recent attacker bias, and target-count pressure into `dusk::coop::enemy_targeting` so every enemy file does not grow its own version of multiplayer target selection.
+The first Bokoblin proof originally called `player_query` directly as a proof-of-pipe step. Bokoblin now routes those existing proof systems through `dusk::coop::enemy_targeting` for sticky retention and committed attack follow-through. Future item-owner work should still stay separate from enemy targeting; do not solve owner lookup problems by reaching into enemy target policy.
 
 ## Current Pattern
 

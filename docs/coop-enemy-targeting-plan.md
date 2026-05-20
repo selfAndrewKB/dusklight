@@ -56,7 +56,6 @@ The first code pass should prefer a narrow surface, approximately:
 namespace dusk::coop {
 
 enum class EnemyTargetReason : unsigned char {
-    None,
     AcquireNearest,
     RetainSticky,
     RetainCommitted,
@@ -65,10 +64,10 @@ enum class EnemyTargetReason : unsigned char {
 };
 
 struct EnemyTargetContext {
-    const fopAc_ac_c* observer = nullptr;
+    fopAc_ac_c* observer = nullptr;
     const char* system = nullptr;
     bool committed = false;
-    int minRetainFrames = 30;
+    float retainSeconds = kDefaultEnemyTargetRetainSeconds;
 };
 
 struct EnemyTargetResult {
@@ -77,21 +76,20 @@ struct EnemyTargetResult {
     f32 distance = 0.0f;
     f32 distanceXZ = 0.0f;
     s16 angleY = 0;
-    EnemyTargetReason reason = EnemyTargetReason::None;
     bool found = false;
     bool changed = false;
+    EnemyTargetReason reason = EnemyTargetReason::LostTarget;
 };
 
 EnemyTargetResult selectEnemyTarget(const EnemyTargetContext& context);
-void clearEnemyTarget(const fopAc_ac_c* observer, const char* system);
-
-bool selectedTargetIsWolf(const EnemyTargetResult& target);
-bool selectedTargetIsGuarding(const EnemyTargetResult& target);
+void clearEnemyTarget(fopAc_ac_c* observer, const char* system);
 
 }  // namespace dusk::coop
 ```
 
-This is a sketch, not a lock. Match the actual style of `player_query` and `player_slots` when implementing. The selected-target state helpers should be added only as needed; they are listed here to prevent wolf/guard/speed checks from being mislabeled as permanently primary-player-only.
+The selected-target state helpers should be added only as needed; they are intentionally not part of V1 so wolf/guard/speed checks are not mislabeled as permanently primary-player-only or implemented speculatively.
+
+Retention is expressed as simulation seconds, not frame counts. V1 uses `retainSeconds = 2.0f` by default and advances elapsed retention with `frameDelta * dusk::game_clock::sim_pace()`. Do not use raw wall-clock time or presentation frame count for gameplay target retention; `std::chrono` remains for diagnostics timestamps only.
 
 ## V1 Policy
 
@@ -108,7 +106,7 @@ V1 should treat "committed" as actor-supplied context. For Bokoblin, the patch c
 
 ## Diagnostics
 
-Add an `enemy.targeting` diagnostics provider when implementation begins.
+`enemy.targeting` diagnostics are part of V1.
 
 `latest.json` should be rich:
 
@@ -117,7 +115,7 @@ Add an `enemy.targeting` diagnostics provider when implementation begins.
 - selected slot/actor,
 - reason,
 - committed hint,
-- retain frames remaining or elapsed,
+- retention seconds and sticky elapsed seconds,
 - candidate slots and distances from `player_query`,
 - whether the selected target changed.
 
@@ -180,3 +178,11 @@ This prevents designing the policy exclusively around Bokoblin while still keepi
 - Start an attack and confirm the target is retained through the committed attack/follow-through path.
 - Flush diagnostics and confirm `enemy.targeting` explains selected target, reason, committed hint, and candidate facts.
 - Confirm `events.jsonl` does not grow from distance/angle drift while players stand still.
+
+## Implementation Progress
+
+- [x] Added `dusk::coop::enemy_targeting` V1 as a sidecar policy over `player_query`.
+- [x] Added `enemy.targeting` diagnostics with rich latest snapshots and semantic per-decision events.
+- [x] Converted only the existing Bokoblin raw-query proof systems to policy-backed targeting.
+- [ ] Validate Bokoblin sticky retention and committed attack retention in game.
+- [ ] Convert Tektite in a separate follow-up patch after Bokoblin validates.

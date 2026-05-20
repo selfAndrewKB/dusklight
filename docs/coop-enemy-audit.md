@@ -229,7 +229,7 @@ The table below is machine-assisted from `src/d/actor/d_a_e_*.cpp` and profile s
 
 | Priority | Actor/File | Profile | Lookup Count | Initial Classification | Notes |
 | --- | --- | --- | ---: | --- | --- |
-| Done proof | `d_a_e_oc.cpp` | `E_OC` | 48 | regular melee | First regular-enemy proof. Convert to `enemy_targeting` before using as the template. |
+| Done proof | `d_a_e_oc.cpp` | `E_OC` | 48 | regular melee | First regular-enemy proof; existing proof systems now route through `enemy_targeting` V1. Validate before using as the template. |
 | Done proof | `d_a_e_hm.cpp` | `E_HM` | low | proximity enemy | One wake trigger converted; full combat not audited. |
 | High risk | `d_a_e_wb.cpp` | `E_WB` | 75 | mounted/boss/setpiece likely | Very high singleton density; defer until ordinary enemies are stable. |
 | High risk | `d_a_e_po.cpp` | `E_PO` | 63 | special/ghost-like | High singleton density; classify before patching. |
@@ -272,7 +272,7 @@ Use these groups to minimize manual per-enemy work. Each group should map to reu
 
 ## First Policy-Backed Wave
 
-The audit is now sufficient to begin the `enemy_targeting` V1 module without broad enemy conversion. Start with the reusable policy spine and convert only the existing Bokoblin raw-query proof to policy-backed targeting. That lets the known-good specimen prove sticky retention, committed attack retention, and diagnostics without adding a second variable.
+The audit was sufficient to begin the `enemy_targeting` V1 module without broad enemy conversion. Bokoblin now has the reusable policy spine on only the existing raw-query proof systems. Validate sticky retention, committed attack retention, and diagnostics before adding Tektite as the second variable.
 
 After Bokoblin validates, use one clean ground enemy to prove the pattern ports well:
 
@@ -298,7 +298,7 @@ Use this queue before writing more enemy behavior code:
    - miniboss/boss/story/demo.
 3. ~~For each likely regular enemy, inspect only enough code to mark search/chase/attack/follow-through/damage risk. Do not patch during this pass.~~ Priority 1 regular-enemy callsite classification is complete enough for the first policy wave. Continue classification opportunistically for candidates outside that wave.
 4. ~~Pick the first policy-backed wave from the best understood regular enemies, not necessarily from the highest lookup counts.~~ First wave chosen: policy-backed `E_OC`, then `E_TT`, then one accessible compact ground melee backup (`E_KG`, `E_BS`, or `E_SH`).
-5. Implement `enemy_targeting` V1 before converting more actors. Keep V1 to sticky retention, actor-supplied committed-retention, selected target facts, and quiet diagnostics.
+5. Validate `enemy_targeting` V1 before converting more actors. Keep V1 to sticky retention, actor-supplied committed-retention, selected target facts, and quiet diagnostics.
 
 ## Full Machine Inventory
 
@@ -357,7 +357,7 @@ This inventory is generated from `src/d/actor/d_a_e_*.cpp` file names and `g_pro
 | `d_a_e_ms.cpp` | `E_MS` | 7 | regular/helper hybrid | skull/carry-object interaction paths |
 | `d_a_e_nest.cpp` | `E_NEST` | 11 | spawner/nest likely |  |
 | `d_a_e_nz.cpp` | `E_NZ` | 4 | regular small enemy candidate | stick behavior needs owner audit |
-| `d_a_e_oc.cpp` | `E_OC` | 49 | regular melee | raw-query proof validated; do not broaden until audit classification is done |
+| `d_a_e_oc.cpp` | `E_OC` | 49 | regular melee | raw-query proof validated; policy-backed targeting V1 implemented for existing proof systems |
 | `d_a_e_oct_bg.cpp` | `E_OctBg` | 8 | water/special enemy | large aquatic predator (Oct = Octorok-like, Bg = Big); born_swim/swim/chase_core/normal_attack; water enemy, defer until water-targeting policy exists |
 | `d_a_e_ot.cpp` | `E_OT` | 8 | swarm/spawner likely | water egg-hatcher; born/swim/damage animations; 20 egg spawn positions; soft-body collision; likely spawns from a parent |
 | `d_a_e_ph.cpp` | `E_PH` | 14 | regular enemy candidate | Peahat; file comment "Peahat Enemy"; appear/wait/fly/hang/damage; good audit candidate after ground-enemy wave |
@@ -405,11 +405,10 @@ This inventory is generated from `src/d/actor/d_a_e_*.cpp` file names and `g_pro
 
 ## Next Steps
 
-1. Validate the quieter `coop.player_query` JSONL in game. The recorder now emits per-decision semantic events instead of whole decision-table payloads, but the next Bokoblin/regular-enemy test should confirm payload throttling is gone.
-2. Implement `dusk::coop::enemy_targeting` V1 from `docs/coop-enemy-targeting-plan.md`: sticky retention, committed-retention, selected-target facts, and quiet diagnostics.
-3. Convert the existing Bokoblin raw-query proof to `enemy_targeting` without broadening its behavior surface.
-4. After Bokoblin validates, port the same pattern to Tektite (`E_TT`) as the first non-Bokoblin proof.
-5. Continue classifying/test-locating remaining regular enemies in parallel, especially the accessible compact ground enemies (`E_KG`, `E_BS`, `E_SH`) and the target-state-sensitive second wave (`E_WW`, `E_GI`, `E_KK`).
+1. Validate policy-backed Bokoblin in game: acquire P2, avoid nearest-player flicker, and retain the chosen target through committed attack follow-through.
+2. Confirm `enemy.targeting` JSONL is quiet while players stand still and that continuous distance/angle/timer fields remain latest/context rather than event drivers.
+3. After Bokoblin validates, port the same pattern to Tektite (`E_TT`) as the first non-Bokoblin proof.
+4. Continue classifying/test-locating remaining regular enemies in parallel, especially the accessible compact ground enemies (`E_KG`, `E_BS`, `E_SH`) and the target-state-sensitive second wave (`E_WW`, `E_GI`, `E_KK`).
 
 ## Multiplayer AI Notes
 

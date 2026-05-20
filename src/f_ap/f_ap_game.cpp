@@ -28,6 +28,7 @@
 
 #if TARGET_PC
 #include "tracy/Tracy.hpp"
+#include "dusk/coop/enemy_targeting.h"
 #include <dusk/gamepad_color.h>
 #include <dusk/autosave.h>
 #endif
@@ -831,6 +832,8 @@ void fapGm_Execute() {
 
 #if TARGET_PC
     duskExecute();
+    // Co-op: enemy targeting retention uses simulation time, not presentation frame rate.
+    dusk::coop::advanceEnemyTargetingFrame(sExecCount);
 #endif
 
 #ifdef TARGET_PC
