@@ -13,6 +13,7 @@
 #if TARGET_PC
 #include "dusk/coop/damage_owner.h"
 #include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
 #endif
 
 class daE_TT_HIO_c : public JORReflexible {
@@ -180,6 +181,46 @@ static bool coOpSelectCombatTarget(daE_TT_c* i_this, const char* label, bool com
 
     if (player != NULL) {
         *player = target.localActor;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (distance_xz != NULL) {
+        *distance_xz = target.distanceXZ;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    return true;
+}
+
+// Co-op: selected-target state reads answer "what is the chosen target doing?" after combat
+// targeting has already picked an identity; this keeps prediction logic out of raw P1 helpers.
+static bool coOpSelectTargetState(daE_TT_c* i_this, const char* label, bool committed,
+                                  dusk::coop::EnemyTargetMode mode,
+                                  dusk::coop::selected_target_state::SelectedTargetState* state,
+                                  f32* distance, f32* distance_xz, s16* angle_y) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target, label);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
     }
     if (distance != NULL) {
         *distance = target.distance;
@@ -652,12 +693,12 @@ void daE_TT_c::executeWait() {
 
 void daE_TT_c::executeChase() {
 #if TARGET_PC
-    fopAc_ac_c* player = NULL;
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
     f32 playerDist = 0.0f;
     s16 playerAngle = 0;
-    if (!coOpSelectCombatTarget(this, "e_tt.chase", false,
-                                dusk::coop::EnemyTargetMode::StickyCombat, &player, &playerDist,
-                                NULL, &playerAngle))
+    if (!coOpSelectTargetState(this, "e_tt.chase", false,
+                               dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
+                               &playerDist, NULL, &playerAngle))
     {
         setActionMode(ACTION_WAIT, 0);
         return;
@@ -698,7 +739,9 @@ void daE_TT_c::executeChase() {
                 }
                 if (mAttackTimer == 0 && !fopAcM_CheckCondition(this, fopAcCnd_NODRAW_e)) {
 #if TARGET_PC
-                    if ((s16)abs((s16)(player->shape_angle.y - playerAngle)) > l_HIO.attack_angle &&
+                    // Co-op: close-range attack gating depends on the selected target's facing.
+                    if ((s16)abs((s16)(targetState.shapeAngleY - playerAngle)) >
+                            l_HIO.attack_angle &&
                         m_attack_tt == NULL)
 #else
                     if ((s16)abs((s16)(daPy_getPlayerActorClass()->shape_angle.y -
@@ -779,16 +822,16 @@ void daE_TT_c::executeChase() {
 
 void daE_TT_c::executeAttack() {
 #if TARGET_PC
-    fopAc_ac_c* player = NULL;
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
     s16 playerAngle = 0;
-    if (!coOpSelectCombatTarget(this, "e_tt.attack", true,
-                                dusk::coop::EnemyTargetMode::StickyCombat, &player, NULL, NULL,
-                                &playerAngle))
+    if (!coOpSelectTargetState(this, "e_tt.attack", true,
+                               dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL,
+                               NULL, &playerAngle))
     {
         setActionMode(ACTION_CHASE, 0);
         return;
     }
-    cXyz playerPos(player->current.pos);
+    cXyz playerPos(targetState.pos);
 #else
     cXyz playerPos(daPy_getPlayerActorClass()->current.pos);
 #endif
@@ -1014,12 +1057,12 @@ void daE_TT_c::executeDeath() {
 
 void daE_TT_c::executeOutRange() {
 #if TARGET_PC
-    fopAc_ac_c* player = NULL;
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
     f32 playerDistXZ = 0.0f;
     s16 playerAngle = 0;
-    if (!coOpSelectCombatTarget(this, "e_tt.out_range", false,
-                                dusk::coop::EnemyTargetMode::StickyCombat, &player, NULL,
-                                &playerDistXZ, &playerAngle))
+    if (!coOpSelectTargetState(this, "e_tt.out_range", false,
+                               dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL,
+                               &playerDistXZ, &playerAngle))
     {
         setActionMode(ACTION_WAIT, 0);
         return;
@@ -1058,7 +1101,8 @@ void daE_TT_c::executeOutRange() {
         }
         if (targetDistXZ < 500.0f && !fopAcM_CheckCondition(this, fopAcCnd_NODRAW_e) &&
 #if TARGET_PC
-            (s16)abs((s16)(player->shape_angle.y - playerAngle)) > l_HIO.attack_angle &&
+            // Co-op: out-range re-attack gating uses the selected target's facing, not P1.
+            (s16)abs((s16)(targetState.shapeAngleY - playerAngle)) > l_HIO.attack_angle &&
 #else
             (s16)abs((s16)(daPy_getPlayerActorClass()->shape_angle.y -
                            fopAcM_searchPlayerAngleY(this))) > l_HIO.attack_angle &&
@@ -1073,8 +1117,22 @@ void daE_TT_c::executeOutRange() {
 }
 
 void daE_TT_c::executeFirstAttack() {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    f32 targetDistXZ = 0.0f;
+    s16 targetAngle = 0;
+    if (!coOpSelectTargetState(this, "e_tt.first_attack", false,
+                               dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL,
+                               &targetDistXZ, &targetAngle))
+    {
+        setActionMode(ACTION_WAIT, 0);
+        return;
+    }
+    cXyz playerPos(targetState.pos);
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
     cXyz playerPos(player->current.pos);
+#endif
 
     switch (mMode) {
     case 0:
@@ -1086,32 +1144,54 @@ void daE_TT_c::executeFirstAttack() {
         if (mpMorfSO->checkFrame(0.0f)) {
             mSound.startCreatureVoice(Z2SE_EN_TT_V_WAIT, -1);
         }
+#if TARGET_PC
+        // Co-op: first-attack prediction follows the selected combat target's state, not P1.
+        cLib_addCalcAngleS(&shape_angle.y, targetAngle, 0x8, 0x800, 0x100);
+#else
         cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 0x8, 0x800, 0x100);
+#endif
         current.angle.y = shape_angle.y;
         if (!fopAcM_CheckCondition(this, fopAcCnd_NODRAW_e)) {
+#if TARGET_PC
+            f32 modifiedPlayerSpeed = targetState.speedF * 40.0f + 500.0f;
+            if (targetDistXZ < modifiedPlayerSpeed) {
+                if ((s16)abs((s16)(targetState.shapeAngleY - targetAngle)) >
+                    l_HIO.attack_angle)
+#else
             f32 modifiedPlayerSpeed = player->getSpeedF() * 40.0f + 500.0f;
             if (fopAcM_searchPlayerDistanceXZ(this) < modifiedPlayerSpeed) {
                 if ((s16)abs((s16)(player->shape_angle.y - fopAcM_searchPlayerAngleY(this))) >
                     l_HIO.attack_angle)
+#endif
                 {
                     mSound.startCreatureVoice(Z2SE_EN_TT_V_JUMP, -1);
                     setBck(3, 0, 3.0f, 1.0f);
                     mMode = 11;
                     gravity = -10.0f;
+#if TARGET_PC
+                    mPlayerOnHorse = targetState.horseRide;
+#else
                     if (player->checkHorseRide()) {
                         mPlayerOnHorse = true;
                     } else {
                         mPlayerOnHorse = false;
                     }
+#endif
                 }
             }
         }
         break;
 
     case 11: {
+#if TARGET_PC
+        f32 playerSpeedF = targetState.speedF * 17.0f;
+        cXyz xyz(playerSpeedF * cM_ssin(targetState.shapeAngleY), 0.0f,
+                 playerSpeedF * cM_scos(targetState.shapeAngleY));
+#else
         f32 playerSpeedF = player->getSpeedF() * 17.0f;
         cXyz xyz(playerSpeedF * cM_ssin(player->shape_angle.y), 0.0f,
                  playerSpeedF * cM_scos(player->shape_angle.y));
+#endif
         xyz += playerPos;
         cLib_addCalcAngleS(&shape_angle.y, cLib_targetAngleY(&current.pos, &xyz), 0x8, 0x800,
                            0x100);

@@ -17,6 +17,7 @@
 #if TARGET_PC
 #include "dusk/coop/damage_owner.h"
 #include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
 #endif
 #include <cstring>
 
@@ -234,6 +235,65 @@ static bool coOpSelectCombatTarget(daE_OC_c* i_this, const char* label, bool com
     }
     if (angle_y != NULL) {
         *angle_y = target.angleY;
+    }
+    return true;
+}
+
+// Co-op: when Bokoblin logic needs facts about the policy-selected target, snapshot those facts
+// through selected_target_state instead of letting actor code read a raw player pointer directly.
+static bool coOpSelectCombatTargetState(
+    daE_OC_c* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance, s16* angle_y) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target, label);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    return true;
+}
+
+static bool coOpIsActiveCutState(
+    const dusk::coop::selected_target_state::SelectedTargetState& state) {
+    return state.cutActive;
+}
+
+// Co-op: sword-sound awareness asks which player is actively making sword noise nearby; that is
+// selected/player state, not the retained combat target and not damage ownership.
+static bool coOpFindSwordSoundPlayer(daE_OC_c* i_this,
+                                     dusk::coop::selected_target_state::SelectedTargetState* state) {
+    const dusk::coop::selected_target_state::SelectedTargetState candidate =
+        dusk::coop::selected_target_state::findNearestPlayerState(i_this, "e_oc.sound_sword",
+                                                                  coOpIsActiveCutState,
+                                                                  i_this->getPlayerRange());
+    if (!candidate.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = candidate;
     }
     return true;
 }
@@ -467,11 +527,21 @@ bool daE_OC_c::searchSound() {
         return false;
     }
 
+#if TARGET_PC
+    // Co-op: sword-noise awareness follows the player currently swinging within earshot.
+    dusk::coop::selected_target_state::SelectedTargetState soundState;
+    if (coOpFindSwordSoundPlayer(this, &soundState)) {
+        mWatchPos = soundState.pos;
+        setActionMode(E_OC_ACTION_SOUND_WATCH, 0);
+        return true;
+    }
+#else
     if (daPy_getPlayerActorClass()->getCutType() != daPy_py_c::CUT_TYPE_NONE && fopAcM_searchPlayerDistance(this) < mPlayerRange) {
         mWatchPos = dComIfGp_getPlayer(0)->current.pos;
         setActionMode(E_OC_ACTION_SOUND_WATCH, 0);
         return true;
     }
+#endif
 
     if (fopAcM_otoCheck(this, 1000.0f)) {
         mWatchPos = dKy_Sound_get()->position;
@@ -2408,15 +2478,15 @@ void daE_OC_c::executeFindStay() {
 
 void daE_OC_c::executeMoveOut() {
 #if TARGET_PC
-    fopAc_ac_c* target_player = dComIfGp_getPlayer(0);
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
 #endif
     f32 player_distance = fopAcM_searchPlayerDistance(this);
     s16 target_angle = fopAcM_searchPlayerAngleY(this);
 #if TARGET_PC
-    // Co-op: retreat/re-engage steering should use the active co-op target selected by policy.
-    coOpSelectCombatTarget(this, "e_oc.move_out", false,
-                           dusk::coop::EnemyTargetMode::StickyCombat, &target_player,
-                           &player_distance, &target_angle);
+    // Co-op: retreat/re-engage steering and home-range checks use the selected target's state.
+    coOpSelectCombatTargetState(this, "e_oc.move_out", false,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
+                                &player_distance, &target_angle);
 #endif
     s16 home_angle = cLib_targetAngleY(&home.pos, &current.pos);
     mBattleOn = true;
@@ -2485,7 +2555,7 @@ void daE_OC_c::executeMoveOut() {
             current.angle.y = shape_angle.y;
             if (field_0x6c0 == 0) {
 #if TARGET_PC
-                if (target_player != NULL && home.pos.abs(target_player->current.pos) < (mMoveRange - 200.0f)) {
+                if (targetState.available && home.pos.abs(targetState.pos) < (mMoveRange - 200.0f)) {
 #else
                 if (home.pos.abs(daPy_getPlayerActorClass()->current.pos) < (mMoveRange - 200.0f)) {
 #endif
@@ -2495,7 +2565,7 @@ void daE_OC_c::executeMoveOut() {
 
                 if (player_distance > l_HIO.standby_distance) {
 #if TARGET_PC
-                    if (target_player != NULL && home.pos.abs(target_player->current.pos) > mMoveRange + 200.0f) {
+                    if (targetState.available && home.pos.abs(targetState.pos) > mMoveRange + 200.0f) {
 #else
                     if (home.pos.abs(daPy_getPlayerActorClass()->current.pos) > mMoveRange + 200.0f) {
 #endif

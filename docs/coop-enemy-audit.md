@@ -270,7 +270,7 @@ Use these groups to minimize manual per-enemy work. Each group should map to reu
 | Ground search/chase/attack | Enemy wakes, turns, chases, and gates an attack by player distance/angle | Actor-local helper over `EnemyTargetScope::Combat`; callsite labels are diagnostics only | `E_OC`, `E_TT`, `E_KG`, `E_BS`, `E_SH`, `E_AI` | Demo intros, guard/damage-owner paths |
 | Proximity/contact | Enemy reacts mostly through collision or a small wake radius | Collision-owner pass plus small query helpers where explicit search exists | `E_HM`, `E_BI`, `E_SM`, `E_SM2` | Hookshot/carry interactions, contact owner attribution |
 | Vertical/flying/ranged | Enemy needs height, line-of-sight, projectile aim, or flight behavior | Later policy profile with vertical scoring and target-state helpers | `E_BU`, `E_GE`, `E_PH`, `E_YK`, `E_YR`, `E_FB` | Camera/story flyers, rider-carry paths |
-| Target-state-sensitive | Enemy decision depends on target form/speed/guard/swim/damage state | Add selected-target state accessors after basic policy validates | `E_WW`, `E_GI`, `E_KK`, `E_BA` | Accidentally reading P1 state for P2, or replacing protagonist-only state |
+| Target-state-sensitive | Enemy decision depends on target form/speed/guard/swim/damage state | Use `dusk::coop::selected_target_state` after the target identity is known | `E_WW`, `E_GI`, `E_KK`, `E_BA` | Accidentally reading P1 state for P2, or replacing protagonist-only state |
 | Damage-owner | Enemy reaction depends on who hit it | Separate damage ownership API, later aggro/threat bias | Many humanoids and item-reactive enemies | Treating attacker identity as nearest target |
 | Caught/grab-owner | Enemy captures or carries a specific player | Separate caught/grab ownership model | `E_ST`, `E_DF`, `E_SW`, grab-heavy files | Nearest-player retarget during a grab |
 | Boss/setpiece/demo | Encounter state owns camera, script, phase, or protagonist placement | Dedicated boss co-op audit | `d_a_b_*`, `E_SF`, `E_FS`, `E_PM`, `E_VT` | Breaking story/camera/phase assumptions |
@@ -303,7 +303,7 @@ Use this queue before writing more enemy behavior code:
    - miniboss/boss/story/demo.
 3. ~~For each likely regular enemy, inspect only enough code to mark search/chase/attack/follow-through/damage risk. Do not patch during this pass.~~ Priority 1 regular-enemy callsite classification is complete enough for the first policy wave. Continue classification opportunistically for candidates outside that wave.
 4. ~~Pick the first policy-backed wave from the best understood regular enemies, not necessarily from the highest lookup counts.~~ First wave chosen: policy-backed `E_OC`, then `E_TT`, then one accessible compact ground melee backup (`E_KG`, `E_BS`, or `E_SH`).
-5. Validate `enemy_targeting` V1 before converting more actors. Keep V1 to sticky retention, actor-supplied committed-retention, selected target facts, and quiet diagnostics.
+5. Validate `enemy_targeting` V1 before converting more actors. Keep target choice in `enemy_targeting`, selected target facts in `selected_target_state`, hit ownership in `damage_owner`, and diagnostics quiet.
 
 ## Full Machine Inventory
 

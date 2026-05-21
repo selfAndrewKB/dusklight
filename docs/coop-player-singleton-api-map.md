@@ -17,6 +17,30 @@ In co-op, that helper should be read as **primary/global protagonist** unless a 
 deliberately converted. Some callsites should remain P1/global forever or until a dedicated story,
 camera, HUD, or save-system milestone exists.
 
+## Why These Questions Split Apart
+
+Vanilla code often makes different gameplay decisions through the same P1 singleton helpers. That
+was fine when the game only had one meaningful player, because "the target," "the attacker," "the
+defender," and "the story protagonist" were all Link. In co-op, those identities can be different
+actors in the same frame, so each callsite must be classified by the gameplay question it is asking.
+
+`enemy_targeting` answers **"who am I fighting?"** It owns search, chase, facing, attack-range, and
+follow-through target selection. This is where sticky combat targets and committed attack retention
+belong.
+
+`damage_owner` answers **"who hit me?"** It owns hit reactions, cut type/count, weapon owner, and
+attacker-state reads tied to the collider that caused damage. This must not use nearest player or
+current enemy target, because an enemy can be fighting P1 while P2 hits it from behind.
+
+Selected-target state helpers answer **"what is my current target doing?"** These are behavior
+reads after the enemy already has a target: target speed, facing, form, horse state, swim state,
+guard state, damage state, or similar facts. These should follow the selected target, not P1 and not
+a fresh nearest-player query.
+
+Collision/defender-owner helpers will answer **"who did my attack touch?"** These are enemy-attack
+contact reads such as "which player blocked this swing?" They are separate from `damage_owner`
+because the enemy is the attacker and the player is the defender.
+
 ## Routing Table
 
 | Question the callsite is asking | Use | Current status |
@@ -25,7 +49,7 @@ camera, HUD, or save-system milestone exists.
 | "Which active player is nearest or eligible by raw distance/angle facts?" | `dusk::coop::player_query` | Implemented |
 | "Who is this enemy fighting right now?" | `dusk::coop::enemy_targeting` | Implemented for scoped combat targeting |
 | "Who caused this hit?" | `dusk::coop::damage_owner` | Implemented for direct players and known owned items |
-| "What is the selected target's form/speed/guard/horse/swim/damage state?" | selected-target state helpers | Not implemented yet |
+| "What is the selected target's form/speed/guard/horse/swim/damage state?" | `dusk::coop::selected_target_state` | Initial implementation for target speed/facing/position/cut/horse facts |
 | "Which player collided, rode, pushed, stood on, or picked this up?" | collision-owner helpers | Not implemented yet |
 | "Which player is caught, grabbed, carried, swallowed, or retained by this actor?" | caught/grab-owner helpers | Not implemented yet |
 | "Which player owns this item/tool instance?" | item-owner helpers / owner keeps | Partially implemented by item ownership patches |
@@ -39,10 +63,10 @@ camera, HUD, or save-system milestone exists.
 - **Damage-owner:** cut type/count, weapon owner, hit direction, attacker equipment, and hit reaction
   ownership. Route through `damage_owner`. Never use nearest player or current enemy target to answer
   "who hit me?"
-- **Selected-target state:** form, speed, guard, swim, horse, damage-wait, or facing checks that
-  modify behavior toward the chosen target. Do not leave these permanently P1-only by accident, but
-  do not fake them with nearest-player guesses. Add selected-target state helpers when converting
-  the first enemy that truly needs them.
+- **Selected-target state:** form, speed, position, guard, swim, horse, damage-wait, or facing
+  checks that modify behavior toward a known target. Route these through
+  `dusk::coop::selected_target_state` once the target identity is known. Do not leave them
+  permanently P1-only by accident, but do not fake them with fresh nearest-player guesses.
 - **Collision-owner:** contact-driven logic with no explicit search/chase surface. Keep it out of
   `enemy_targeting`; it needs its own ownership model.
 - **Caught/grab-owner:** a retained interaction with one specific player. It must not retarget to the

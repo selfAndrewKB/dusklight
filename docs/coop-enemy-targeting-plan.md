@@ -22,7 +22,8 @@ actor patches -> enemy_targeting -> player_query
 ```
 
 - `player_query`: raw facts about active player candidates, distances, angles, slots, and diagnostics.
-- `enemy_targeting`: target selection, retention policy, and target-state accessors for facts that should belong to the selected target rather than always to P1.
+- `enemy_targeting`: target selection and retention policy.
+- `selected_target_state`: target facts after identity is known, such as position, speed, facing, cut state, and horse state.
 - actor patches: narrow hooks in concrete enemy files that pass actor-local context and consume the selected target.
 
 Do not replace `fopAcM_searchPlayerDistance*`, `fopAcM_searchPlayerAngleY`, `dComIfGp_getPlayer(0)`, or `daPy_getPlayerActorClass()` globally. Actor files should opt in only where a tested behavior needs co-op-aware targeting.
@@ -104,13 +105,13 @@ void clearAllEnemyTargets(fopAc_ac_c* observer);
 
 `EnemyTargetResult::slot` is the durable target identity. `localActor` is only the local process pointer resolved from that slot so original enemy code can keep using actor position, distance, and angle helpers. Future host-authoritative networking should replicate slot/scope/reason and re-resolve `localActor` locally; do not treat the pointer as portable target truth.
 
-The selected-target state helpers should be added only as needed; they are intentionally not part of V1 so wolf/guard/speed checks are not mislabeled as permanently primary-player-only or implemented speculatively.
+Selected-target state helpers now exist as a separate API family for facts about a known target. Keep using `enemy_targeting` to choose who the enemy is fighting; then use `dusk::coop::selected_target_state` when original code asks what that chosen target is doing.
 
 Retention is expressed as simulation seconds, not frame counts. V1 uses `retainSeconds = 2.0f` by default and advances elapsed retention with `frameDelta * dusk::game_clock::sim_pace()`. Do not use raw wall-clock time or presentation frame count for gameplay target retention; `std::chrono` remains for diagnostics timestamps only.
 
 `enemy_targeting` should not become a catch-all for every P1 singleton read. When a conversion finds a related but non-targeting read, route it into the correct future API family:
 
-- selected-target state helpers for facts about the chosen target, such as form, speed, facing, guard, horse, swim, or damage-wait state;
+- `dusk::coop::selected_target_state` for facts about the chosen target, such as form, speed, facing, guard, horse, swim, or damage-wait state;
 - `dusk::coop::damage_owner` for facts about the player/weapon that actually struck an enemy, such as cut type and hit reaction ownership. Enemy targeting must not answer cut type/count, weapon owner, boomerang/head-jump hit direction, or hit-reaction ownership.
 - caught/grab-owner helpers for a player currently captured, carried, eaten, or otherwise retained by an enemy;
 - collision-owner helpers for contact-driven actors with no explicit search/chase targeting surface;
@@ -199,7 +200,7 @@ Bokoblin is also the first validation surface for the foundation rewrite:
 - attack commitment freezes the active combat target.
 - wake/search checks use immediate acquisition on the same combat owner so stale retention cannot suppress a closer eligible player.
 
-Tektite (`src/d/actor/d_a_e_tt.cpp`, `E_TT`) is the first non-Bokoblin proof because its search/chase/attack callsites are compact and mostly isolated. Its first pass uses the same actor-local helper pattern for `checkPlayerSearch`, `executeChase`, `executeAttack`, and `executeOutRange`. Damage/cut-type ownership is now split to `damage_owner`; first-attack horse/speed belongs to selected-target state helpers, and culling belongs to render/visibility or split-screen culling work. Pick one accessible compact ground enemy after Tektite validation (`E_KG`, `E_BS`, or `E_SH`) before tackling target-state-sensitive families such as White Wolfos.
+Tektite (`src/d/actor/d_a_e_tt.cpp`, `E_TT`) is the first non-Bokoblin proof because its search/chase/attack callsites are compact and mostly isolated. Its first pass uses the same actor-local helper pattern for `checkPlayerSearch`, `executeChase`, `executeAttack`, and `executeOutRange`. Damage/cut-type ownership is split to `damage_owner`; selected target facts such as facing, position, speed, and horse state are routed through `selected_target_state` in both ordinary combat paths and the rarer first-attack prediction path; and culling belongs to render/visibility or split-screen culling work. Pick one accessible compact ground enemy after Tektite validation (`E_KG`, `E_BS`, or `E_SH`) before tackling broader target-state-sensitive families such as White Wolfos.
 
 ## Future Policy Knobs
 
@@ -236,7 +237,7 @@ This prevents designing the policy exclusively around Bokoblin while still keepi
 - Start an attack and confirm the target is retained through the committed attack/follow-through path.
 - Flush diagnostics and confirm `enemy.targeting` explains selected target, reason, committed hint, and candidate facts.
 - Confirm `events.jsonl` does not grow from distance/angle drift while players stand still.
-- For Tektite, confirm P2 can wake, chase, face, be attacked, and drive damage-owner cut reactions without changing first-attack horse/speed or culling paths.
+- For Tektite, confirm P2 can wake, chase, face, be attacked, drive damage-owner cut reactions, and populate `selected_target.state` during ordinary chase/attack/out-range tests without changing culling paths.
 
 ## Implementation Progress
 
@@ -252,4 +253,5 @@ This prevents designing the policy exclusively around Bokoblin while still keepi
 - [x] Make committed attack frames pause sticky retention instead of refreshing the post-attack window.
 - [x] Add latest-only nearest-vs-selected diagnostics for retention mismatch analysis.
 - [x] Convert Tektite in a separate follow-up patch after Bokoblin validates.
+- [x] Add `selected_target_state` V1 and route Tektite ordinary combat target facts, Tektite first-attack prediction, and Bokoblin sword-sound awareness through it.
 - [ ] Validate Tektite in game and inspect `enemy.targeting` labels `e_tt.search`, `e_tt.chase`, `e_tt.attack`, and `e_tt.out_range`.

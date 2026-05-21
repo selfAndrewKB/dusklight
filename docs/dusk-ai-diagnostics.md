@@ -313,6 +313,7 @@ The smallest useful implementation starts with:
 - `coop.probes`: current secondary ALINK probe flags.
 - `alink.secondary`: the secondary ALINK state already being investigated: proc, animation frame/rate, relevant input/action bits, and model-data ownership summary.
 - `attention.state`: global attention owner, flags, lock truth, targets, counts, and lock/action/check lists with actor metadata.
+- `selected_target.state`: selected/player-state decisions after identity is known, such as target speed, facing, position, cut activity, and horse state. Continuous facts are latest/context only and must not drive JSONL events.
 - `diagnostics.stats`: recorder health in `latest.json`, including per-provider event counts, byte counts, throttles, payload oversize counts, current budget-window counts, and configured provider budgets.
 
 Leave process-tree, heap, OSReport sink, and debug-viewer providers for follow-up unless the first implementation needs them to answer the current ALINK question.

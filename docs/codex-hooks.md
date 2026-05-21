@@ -26,6 +26,7 @@ The hooks are guardrails, not a replacement for judgment. They exist to preserve
 - Remind enemy actor edits to classify player-singleton reads before patching: targeting, selected-target state, primary/global state, damage-owner, caught/grab-owner, or collision-owner. This is meant to prevent naive enemy-wide replacements and keep conversions routed through `enemy_targeting`.
 - Remind enemy-targeting edits to use actor-local helpers, keep `EnemyTargetScope` as the behavior owner, keep callsite strings as diagnostic labels, use `EnemyTargetMode` for callsite policy, and avoid independent per-callsite retention machines.
 - Remind damage-owner edits that nearest player and current enemy target do not answer "who hit me?"; route cut type/count, weapon-owner, hit direction, and hit-reaction ownership through `dusk::coop::damage_owner`.
+- Remind selected-target-state edits that target speed, facing, position, form, horse, swim, guard, and damage-state reads belong behind `dusk::coop::selected_target_state` once target identity is known.
 - Remind attention/status work that clean P2 input does not prove independent P2 state; capture shared `dComIfGp`/attention facts before changing shield or lock-on behavior.
 - Remind plan/doc edits to reconcile plan lifecycle: exactly one current active co-op plan in `AGENTS.md`, completed evidence docs pointing forward, and stale `current`/`active`/`next`/`todo` language cleaned up when a milestone changes state.
 - After supported edit/check tools run, add focused review context for C++ edits, original/decomp edits, docs-map drift, new source files that may need `files.cmake`, fmt/MSVC logging hazards, and real `git diff --check` whitespace failures.
@@ -39,6 +40,7 @@ The hooks are guardrails, not a replacement for judgment. They exist to preserve
   - Also watches diagnostics provider edits and reminds Codex to apply the bounded-output checklist before adding new JSONL-producing data.
   - Also watches enemy actor edits and reminds Codex to classify singleton reads before touching targeting behavior, then route targeting through actor-local helper wrappers over scoped `enemy_targeting`.
   - Also reminds enemy/damage edits that hit-reaction ownership belongs to `damage_owner`, not nearest-player or current-target policy.
+  - Also reminds enemy/player-state edits that selected target facts belong to `selected_target_state`, not direct P1 globals or new nearest-player guesses.
   - Also watches plan-map edits and reminds Codex to retire completed plans cleanly instead of leaving stale active-plan breadcrumbs.
 
 ## Limitations
