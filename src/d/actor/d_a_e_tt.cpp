@@ -11,6 +11,7 @@
 #include "f_op/f_op_actor_enemy.h"
 #include "f_op/f_op_camera_mng.h"
 #if TARGET_PC
+#include "dusk/coop/damage_owner.h"
 #include "dusk/coop/enemy_targeting.h"
 #endif
 
@@ -207,8 +208,8 @@ void daE_TT_c::setActionMode(int i_action, int i_mode) {
     field_0x6fb = 0;
 }
 
-int daE_TT_c::getCutType() {
-    switch (daPy_getPlayerActorClass()->getCutType()) {
+int daE_TT_c::getCutType(daPy_py_c* player) {
+    switch (player->getCutType()) {
     case daPy_py_c::CUT_TYPE_NM_VERTICAL:
     case daPy_py_c::CUT_TYPE_NM_STAB:
     case daPy_py_c::CUT_TYPE_NM_RIGHT:
@@ -226,6 +227,19 @@ void daE_TT_c::damage_check() {
 
         if (mSphere.ChkTgHit()) {
             mAtInfo.mpCollider = mSphere.GetTgHitObj();
+#if TARGET_PC
+            // Co-op: Tektite sword reactions follow the player who actually struck this collider,
+            // not the enemy's current target or vanilla's global P1 state.
+            dusk::coop::damage_owner::DamageOwnerResult damage_owner =
+                dusk::coop::damage_owner::resolveDamageOwner(this, mAtInfo.mpCollider);
+            daPy_py_c* hit_player =
+                dusk::coop::damage_owner::resolveDamageOwnerPlayer(damage_owner);
+            if (hit_player == NULL) {
+                hit_player = daPy_getPlayerActorClass();
+            }
+#else
+            daPy_py_c* hit_player = daPy_getPlayerActorClass();
+#endif
             u8 mode = 2;
             s32 iVar = 10;
             if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_ARROW)) {
@@ -235,7 +249,7 @@ void daE_TT_c::damage_check() {
                 mode = 6;
                 iVar = 0x28;
             } else if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_MASTER_SWORD | AT_TYPE_NORMAL_SWORD)) {
-                if (daPy_getPlayerActorClass()->getCutCount() >= 4 ||
+                if (hit_player->getCutCount() >= 4 ||
                     ((dCcD_GObjInf*)mAtInfo.mpCollider)->GetAtSpl() == 1)
                 {
                     mode = 6;
@@ -243,7 +257,7 @@ void daE_TT_c::damage_check() {
                     if (mPlayerCutTimer != 0) {
                         mPlayerCutType ^= 1;
                     } else {
-                        mPlayerCutType = getCutType();
+                        mPlayerCutType = getCutType(hit_player);
                     }
                     mode = mPlayerCutType;
                     mPlayerCutTimer = 30;

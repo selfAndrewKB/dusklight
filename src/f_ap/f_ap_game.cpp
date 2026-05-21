@@ -28,6 +28,7 @@
 
 #if TARGET_PC
 #include "tracy/Tracy.hpp"
+#include "dusk/coop/damage_owner.h"
 #include "dusk/coop/enemy_targeting.h"
 #include <dusk/gamepad_color.h>
 #include <dusk/autosave.h>
@@ -834,6 +835,8 @@ void fapGm_Execute() {
     duskExecute();
     // Co-op: enemy targeting retention uses simulation time, not presentation frame rate.
     dusk::coop::advanceEnemyTargetingFrame(sExecCount);
+    // Co-op: damage-hit overlays expire by simulation frame so render pacing cannot stretch popups.
+    dusk::coop::damage_owner::advanceDamageOwnerFrame(sExecCount);
 #endif
 
 #ifdef TARGET_PC

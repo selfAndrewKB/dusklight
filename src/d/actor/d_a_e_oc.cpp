@@ -15,6 +15,7 @@
 #include "f_op/f_op_actor_enemy.h"
 #include "f_op/f_op_camera_mng.h"
 #if TARGET_PC
+#include "dusk/coop/damage_owner.h"
 #include "dusk/coop/enemy_targeting.h"
 #endif
 #include <cstring>
@@ -648,12 +649,12 @@ void daE_OC_c::setActionMode(int i_action, int i_state) {
     offHeadLockFlg();
 }
 
-int daE_OC_c::getCutType() {
-    if (daPy_getPlayerActorClass()->getCutCount() >= 4) {
+int daE_OC_c::getCutType(daPy_py_c* player) {
+    if (player->getCutCount() >= 4) {
         return 5;
     }
 
-    switch (daPy_getPlayerActorClass()->getCutType()) {
+    switch (player->getCutType()) {
         case daPy_py_c::CUT_TYPE_TURN_RIGHT:
         case daPy_py_c::CUT_TYPE_LARGE_TURN_RIGHT:
         case daPy_py_c::CUT_TYPE_HEAD_JUMP:
@@ -724,6 +725,20 @@ void daE_OC_c::damage_check() {
         return;
     }
 
+#if TARGET_PC
+    // Co-op: Bokoblin hit reactions need the player who caused this collider hit, not P1 or
+    // the current AI target. Sword cut type/count drive stagger animation selection here.
+    dusk::coop::damage_owner::DamageOwnerResult damage_owner =
+        dusk::coop::damage_owner::resolveDamageOwner(this, mAtInfo.mpCollider);
+    daPy_py_c* hit_player =
+        dusk::coop::damage_owner::resolveDamageOwnerPlayer(damage_owner);
+    if (hit_player == NULL) {
+        hit_player = daPy_getPlayerActorClass();
+    }
+#else
+    daPy_py_c* hit_player = daPy_getPlayerActorClass();
+#endif
+
     s16 old_health = health;    // unused.
     if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_UNK)) {
         field_0x6cc = 0x14;
@@ -737,7 +752,7 @@ void daE_OC_c::damage_check() {
 
     u8 my_val = 2;
     if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_MASTER_SWORD | AT_TYPE_NORMAL_SWORD)) {
-        my_val = getCutType();
+        my_val = getCutType(hit_player);
         if (daPy_py_c::checkWoodSwordEquip()) {
             my_val = 2;
         }
@@ -753,7 +768,7 @@ void daE_OC_c::damage_check() {
             field_0x6d6 = 0x1e;
         }
 
-        if (daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_HEAD_JUMP) {
+        if (hit_player->getCutType() == daPy_py_c::CUT_TYPE_HEAD_JUMP) {
             health = 0;
         }
     } else if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_SHIELD_ATTACK)) {
@@ -823,8 +838,8 @@ void daE_OC_c::damage_check() {
         }
     }
 
-    if (daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_JUMP) {
-        if (daPy_getPlayerActorClass()->checkCutJumpCancelTurn()) {
+    if (hit_player->getCutType() == daPy_py_c::CUT_TYPE_JUMP) {
+        if (hit_player->checkCutJumpCancelTurn()) {
             setActionMode(E_OC_ACTION_DAMAGE, my_val);
             field_0x6cc = 3 + NREG_S(7);
             return;

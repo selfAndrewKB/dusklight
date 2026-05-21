@@ -29,6 +29,8 @@ Do not replace `fopAcM_searchPlayerDistance*`, `fopAcM_searchPlayerAngleY`, `dCo
 
 The intended shape is still broad in spirit: every player should be eligible when enemy logic is truly targeting a player. The implementation should avoid naive text replacement because many singleton reads are not targeting reads. Classify each touched callsite as targeting, selected-target state, primary/global state, damage-owner, caught/grab-owner, or collision-owner before patching.
 
+For the central routing guide across all player-singleton categories, see `docs/coop-player-singleton-api-map.md`.
+
 ## Goals
 
 - Preserve single-player behavior when only slot 0 is active.
@@ -109,7 +111,7 @@ Retention is expressed as simulation seconds, not frame counts. V1 uses `retainS
 `enemy_targeting` should not become a catch-all for every P1 singleton read. When a conversion finds a related but non-targeting read, route it into the correct future API family:
 
 - selected-target state helpers for facts about the chosen target, such as form, speed, facing, guard, horse, swim, or damage-wait state;
-- damage-owner helpers for facts about the player/weapon that actually struck an enemy, such as cut type and hit reaction ownership;
+- `dusk::coop::damage_owner` for facts about the player/weapon that actually struck an enemy, such as cut type and hit reaction ownership. Enemy targeting must not answer cut type/count, weapon owner, boomerang/head-jump hit direction, or hit-reaction ownership.
 - caught/grab-owner helpers for a player currently captured, carried, eaten, or otherwise retained by an enemy;
 - collision-owner helpers for contact-driven actors with no explicit search/chase targeting surface;
 - render/visibility or split-screen culling helpers for distance checks that only gate model calculation or presentation work.
@@ -197,7 +199,7 @@ Bokoblin is also the first validation surface for the foundation rewrite:
 - attack commitment freezes the active combat target.
 - wake/search checks use immediate acquisition on the same combat owner so stale retention cannot suppress a closer eligible player.
 
-Tektite (`src/d/actor/d_a_e_tt.cpp`, `E_TT`) is the first non-Bokoblin proof because its search/chase/attack callsites are compact and mostly isolated. Its first pass uses the same actor-local helper pattern for `checkPlayerSearch`, `executeChase`, `executeAttack`, and `executeOutRange`, while leaving damage/cut-type, first-attack horse/speed state, and culling reads conservative. Those conservative reads are not abandoned: damage/cut-type belongs to the future damage-owner pass, first-attack horse/speed belongs to selected-target state helpers, and culling belongs to render/visibility or split-screen culling work. Pick one accessible compact ground enemy after Tektite validation (`E_KG`, `E_BS`, or `E_SH`) before tackling target-state-sensitive families such as White Wolfos.
+Tektite (`src/d/actor/d_a_e_tt.cpp`, `E_TT`) is the first non-Bokoblin proof because its search/chase/attack callsites are compact and mostly isolated. Its first pass uses the same actor-local helper pattern for `checkPlayerSearch`, `executeChase`, `executeAttack`, and `executeOutRange`. Damage/cut-type ownership is now split to `damage_owner`; first-attack horse/speed belongs to selected-target state helpers, and culling belongs to render/visibility or split-screen culling work. Pick one accessible compact ground enemy after Tektite validation (`E_KG`, `E_BS`, or `E_SH`) before tackling target-state-sensitive families such as White Wolfos.
 
 ## Future Policy Knobs
 
@@ -234,7 +236,7 @@ This prevents designing the policy exclusively around Bokoblin while still keepi
 - Start an attack and confirm the target is retained through the committed attack/follow-through path.
 - Flush diagnostics and confirm `enemy.targeting` explains selected target, reason, committed hint, and candidate facts.
 - Confirm `events.jsonl` does not grow from distance/angle drift while players stand still.
-- For Tektite, confirm P2 can wake, chase, face, and be attacked by Tektites without changing the conservative first-attack/damage-owner paths.
+- For Tektite, confirm P2 can wake, chase, face, be attacked, and drive damage-owner cut reactions without changing first-attack horse/speed or culling paths.
 
 ## Implementation Progress
 

@@ -142,6 +142,8 @@ This batch resolves the "unclassified" rows from the machine inventory. Sources:
 
 This pass reads context around every player-singleton callsite in priority regular-enemy candidates to separate targeting, selected-target state, true primary/global state, damage ownership, and caught/grab ownership. The goal is not bespoke AI per enemy. The goal is to classify each callsite well enough that repeated enemy shapes can use one policy API without blindly redirecting story, damage-owner, or protagonist-specific state.
 
+The central routing guide for these categories is `docs/coop-player-singleton-api-map.md`.
+
 Boss files received a lighter pass. Treat boss files as protagonist-locked/deferred until a dedicated boss co-op audit proves otherwise.
 
 ### Classification criteria
@@ -167,6 +169,7 @@ Do not leave these permanently primary-player-only just because V1 is cautious. 
 
 **Damage-owner** - neither targeting nor primary/global state; belongs to a separate co-op damage-ownership pass:
 - `dComIfGp_getPlayer(0)` fetched only to cast to `daPy_py_c*` inside a hit-reaction function, where the real question is "which player struck me?" not "which player should I target next?"
+- Use `dusk::coop::damage_owner` for cut type/count, hit direction, weapon-owner, and hit-reaction ownership. Do not substitute nearest-player or current enemy target for attacker identity.
 
 **Caught/grab-owner** - neither targeting nor nearest-player policy; belongs to a separate caught-state ownership pass:
 - Enemy is carrying, eating, restraining, hanging, or otherwise tracking a specific captured player

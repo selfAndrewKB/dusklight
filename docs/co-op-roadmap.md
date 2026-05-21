@@ -255,6 +255,8 @@ Active slice: `docs/coop-enemy-targeting-plan.md` converts the existing Bokoblin
 
 Enemy coverage is tracked in `docs/coop-enemy-audit.md`. The first policy architecture lives in `docs/coop-enemy-targeting-plan.md`. The intended long-term layering is `actor patches -> enemy_targeting -> player_query`: actor files should make narrow, evidenced hooks; `enemy_targeting` should own sticky target retention, attack follow-through, recent-attacker bias, and target-pressure rules; `player_query` should remain the raw facts provider for active-player candidates, distances, angles, and diagnostics.
 
+Player-singleton callsites should be routed through the API-family map in `docs/coop-player-singleton-api-map.md` before any broad conversion work.
+
 Why this phase matters: it distinguishes real co-op progress from just spawning a mannequin.
 
 ### Phase 6: Global State Policy

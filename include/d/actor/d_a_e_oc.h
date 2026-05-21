@@ -16,6 +16,7 @@
  * 
  */
 class daRotBridge_c;
+class daPy_py_c;
 
 class daE_OC_c : public fopEn_enemy_c {
 public:
@@ -35,7 +36,7 @@ public:
     void checkDamageBg();
     void setGroundAngle();
     void setActionMode(int, int);
-    int getCutType();
+    int getCutType(daPy_py_c* player);
     void offTgSph();
     void damage_check();
     void setBck(int, u8, f32, f32);

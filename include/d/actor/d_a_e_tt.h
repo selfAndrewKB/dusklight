@@ -6,6 +6,8 @@
 #include "d/d_cc_uty.h"
 #include "f_op/f_op_actor_mng.h"
 
+class daPy_py_c;
+
 /**
  * @ingroup actors-enemies
  * @class daE_TT_c
@@ -22,7 +24,7 @@ public:
     void setBck(int, u8, f32, f32);
     void calcHitGroundSpeed();
     void setActionMode(int, int);
-    int getCutType();
+    int getCutType(daPy_py_c* player);
     void damage_check();
     void checkWaterSurface();
     void checkFootGround();

@@ -15,6 +15,7 @@
 #include "f_op/f_op_actor_mng.h"
 #if TARGET_PC
 #include "dusk/achievements.h"
+#include "dusk/coop/damage_owner.h"
 #include "dusk/settings.h"
 #endif
 
@@ -371,6 +372,19 @@ fopAc_ac_c* at_power_check(dCcU_AtInfo* i_AtInfo) {
 fopAc_ac_c* cc_at_check(fopAc_ac_c* i_enemy, dCcU_AtInfo* i_AtInfo) {
     daPy_py_c* player_p = (daPy_py_c*)dComIfGp_getPlayer(0);
     i_AtInfo->mpActor = at_power_check(i_AtInfo);
+#if TARGET_PC
+    // Co-op: hit reactions must follow the player who caused this collider hit, not the
+    // enemy's current target or vanilla's global P1 pointer.
+    dusk::coop::damage_owner::DamageOwnerResult damage_owner =
+        dusk::coop::damage_owner::resolveDamageOwner(i_enemy, i_AtInfo->mpCollider);
+    daPy_py_c* owner_player_p =
+        dusk::coop::damage_owner::resolveDamageOwnerPlayer(damage_owner);
+    if (owner_player_p == NULL) {
+        owner_player_p = player_p;
+    }
+#else
+    daPy_py_c* owner_player_p = player_p;
+#endif
 
     f32 x_diff;
     f32 z_diff;
@@ -383,8 +397,8 @@ fopAc_ac_c* cc_at_check(fopAc_ac_c* i_enemy, dCcU_AtInfo* i_AtInfo) {
             i_AtInfo->mHitDirection.y = cM_atan2s(-x, -z) + (s16)cM_rndFX(4000.0f);
         } else {
             if (fopAcM_GetName(i_AtInfo->mpActor) == fpcNm_BOOMERANG_e) {
-                x_diff = i_enemy->current.pos.x - player_p->current.pos.x;
-                z_diff = i_enemy->current.pos.z - player_p->current.pos.z;
+                x_diff = i_enemy->current.pos.x - owner_player_p->current.pos.x;
+                z_diff = i_enemy->current.pos.z - owner_player_p->current.pos.z;
                 i_AtInfo->mHitDirection.y = cM_atan2s(-x_diff, -z_diff) + (s16)cM_rndFX(10000.0f);
             } else {
                 x_diff = i_enemy->current.pos.x - i_AtInfo->mpActor->current.pos.x;
@@ -394,9 +408,9 @@ fopAc_ac_c* cc_at_check(fopAc_ac_c* i_enemy, dCcU_AtInfo* i_AtInfo) {
         }
 
         if (i_AtInfo->mHitType == HIT_TYPE_LINK_NORMAL_ATTACK &&
-            player_p->getCutType() == daPy_py_c::CUT_TYPE_HEAD_JUMP)
+            owner_player_p->getCutType() == daPy_py_c::CUT_TYPE_HEAD_JUMP)
         {
-            i_AtInfo->mHitDirection.y = player_p->shape_angle.y;
+            i_AtInfo->mHitDirection.y = owner_player_p->shape_angle.y;
         }
 
         if (i_AtInfo->mpCollider->ChkAtType(AT_TYPE_HOOKSHOT) &&
@@ -414,8 +428,8 @@ fopAc_ac_c* cc_at_check(fopAc_ac_c* i_enemy, dCcU_AtInfo* i_AtInfo) {
         }
 
         if (i_AtInfo->mHitType == HIT_TYPE_LINK_NORMAL_ATTACK) {
-            if (!daPy_py_c::checkNowWolf()) {
-                if (player_p->checkMasterSwordEquip()) {
+            if (!owner_player_p->checkWolf()) {
+                if (daPy_py_c::checkMasterSwordEquip()) {
                     i_AtInfo->mAttackPower *= 2;
                 }
 
@@ -424,7 +438,7 @@ fopAc_ac_c* cc_at_check(fopAc_ac_c* i_enemy, dCcU_AtInfo* i_AtInfo) {
                 }
             }
 
-            if (player_p->getSwordAtUpTime()) {
+            if (owner_player_p->getSwordAtUpTime()) {
                 i_AtInfo->mAttackPower *= 2;
                 i_AtInfo->mHitStatus = 1;
             }
@@ -451,6 +465,13 @@ fopAc_ac_c* cc_at_check(fopAc_ac_c* i_enemy, dCcU_AtInfo* i_AtInfo) {
             }
 #endif
         }
+
+#if TARGET_PC
+        // Co-op: record the finalized owner-sensitive hit decision once damage power/status have
+        // been resolved so diagnostics and the overlay see what gameplay actually consumed.
+        dusk::coop::damage_owner::recordDamageOwnerHit("cc_at_check", i_enemy, damage_owner,
+                                                       i_AtInfo);
+#endif
 
         int uvar8;
         if (i_AtInfo->mpCollider->ChkAtType(AT_TYPE_HOOKSHOT) &&

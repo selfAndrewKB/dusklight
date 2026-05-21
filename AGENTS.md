@@ -20,6 +20,7 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
 - Keep durable player-slot identity in `dusk::coop::player_slots`; slot-1 ALINK audit toggles live in `dusk::coop::alink_probes` so prototype probes do not become registry architecture.
 - Enemy co-op work must classify touched singleton reads before patching: targeting, selected-target state, primary/global state, damage-owner, caught/grab-owner, or collision-owner. Do not do naive global replacements; use `enemy_targeting` policy for repeated search/chase/attack patterns.
 - Enemy targeting conversions must use an actor-local helper near the top of each enemy file. The helper sets a reusable behavior scope such as `EnemyTargetScope::Combat`; callsite strings such as `e_oc.find` are diagnostic labels only and must not create independent retention state. Use target modes for callsite policy, e.g. awareness/wake reads may use immediate acquisition while chase/attack reads use sticky combat. Actor deletion must clear target sidecar state with `clearAllEnemyTargets`.
+- Damage-owner reads must use `dusk::coop::damage_owner`, not nearest-player or current enemy target. Use it for cut type/count, weapon owner, hit direction, and hit-reaction ownership questions where the real question is "who hit me?"
 - Do not propose or implement "temporary now, proper later" co-op fixes unless the user explicitly asks for a disposable experiment. Measure the engine behavior as much as needed, then choose the durable architecture first so prototype debt does not become the project foundation.
 
 ## Repository Map
@@ -38,10 +39,11 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
 - `docs/coop-secondary-alink-item-ownership-plan.md`: completed item/action ownership pass: boomerang, fishing rod, Dominion Rod, bow/arrow, Spinner, bombs, slingshot, and Iron Boots owner-routing findings.
 - `docs/coop-native-split-screen-camera-plan.md`: completed split-screen camera prototype milestone and known V1 render/HUD limitations.
 - `docs/coop-network-multiplayer-readiness.md`: host-authoritative multiplayer readiness notes, especially player-slot identity, enemy-target replication seams, and pointer-vs-slot rules.
+- `docs/coop-player-singleton-api-map.md`: central routing guide for `daPy_getPlayerActorClass()`, `dComIfGp_getPlayer(0)`, and which co-op API family should answer each player-identity question.
 - `docs/coop-world-acknowledgement-plan.md`: completed world-acknowledgement proof: player-query helpers, diagnostics, Hanging Helmasaur proof, and Bokoblin raw-query evidence.
 - `docs/coop-player-owner-lookup-audit.md`: reusable audit table for item/weapon actors that still ask global P1 when they should ask the owning ALINK slot.
 - `docs/coop-enemy-audit.md`: enemy/world acknowledgement map, actor triage table, and the target-policy layering for `actor patches -> enemy_targeting -> player_query`.
-- `docs/coop-enemy-targeting-plan.md`: current active co-op plan: policy-backed enemy targeting over `player_query`; V1 stays to Bokoblin sticky target retention plus actor-supplied attack commitment, with Tektite next after validation.
+- `docs/coop-enemy-targeting-plan.md`: current active co-op plan: policy-backed enemy targeting over `player_query`; V1 validated Bokoblin and Tektite, with damage-owner now split into its own API.
 - `.codex/config.toml`: Codex hook wiring. Keep hook behavior narrow and documented in `docs/codex-hooks.md`.
 - `files.cmake`: explicit source-file list. Update it when adding C++ source/header files that must be built.
 

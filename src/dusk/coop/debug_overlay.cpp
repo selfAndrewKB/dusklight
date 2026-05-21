@@ -1,6 +1,7 @@
 #include "dusk/coop/debug_overlay.h"
 
 #include "d/d_debug_viewer.h"
+#include "dusk/coop/damage_owner.h"
 #include "dusk/coop/enemy_targeting.h"
 #include "SSystem/SComponent/c_math.h"
 #include "f_op/f_op_actor.h"
@@ -16,15 +17,17 @@ namespace dusk::coop::debug_overlay {
 namespace {
 
 bool s_enemyTargetOverlayEnabled = true;
+bool s_damageHitOverlayEnabled = true;
 
 constexpr int kMaxTextDecisions = 10;
 constexpr int kMaxChosenDecisions = 16;
-constexpr int kMaxLineLabels = 16;
+constexpr int kMaxLineLabels = 32;
 constexpr float kMaxActiveOverlayDistanceXZ = 5000.0f;
 constexpr float kVisionConeLengthXZ = 1200.0f;
 constexpr s16 kVisionConeHalfAngle = 0x4000;
 constexpr int kVisionConeSegments = 8;
 constexpr int kRecentDecisionMaxFrameAge = 10;
+constexpr int kRecentDamageHitMaxFrameAge = 60;
 
 struct ChosenDecision {
     const EnemyTargetDecisionDebug* decision = nullptr;
@@ -39,7 +42,6 @@ struct LineLabel {
 
 LineLabel s_lineLabels[kMaxLineLabels];
 int s_lineLabelCount = 0;
-bool s_lineLabelsCaptured = false;
 
 GXColor slotColor(PlayerSlot slot, bool committed) {
     if (committed) {
@@ -161,6 +163,30 @@ void drawWorldDecision(const EnemyTargetDecisionDebug& decision, int priority) {
     dDbVw_drawSphereXlu(targetPos, 18.0f, targetColor, TRUE);
 }
 
+bool shouldDrawDamageHit(const damage_owner::DamageOwnerHitDebug& hit, u32 currentFrame) {
+    return hit.eventId != 0 && hit.owner.found && hit.owner.slot != PlayerSlot::Invalid &&
+           currentFrame >= hit.simFrame &&
+           currentFrame - hit.simFrame <= static_cast<u32>(kRecentDamageHitMaxFrameAge);
+}
+
+void drawDamageHitWorld() {
+    if (!isDamageHitOverlayEnabled()) {
+        return;
+    }
+
+    const damage_owner::DamageOwnerDebugState& state = damage_owner::getDamageOwnerDebugState();
+    for (int i = 0; i < state.hitCount; i++) {
+        const damage_owner::DamageOwnerHitDebug& hit = state.hits[i];
+        if (!shouldDrawDamageHit(hit, state.currentSimFrame)) {
+            continue;
+        }
+
+        const GXColor color = slotColor(hit.owner.slot, false);
+        cXyz hitPos = hit.hitPos;
+        dDbVw_drawSphereXlu(hitPos, 30.0f, color, TRUE);
+    }
+}
+
 void endpointFromAngle(const cXyz& origin, s16 angle, float length, cXyz* out) {
     out->x = origin.x + cM_ssin(angle) * length;
     out->y = origin.y;
@@ -248,6 +274,42 @@ void captureLineLabel(const EnemyTargetDecisionDebug& decision, int priority, co
                   slotIndex(decision.selected.slot) + 1,
                   enemyTargetReasonName(decision.reason),
                   decision.committed ? " atk" : "");
+}
+
+void captureDamageHitLabels(const view_class* view, const view_port_class* viewport) {
+    if (!isDamageHitOverlayEnabled()) {
+        return;
+    }
+
+    const damage_owner::DamageOwnerDebugState& state = damage_owner::getDamageOwnerDebugState();
+    for (int i = 0; i < state.hitCount && s_lineLabelCount < kMaxLineLabels; i++) {
+        const damage_owner::DamageOwnerHitDebug& hit = state.hits[i];
+        if (!shouldDrawDamageHit(hit, state.currentSimFrame)) {
+            continue;
+        }
+
+        f32 x = 0.0f;
+        f32 y = 0.0f;
+        f32 z = 0.0f;
+        if (!projectPoint(hit.hitPos, view, viewport, &x, &y, &z)) {
+            continue;
+        }
+
+        LineLabel& label = s_lineLabels[s_lineLabelCount++];
+        label.x = static_cast<int>(x);
+        label.y = static_cast<int>(y);
+        if (damage_owner::damageOwnerAttackUsesCutState(hit.owner.attackType)) {
+            std::snprintf(label.text, sizeof(label.text), "P%d %s cut=%s count=%d",
+                          slotIndex(hit.owner.slot) + 1,
+                          damage_owner::damageOwnerAttackName(hit.owner.attackType),
+                          damage_owner::damageOwnerCutTypeName(hit.owner.cutType),
+                          hit.owner.cutCount);
+        } else {
+            std::snprintf(label.text, sizeof(label.text), "P%d %s",
+                          slotIndex(hit.owner.slot) + 1,
+                          damage_owner::damageOwnerAttackName(hit.owner.attackType));
+        }
+    }
 }
 
 int chooseDecisions(const EnemyTargetingDebugState& state, ChosenDecision* choices, int maxChoices) {
@@ -373,6 +435,18 @@ void toggleEnemyTargetOverlay() {
     setEnemyTargetOverlayEnabled(!isEnemyTargetOverlayEnabled());
 }
 
+bool isDamageHitOverlayEnabled() {
+    return s_damageHitOverlayEnabled;
+}
+
+void setDamageHitOverlayEnabled(bool enabled) {
+    s_damageHitOverlayEnabled = enabled;
+}
+
+void toggleDamageHitOverlay() {
+    setDamageHitOverlayEnabled(!isDamageHitOverlayEnabled());
+}
+
 void drawEnemyTargetOverlay() {
     if (!isEnemyTargetOverlayEnabled()) {
         return;
@@ -382,20 +456,19 @@ void drawEnemyTargetOverlay() {
     ChosenDecision choices[kMaxChosenDecisions] = {};
     const int choiceCount = chooseDecisions(state, choices, kMaxChosenDecisions);
     s_lineLabelCount = 0;
-    s_lineLabelsCaptured = false;
     for (int i = 0; i < choiceCount; i++) {
         drawVisionCone(*choices[i].decision, choices[i].priority);
         drawWorldDecision(*choices[i].decision, choices[i].priority);
     }
+    drawDamageHitWorld();
 }
 
 void captureEnemyTargetOverlayLabels(const view_class* view, const view_port_class* viewport) {
-    if (!isEnemyTargetOverlayEnabled() || s_lineLabelsCaptured || view == nullptr || viewport == nullptr) {
+    if (!isEnemyTargetOverlayEnabled() || view == nullptr || viewport == nullptr) {
         return;
     }
-    // Co-op: V1 captures labels from the first rendered camera pass only. World lines are drawn
-    // per viewport, but text projection is intentionally first-pass until labels become viewport-aware.
-    s_lineLabelsCaptured = true;
+    // Co-op: collect labels once for each rendered viewport. The final ImGui pass is fullscreen, so
+    // viewport-aware projection is what keeps split-screen labels on the side whose camera sees them.
 
     const EnemyTargetingDebugState& state = getEnemyTargetingDebugState();
     ChosenDecision choices[kMaxChosenDecisions] = {};
@@ -403,6 +476,7 @@ void captureEnemyTargetOverlayLabels(const view_class* view, const view_port_cla
     for (int i = 0; i < choiceCount; i++) {
         captureLineLabel(*choices[i].decision, choices[i].priority, view, viewport);
     }
+    captureDamageHitLabels(view, viewport);
 }
 
 void drawEnemyTargetTextOverlay() {

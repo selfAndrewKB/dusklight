@@ -169,6 +169,10 @@ void ImGuiMenuTools::ShowActorSpawner() {
     if (ImGui::Checkbox("Show enemy target overlay", &enemyTargetOverlayEnabled)) {
         dusk::coop::debug_overlay::setEnemyTargetOverlayEnabled(enemyTargetOverlayEnabled);
     }
+    bool damageHitOverlayEnabled = dusk::coop::debug_overlay::isDamageHitOverlayEnabled();
+    if (ImGui::Checkbox("Show damage hit overlay", &damageHitOverlayEnabled)) {
+        dusk::coop::debug_overlay::setDamageHitOverlayEnabled(damageHitOverlayEnabled);
+    }
     ImGui::TextDisabled("Hotkey: %s toggles enemy target overlay",
                         dusk::hotkeys::COOP_TOGGLE_ENEMY_TARGET_OVERLAY);
     if (diagnosticsEnabled) {

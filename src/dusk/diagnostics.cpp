@@ -6,6 +6,7 @@
 #include "d/d_item.h"
 #include "dusk/coop/alink_probes.h"
 #include "dusk/coop/camera.h"
+#include "dusk/coop/damage_owner.h"
 #include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/input.h"
 #include "dusk/coop/player_query.h"
@@ -558,6 +559,34 @@ void emitEnemyTargetingEvents(const Provider& provider, const json& data) {
             {"changed", decision.value("changed", false)},
         };
         emitProviderEvent(provider, "decision", eventData);
+    }
+}
+
+void emitDamageOwnerEvents(const Provider& provider, const json& data) {
+    if (!data.contains("hits") || !data["hits"].is_array()) {
+        return;
+    }
+
+    for (const json& hit : data["hits"]) {
+        const u64 eventId = hit.value("event_id", 0ull);
+        if (eventId == 0) {
+            continue;
+        }
+
+        const json eventKey = {
+            {"event_id", eventId},
+        };
+        const std::string stateKey =
+            fmt::format(FMT_STRING("damage.owner:{}"), static_cast<unsigned long long>(eventId));
+        if (provider.emitOnChange && !shouldEmitProviderEvent(stateKey, eventKey)) {
+            continue;
+        }
+
+        const json eventData = {
+            {"schema_version", data.value("schema_version", 1)},
+            {"hit", hit},
+        };
+        emitProviderEvent(provider, "hit", eventData);
     }
 }
 
@@ -1267,6 +1296,72 @@ json collectEnemyTargeting() {
     };
 }
 
+json damageActorSummary(const coop::damage_owner::DamageActorDebug& actor) {
+    json data = {
+        {"actor_uid", nullptr},
+        {"ptr", ptrString(actor.ptr)},
+        {"stable_actor_uid_deferred", true},
+        {"available", actor.available},
+    };
+    if (!actor.available) {
+        return data;
+    }
+
+    data["profile"] = actor.profile;
+    data["name"] = actor.name;
+    data["id"] = actor.id;
+    data["room"] = actor.room;
+    data["argument"] = actor.argument;
+    data["pos"] = {actor.pos[0], actor.pos[1], actor.pos[2]};
+    data["angle_y"] = static_cast<int>(actor.angleY);
+    return data;
+}
+
+json damageOwnerHitSummary(const coop::damage_owner::DamageOwnerHitDebug& hit) {
+    const coop::damage_owner::DamageOwnerResult& owner = hit.owner;
+    return {
+        {"event_id", static_cast<unsigned long long>(hit.eventId)},
+        {"sim_frame", static_cast<unsigned int>(hit.simFrame)},
+        {"label", hit.label},
+        {"victim", damageActorSummary(owner.victimDebug)},
+        {"hit_actor", damageActorSummary(owner.hitActorDebug)},
+        {"owner", damageActorSummary(owner.ownerDebug)},
+        {"owner_slot", owner.slot != coop::PlayerSlot::Invalid ? static_cast<int>(owner.slot) : -1},
+        {"found", owner.found},
+        {"reason", coop::damage_owner::damageOwnerReasonName(owner.reason)},
+        {"attack_type", owner.attackType},
+        {"attack_name", coop::damage_owner::damageOwnerAttackName(owner.attackType)},
+        {"collider_atp", static_cast<unsigned int>(owner.atp)},
+        {"collider_special", owner.special},
+        {"hit_type", hit.hitType},
+        {"hit_type_name", coop::damage_owner::damageOwnerHitTypeName(hit.hitType)},
+        {"attack_power", static_cast<unsigned int>(hit.attackPower)},
+        {"hit_status", hit.hitStatus},
+        {"cut_type", owner.cutType},
+        {"cut_type_name", coop::damage_owner::damageOwnerCutTypeName(owner.cutType)},
+        {"cut_count", owner.cutCount},
+        {"reaction_mode", hit.reactionMode},
+        {"hit_pos", {hit.hitPos.x, hit.hitPos.y, hit.hitPos.z}},
+    };
+}
+
+json collectDamageOwner() {
+    const coop::damage_owner::DamageOwnerDebugState& state =
+        coop::damage_owner::getDamageOwnerDebugState();
+    json hits = json::array();
+    for (int i = 0; i < state.hitCount; i++) {
+        if (state.hits[i].eventId == 0) {
+            continue;
+        }
+        hits.push_back(damageOwnerHitSummary(state.hits[i]));
+    }
+
+    return {
+        {"schema_version", 1},
+        {"hits", hits},
+    };
+}
+
 json inputForSlot(coop::PlayerSlot slot) {
     const coop::PlayerInputState input = coop::readLocalInput(slot);
     return {
@@ -1394,6 +1489,7 @@ Provider s_providers[] = {
     {"player.status", 1, "cheap", 1, true, 120, 8192, collectPlayerStatus},
     {"coop.player_query", 1, "cheap", 5, true, 240, 8192, collectPlayerQuery},
     {"enemy.targeting", 1, "cheap", 5, true, 240, 12288, collectEnemyTargeting},
+    {"damage.owner", 1, "cheap", 1, true, 600, 12288, collectDamageOwner},
     {"coop.probes", 1, "cheap", 30, true, 20, 4096, collectCoopProbes},
     {"alink.secondary", 4, "cheap", 1, true, 120, 8192, collectAlinkSecondary},
 };
@@ -1541,6 +1637,10 @@ void tick(u32 frame) {
         }
         if (std::string(provider.name) == "enemy.targeting") {
             emitEnemyTargetingEvents(provider, data);
+            continue;
+        }
+        if (std::string(provider.name) == "damage.owner") {
+            emitDamageOwnerEvents(provider, data);
             continue;
         }
 
