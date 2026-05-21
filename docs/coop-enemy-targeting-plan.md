@@ -113,8 +113,9 @@ Retention is expressed as simulation seconds, not frame counts. V1 uses `retainS
 
 - `dusk::coop::selected_target_state` for facts about the chosen target, such as form, speed, facing, guard, horse, swim, or damage-wait state;
 - `dusk::coop::damage_owner` for facts about the player/weapon that actually struck an enemy, such as cut type and hit reaction ownership. Enemy targeting must not answer cut type/count, weapon owner, boomerang/head-jump hit direction, or hit-reaction ownership.
+- `dusk::coop::defender_owner` for enemy-attack contact facts, such as which player blocked or guarded the enemy's swing. This must not use damage-owner, nearest-player, selected-target, or P1 global state.
 - caught/grab-owner helpers for a player currently captured, carried, eaten, or otherwise retained by an enemy;
-- collision-owner helpers for contact-driven actors with no explicit search/chase targeting surface;
+- broader collision-owner helpers for contact-driven actors with no explicit search/chase targeting surface;
 - render/visibility or split-screen culling helpers for distance checks that only gate model calculation or presentation work.
 
 Leaving such reads conservative during an enemy-targeting patch is intentional when the owning API does not exist yet. Add them to the appropriate future pass instead of faking them with nearest-player guesses.
@@ -238,6 +239,7 @@ This prevents designing the policy exclusively around Bokoblin while still keepi
 - Flush diagnostics and confirm `enemy.targeting` explains selected target, reason, committed hint, and candidate facts.
 - Confirm `events.jsonl` does not grow from distance/angle drift while players stand still.
 - For Tektite, confirm P2 can wake, chase, face, be attacked, drive damage-owner cut reactions, and populate `selected_target.state` during ordinary chase/attack/out-range tests without changing culling paths.
+- For Bokoblin guard collision, confirm `defender_owner` chooses the player actually hit by the attack sphere before reading guard/block state.
 
 ## Implementation Progress
 
@@ -254,4 +256,5 @@ This prevents designing the policy exclusively around Bokoblin while still keepi
 - [x] Add latest-only nearest-vs-selected diagnostics for retention mismatch analysis.
 - [x] Convert Tektite in a separate follow-up patch after Bokoblin validates.
 - [x] Add `selected_target_state` V1 and route Tektite ordinary combat target facts, Tektite first-attack prediction, and Bokoblin sword-sound awareness through it.
+- [x] Add `defender_owner` V1 and route Bokoblin guard collision through the actual hit defender.
 - [ ] Validate Tektite in game and inspect `enemy.targeting` labels `e_tt.search`, `e_tt.chase`, `e_tt.attack`, and `e_tt.out_range`.

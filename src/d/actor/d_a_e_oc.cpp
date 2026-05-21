@@ -15,7 +15,9 @@
 #include "f_op/f_op_actor_enemy.h"
 #include "f_op/f_op_camera_mng.h"
 #if TARGET_PC
+#include "dusk/coop/bokoblin_attack_probe.h"
 #include "dusk/coop/damage_owner.h"
+#include "dusk/coop/defender_owner.h"
 #include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/selected_target_state.h"
 #endif
@@ -214,7 +216,8 @@ static daE_OC_HIO_c l_HIO;
 // Co-op: keep Bokoblin patches thin by routing target policy through Dusk-owned enemy_targeting.
 static bool coOpSelectCombatTarget(daE_OC_c* i_this, const char* label, bool committed,
                                    dusk::coop::EnemyTargetMode mode, fopAc_ac_c** player,
-                                   f32* distance, s16* angle_y) {
+                                   f32* distance, s16* angle_y,
+                                   dusk::coop::EnemyTargetResult* result = NULL) {
     dusk::coop::EnemyTargetContext context;
     context.observer = i_this;
     context.scope = dusk::coop::EnemyTargetScope::Combat;
@@ -223,6 +226,9 @@ static bool coOpSelectCombatTarget(daE_OC_c* i_this, const char* label, bool com
     context.committed = committed;
 
     const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    if (result != NULL) {
+        *result = target;
+    }
     if (!target.found) {
         return false;
     }
@@ -298,8 +304,41 @@ static bool coOpFindSwordSoundPlayer(daE_OC_c* i_this,
     return true;
 }
 
+// Co-op: enemy attack contact asks which player actually defended the hit. That is not the
+// current AI target, nearest player, or damage owner, because here Bokoblin is the attacker.
+static dusk::coop::defender_owner::DefenderOwnerResult coOpRecordGuardedAttackHit(
+    daE_OC_c* i_this, dCcD_GObjInf* attackCollider, const char* label) {
+    const dusk::coop::defender_owner::DefenderOwnerResult defender =
+        dusk::coop::defender_owner::resolveDefenderOwner(i_this, attackCollider);
+    dusk::coop::defender_owner::recordDefenderOwnerContact(label, i_this, defender);
+    return defender;
+}
+
+static int coOpAttackBck(daE_OC_c* i_this) {
+    if (i_this->checkBck(5)) {
+        return 5;
+    }
+    if (i_this->checkBck(6)) {
+        return 6;
+    }
+    if (i_this->checkBck(0x1c)) {
+        return 0x1c;
+    }
+    return -1;
+}
+
+static bool coOpIsBokoblinGuardBounceWindow(daE_OC_c* i_this, f32 frame) {
+    if (!i_this->checkBck(5) && !i_this->checkBck(6)) {
+        return false;
+    }
+
+    return frame >= 14.0f && frame <= 22.0f;
+}
+
 static void coOpClearEnemyTargets(daE_OC_c* i_this) {
     dusk::coop::clearAllEnemyTargets(i_this);
+    // Co-op: attack-loop probe state is actor-lifetime data and must not outlive deletion.
+    dusk::coop::bokoblin_attack_probe::clearBokoblinAttackProbe(i_this);
 }
 #endif
 
@@ -1526,9 +1565,16 @@ void daE_OC_c::executeAttack() {
 #if TARGET_PC
     f32 target_dist = fopAcM_searchPlayerDistance(this);
     s16 target_angle = fopAcM_searchPlayerAngleY(this);
+    dusk::coop::EnemyTargetResult target_result;
+    bool guarded_hit = false;
+    bool guarded_contact = false;
+    bool sphere0_hit = false;
+    bool sphere1_hit = false;
+    dusk::coop::defender_owner::DefenderOwnerResult sphere0_defender;
+    dusk::coop::defender_owner::DefenderOwnerResult sphere1_defender;
     // Co-op: attack follow-through should stay aimed at the committed co-op target.
     coOpSelectCombatTarget(this, "e_oc.attack", true, dusk::coop::EnemyTargetMode::StickyCombat,
-                           NULL, &target_dist, &target_angle);
+                           NULL, &target_dist, &target_angle, &target_result);
 #endif
     int frame_ctrl = (mpMorf->getFrame() - 9.0f);
     if (frame_ctrl >= 0) {
@@ -1616,23 +1662,48 @@ void daE_OC_c::executeAttack() {
 #endif
             }
 
-            u8 my_bool = 0;
+#if TARGET_PC
+            // Co-op: defender_owner records any contact immediately, but Bokoblin should only
+            // consume a shield guard as a bounce during the actual attack swing.
+            const bool guard_bounce_window =
+                coOpIsBokoblinGuardBounceWindow(this, mpMorf->getFrame());
+            if (mSphs_at[0].ChkAtHit()) {
+                sphere0_hit = true;
+                sphere0_defender =
+                    coOpRecordGuardedAttackHit(this, &mSphs_at[0], "e_oc.attack_guard.0");
+                const bool sphere_guarded = sphere0_defender.found && sphere0_defender.guarded;
+                guarded_contact = sphere_guarded || guarded_contact;
+                guarded_hit = (guard_bounce_window && sphere_guarded) || guarded_hit;
+            }
+
+            if (mSphs_at[1].ChkAtHit()) {
+                sphere1_hit = true;
+                sphere1_defender =
+                    coOpRecordGuardedAttackHit(this, &mSphs_at[1], "e_oc.attack_guard.1");
+                const bool sphere_guarded = sphere1_defender.found && sphere1_defender.guarded;
+                guarded_contact = sphere_guarded || guarded_contact;
+                guarded_hit = (guard_bounce_window && sphere_guarded) || guarded_hit;
+            }
+#else
+            u8 guarded_hit = 0;
             fopAc_ac_c* hit_actor;
             if (mSphs_at[0].ChkAtHit()) {
                 hit_actor = dCc_GetAc(mSphs_at[0].GetAtHitObj()->GetAc());
                 if (fopAcM_GetName(hit_actor) == fpcNm_ALINK_e) {
-                    my_bool = 1;
+                    guarded_hit = 1;
                 }
             }
 
             if (mSphs_at[1].ChkAtHit()) {
                 hit_actor = dCc_GetAc(mSphs_at[1].GetAtHitObj()->GetAc());
                 if (fopAcM_GetName(hit_actor) == fpcNm_ALINK_e) {
-                    my_bool = 1;
+                    guarded_hit = 1;
                 }
             }
+            guarded_hit = guarded_hit && daPy_getPlayerActorClass()->checkPlayerGuard();
+#endif
 
-            if (my_bool && daPy_getPlayerActorClass()->checkPlayerGuard()) {
+            if (guarded_hit) {
                 mpMorf->setPlaySpeed(-1.0);
                 mOcState = 3;
                 dComIfGp_getVibration().StartShock(3, 0x1f, cXyz(0.0f, 1.0f, 0.0f));
@@ -1696,6 +1767,39 @@ void daE_OC_c::executeAttack() {
             break;
         }
     }
+
+#if TARGET_PC
+    {
+        dusk::coop::bokoblin_attack_probe::BokoblinAttackProbe probe;
+        probe.actor = reinterpret_cast<uintptr_t>(this);
+        probe.actorId = fopAcM_GetID(this);
+        probe.action = E_OC_ACTION_ATTACK;
+        probe.state = mOcState;
+        probe.bck = coOpAttackBck(this);
+        probe.animFrame = mpMorf->getFrame();
+        probe.playSpeed = mpMorf->getPlaySpeed();
+        probe.speedF = speedF;
+        probe.targetDistance = target_dist;
+        probe.targetAngleY = target_angle;
+        probe.targetSlot = target_result.slot;
+        probe.targetFound = target_result.found;
+        probe.attackAnimationStarted = checkBck(5) || checkBck(6);
+        probe.attackActiveWindow = coOpIsBokoblinGuardBounceWindow(this, probe.animFrame);
+        // Co-op: hit state can appear before frames 14-22, when Bokoblin normally enables attack
+        // contact. Keep recording that early contact, but only consume a guarded contact as a
+        // bounce during the real swing window above.
+        probe.preActiveWindowHit = (sphere0_hit || sphere1_hit) && !probe.attackActiveWindow;
+        probe.preActiveWindowGuarded = probe.preActiveWindowHit && guarded_contact;
+        probe.guardedHit = guarded_hit;
+        probe.sphere0Hit = sphere0_hit;
+        probe.sphere1Hit = sphere1_hit;
+        probe.sphere0 = sphere0_defender;
+        probe.sphere1 = sphere1_defender;
+        // Co-op: record only the attack state facts that explain the intermittent commit loop.
+        // This intentionally does not change guard, damage, animation, vibration, or targeting.
+        dusk::coop::bokoblin_attack_probe::recordBokoblinAttackProbe(probe);
+    }
+#endif
 
     current.angle.y = shape_angle.y;
 }

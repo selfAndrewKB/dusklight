@@ -5,8 +5,10 @@
 #include "d/d_com_inf_game.h"
 #include "d/d_item.h"
 #include "dusk/coop/alink_probes.h"
+#include "dusk/coop/bokoblin_attack_probe.h"
 #include "dusk/coop/camera.h"
 #include "dusk/coop/damage_owner.h"
+#include "dusk/coop/defender_owner.h"
 #include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/input.h"
 #include "dusk/coop/player_query.h"
@@ -634,6 +636,63 @@ void emitDamageOwnerEvents(const Provider& provider, const json& data) {
             {"hit", hit},
         };
         emitProviderEvent(provider, "hit", eventData);
+    }
+}
+
+void emitDefenderOwnerEvents(const Provider& provider, const json& data) {
+    if (!data.contains("decisions") || !data["decisions"].is_array()) {
+        return;
+    }
+
+    for (const json& decision : data["decisions"]) {
+        const u64 eventId = decision.value("event_id", 0ull);
+        if (eventId == 0) {
+            continue;
+        }
+
+        const json eventKey = {
+            {"event_id", eventId},
+        };
+        const std::string stateKey =
+            fmt::format(FMT_STRING("defender.owner:{}"), static_cast<unsigned long long>(eventId));
+        if (provider.emitOnChange && !shouldEmitProviderEvent(stateKey, eventKey)) {
+            continue;
+        }
+
+        const json eventData = {
+            {"schema_version", data.value("schema_version", 1)},
+            {"decision", decision},
+        };
+        emitProviderEvent(provider, "contact", eventData);
+    }
+}
+
+void emitBokoblinAttackProbeEvents(const Provider& provider, const json& data) {
+    if (!data.contains("probes") || !data["probes"].is_array()) {
+        return;
+    }
+
+    for (const json& probe : data["probes"]) {
+        const u64 eventId = probe.value("event_id", 0ull);
+        if (eventId == 0) {
+            continue;
+        }
+
+        const json eventKey = {
+            {"event_id", eventId},
+        };
+        const std::string stateKey = fmt::format(
+            FMT_STRING("bokoblin.attack:{}"), static_cast<unsigned long long>(eventId));
+        if (provider.emitOnChange && !shouldEmitProviderEvent(stateKey, eventKey)) {
+            continue;
+        }
+
+        const json eventData = {
+            {"schema_version", data.value("schema_version", 1)},
+            {"probe", probe},
+        };
+        emitProviderEvent(provider, probe.value("loop_suspect", false) ? "loop_suspect" : "state",
+                          eventData);
     }
 }
 
@@ -1450,6 +1509,132 @@ json collectDamageOwner() {
     };
 }
 
+json defenderActorSummary(const coop::defender_owner::DefenderActorDebug& actor) {
+    json data = {
+        {"actor_uid", nullptr},
+        {"ptr", ptrString(actor.ptr)},
+        {"stable_actor_uid_deferred", true},
+        {"available", actor.available},
+    };
+    if (!actor.available) {
+        return data;
+    }
+
+    data["profile"] = actor.profile;
+    data["name"] = actor.name;
+    data["id"] = actor.id;
+    data["room"] = actor.room;
+    data["argument"] = actor.argument;
+    data["pos"] = {actor.pos[0], actor.pos[1], actor.pos[2]};
+    data["angle_y"] = static_cast<int>(actor.angleY);
+    return data;
+}
+
+json defenderOwnerDecisionSummary(
+    const coop::defender_owner::DefenderOwnerDecisionDebug& decision) {
+    const coop::defender_owner::DefenderOwnerResult& defender = decision.defender;
+    return {
+        {"event_id", static_cast<unsigned long long>(decision.eventId)},
+        {"sim_frame", static_cast<unsigned int>(decision.simFrame)},
+        {"label", decision.label},
+        {"attacker", defenderActorSummary(defender.attackerDebug)},
+        {"hit_actor", defenderActorSummary(defender.hitActorDebug)},
+        {"defender", defenderActorSummary(defender.defenderDebug)},
+        {"defender_slot", defender.slot != coop::PlayerSlot::Invalid
+                              ? static_cast<int>(defender.slot)
+                              : -1},
+        {"found", defender.found},
+        {"guarded", defender.guarded},
+        {"guard_break", defender.guardBreak},
+        {"at_shield_hit", defender.atShieldHit},
+        {"target_shield", defender.targetShield},
+        {"target_special_shield", defender.targetSpecialShield},
+        {"target_small_shield", defender.targetSmallShield},
+        {"target_shield_hit", defender.targetShieldHit},
+        {"reason", coop::defender_owner::defenderOwnerReasonName(defender.reason)},
+        {"hit_pos", {defender.hitPos.x, defender.hitPos.y, defender.hitPos.z}},
+    };
+}
+
+json collectDefenderOwner() {
+    const coop::defender_owner::DefenderOwnerDebugState& state =
+        coop::defender_owner::getDefenderOwnerDebugState();
+    json decisions = json::array();
+    for (int i = 0; i < state.decisionCount; i++) {
+        if (state.decisions[i].eventId == 0) {
+            continue;
+        }
+        decisions.push_back(defenderOwnerDecisionSummary(state.decisions[i]));
+    }
+
+    return {
+        {"schema_version", 1},
+        {"decisions", decisions},
+    };
+}
+
+json bokoblinAttackProbeSummary(
+    const coop::bokoblin_attack_probe::BokoblinAttackProbe& probe) {
+    return {
+        {"event_id", static_cast<unsigned long long>(probe.eventId)},
+        {"sim_frame", static_cast<unsigned int>(probe.simFrame)},
+        {"actor", ptrString(probe.actor)},
+        {"actor_id", probe.actorId},
+        {"action", probe.action},
+        {"state", probe.state},
+        {"bck", probe.bck},
+        {"anim_frame", probe.animFrame},
+        {"play_speed", probe.playSpeed},
+        {"speed_f", probe.speedF},
+        {"target_slot", probe.targetSlot != coop::PlayerSlot::Invalid
+                            ? static_cast<int>(probe.targetSlot)
+                            : -1},
+        {"target_found", probe.targetFound},
+        {"target_distance", probe.targetDistance},
+        {"target_angle_y", static_cast<int>(probe.targetAngleY)},
+        {"attack_animation_started", probe.attackAnimationStarted},
+        {"attack_active_window", probe.attackActiveWindow},
+        {"guarded_hit", probe.guardedHit},
+        {"sphere0_hit", probe.sphere0Hit},
+        {"sphere1_hit", probe.sphere1Hit},
+        {"pre_active_window_hit", probe.preActiveWindowHit},
+        {"pre_active_window_guarded", probe.preActiveWindowGuarded},
+        {"first_hit_frame", static_cast<unsigned int>(probe.firstHitFrame)},
+        {"first_hit_anim_frame", probe.firstHitAnimFrame},
+        {"first_hit_before_active_window", probe.firstHitBeforeActiveWindow},
+        {"first_hit_guarded", probe.firstHitGuarded},
+        {"sphere0_defender_slot", probe.sphere0.slot != coop::PlayerSlot::Invalid
+                                      ? static_cast<int>(probe.sphere0.slot)
+                                      : -1},
+        {"sphere1_defender_slot", probe.sphere1.slot != coop::PlayerSlot::Invalid
+                                      ? static_cast<int>(probe.sphere1.slot)
+                                      : -1},
+        {"sphere0_guarded", probe.sphere0.guarded},
+        {"sphere1_guarded", probe.sphere1.guarded},
+        {"sphere0_shield_hit", probe.sphere0.targetShieldHit},
+        {"sphere1_shield_hit", probe.sphere1.targetShieldHit},
+        {"attack_run_frames", static_cast<unsigned int>(probe.attackRunFrames)},
+        {"loop_suspect", probe.loopSuspect},
+    };
+}
+
+json collectBokoblinAttackProbe() {
+    const coop::bokoblin_attack_probe::BokoblinAttackProbeDebugState& state =
+        coop::bokoblin_attack_probe::getBokoblinAttackProbeDebugState();
+    json probes = json::array();
+    for (int i = 0; i < state.probeCount; i++) {
+        if (state.probes[i].eventId == 0) {
+            continue;
+        }
+        probes.push_back(bokoblinAttackProbeSummary(state.probes[i]));
+    }
+
+    return {
+        {"schema_version", 1},
+        {"probes", probes},
+    };
+}
+
 json inputForSlot(coop::PlayerSlot slot) {
     const coop::PlayerInputState input = coop::readLocalInput(slot);
     return {
@@ -1579,6 +1764,8 @@ Provider s_providers[] = {
     {"enemy.targeting", 1, "cheap", 5, true, 240, 12288, collectEnemyTargeting},
     {"selected_target.state", 1, "cheap", 5, true, 240, 8192, collectSelectedTargetState},
     {"damage.owner", 1, "cheap", 1, true, 600, 12288, collectDamageOwner},
+    {"defender.owner", 1, "cheap", 1, true, 600, 12288, collectDefenderOwner},
+    {"bokoblin.attack", 1, "cheap", 1, true, 240, 8192, collectBokoblinAttackProbe},
     {"coop.probes", 1, "cheap", 30, true, 20, 4096, collectCoopProbes},
     {"alink.secondary", 4, "cheap", 1, true, 120, 8192, collectAlinkSecondary},
 };
@@ -1734,6 +1921,14 @@ void tick(u32 frame) {
         }
         if (std::string(provider.name) == "damage.owner") {
             emitDamageOwnerEvents(provider, data);
+            continue;
+        }
+        if (std::string(provider.name) == "defender.owner") {
+            emitDefenderOwnerEvents(provider, data);
+            continue;
+        }
+        if (std::string(provider.name) == "bokoblin.attack") {
+            emitBokoblinAttackProbeEvents(provider, data);
             continue;
         }
 

@@ -37,9 +37,13 @@ reads after the enemy already has a target: target speed, facing, form, horse st
 guard state, damage state, or similar facts. These should follow the selected target, not P1 and not
 a fresh nearest-player query.
 
-Collision/defender-owner helpers will answer **"who did my attack touch?"** These are enemy-attack
-contact reads such as "which player blocked this swing?" They are separate from `damage_owner`
-because the enemy is the attacker and the player is the defender.
+`defender_owner` answers **"who did my attack touch?"** These are enemy-attack contact reads such as
+"which player blocked this swing?" They are separate from `damage_owner` because the enemy is the
+attacker and the player is the defender.
+
+The first proof surface is Bokoblin guard collision. See
+`docs/coop-defender-owner-contact-investigation.md` for the current attack-sphere findings and the
+known V1 limitation that a sphere's retained hit object is not a full multi-contact trace.
 
 ## Routing Table
 
@@ -50,7 +54,8 @@ because the enemy is the attacker and the player is the defender.
 | "Who is this enemy fighting right now?" | `dusk::coop::enemy_targeting` | Implemented for scoped combat targeting |
 | "Who caused this hit?" | `dusk::coop::damage_owner` | Implemented for direct players and known owned items |
 | "What is the selected target's form/speed/guard/horse/swim/damage state?" | `dusk::coop::selected_target_state` | Initial implementation for target speed/facing/position/cut/horse facts |
-| "Which player collided, rode, pushed, stood on, or picked this up?" | collision-owner helpers | Not implemented yet |
+| "Who did this enemy attack touch, and was that player guarding/blocking?" | `dusk::coop::defender_owner` | Initial direct-player implementation for Bokoblin guard collision |
+| "Which player collided, rode, pushed, stood on, or picked this up?" | broader collision-owner helpers | Not implemented yet |
 | "Which player is caught, grabbed, carried, swallowed, or retained by this actor?" | caught/grab-owner helpers | Not implemented yet |
 | "Which player owns this item/tool instance?" | item-owner helpers / owner keeps | Partially implemented by item ownership patches |
 | "Which player owns camera/HUD/message/story/save state?" | camera/HUD/story-specific APIs | Partially implemented for split-screen camera only |
@@ -67,8 +72,12 @@ because the enemy is the attacker and the player is the defender.
   checks that modify behavior toward a known target. Route these through
   `dusk::coop::selected_target_state` once the target identity is known. Do not leave them
   permanently P1-only by accident, but do not fake them with fresh nearest-player guesses.
-- **Collision-owner:** contact-driven logic with no explicit search/chase surface. Keep it out of
-  `enemy_targeting`; it needs its own ownership model.
+- **Defender/collision-owner:** enemy-attack contact reads such as guard/block/defender state.
+  Route through `dusk::coop::defender_owner`. Never use `damage_owner`, nearest-player, selected
+  target, or P1 globals to answer "who did my attack touch?"
+- **Broader collision-owner:** contact-driven logic with no explicit search/chase surface, such as
+  ride, push, stand-on, pickup, and object interaction. Keep it out of `enemy_targeting`; it needs
+  its own ownership model.
 - **Caught/grab-owner:** a retained interaction with one specific player. It must not retarget to the
   nearest player while the grab is active.
 - **Primary/global state:** story protagonist, demo/cutscene, save/restart, HUD, message, or

@@ -171,6 +171,12 @@ Do not leave these permanently primary-player-only just because V1 is cautious. 
 - `dComIfGp_getPlayer(0)` fetched only to cast to `daPy_py_c*` inside a hit-reaction function, where the real question is "which player struck me?" not "which player should I target next?"
 - Use `dusk::coop::damage_owner` for cut type/count, hit direction, weapon-owner, and hit-reaction ownership. Do not substitute nearest-player or current enemy target for attacker identity.
 
+**Defender-owner** - enemy attack contact reads where the enemy is the attacker and the player is the defender:
+
+- Guard/block checks after an enemy attack collider hits a player
+- Reads such as "which player blocked this swing?" or "which player should receive guard reaction?"
+- Use `dusk::coop::defender_owner`. Do not substitute `damage_owner`, nearest-player, current target, or P1 globals for defender identity.
+
 **Caught/grab-owner** - neither targeting nor nearest-player policy; belongs to a separate caught-state ownership pass:
 - Enemy is carrying, eating, restraining, hanging, or otherwise tracking a specific captured player
 - Redirecting to nearest player is wrong after the grab begins; the actor must retain the captured owner until release
@@ -271,6 +277,7 @@ Use these groups to minimize manual per-enemy work. Each group should map to reu
 | Proximity/contact | Enemy reacts mostly through collision or a small wake radius | Collision-owner pass plus small query helpers where explicit search exists | `E_HM`, `E_BI`, `E_SM`, `E_SM2` | Hookshot/carry interactions, contact owner attribution |
 | Vertical/flying/ranged | Enemy needs height, line-of-sight, projectile aim, or flight behavior | Later policy profile with vertical scoring and target-state helpers | `E_BU`, `E_GE`, `E_PH`, `E_YK`, `E_YR`, `E_FB` | Camera/story flyers, rider-carry paths |
 | Target-state-sensitive | Enemy decision depends on target form/speed/guard/swim/damage state | Use `dusk::coop::selected_target_state` after the target identity is known | `E_WW`, `E_GI`, `E_KK`, `E_BA` | Accidentally reading P1 state for P2, or replacing protagonist-only state |
+| Enemy-attack defender contact | Enemy attack collider hits a player, then code checks guard/block/defender state | Use `dusk::coop::defender_owner`; direct-player V1 proof surface is Bokoblin guard collision | `E_OC`, later humanoid melee enemies | Confusing defender identity with damage-owner or current target |
 | Damage-owner | Enemy reaction depends on who hit it | Separate damage ownership API, later aggro/threat bias | Many humanoids and item-reactive enemies | Treating attacker identity as nearest target |
 | Caught/grab-owner | Enemy captures or carries a specific player | Separate caught/grab ownership model | `E_ST`, `E_DF`, `E_SW`, grab-heavy files | Nearest-player retarget during a grab |
 | Boss/setpiece/demo | Encounter state owns camera, script, phase, or protagonist placement | Dedicated boss co-op audit | `d_a_b_*`, `E_SF`, `E_FS`, `E_PM`, `E_VT` | Breaking story/camera/phase assumptions |
@@ -303,7 +310,7 @@ Use this queue before writing more enemy behavior code:
    - miniboss/boss/story/demo.
 3. ~~For each likely regular enemy, inspect only enough code to mark search/chase/attack/follow-through/damage risk. Do not patch during this pass.~~ Priority 1 regular-enemy callsite classification is complete enough for the first policy wave. Continue classification opportunistically for candidates outside that wave.
 4. ~~Pick the first policy-backed wave from the best understood regular enemies, not necessarily from the highest lookup counts.~~ First wave chosen: policy-backed `E_OC`, then `E_TT`, then one accessible compact ground melee backup (`E_KG`, `E_BS`, or `E_SH`).
-5. Validate `enemy_targeting` V1 before converting more actors. Keep target choice in `enemy_targeting`, selected target facts in `selected_target_state`, hit ownership in `damage_owner`, and diagnostics quiet.
+5. Validate `enemy_targeting` V1 before converting more actors. Keep target choice in `enemy_targeting`, selected target facts in `selected_target_state`, hit ownership in `damage_owner`, enemy-attack contact in `defender_owner`, and diagnostics quiet.
 
 ## Full Machine Inventory
 

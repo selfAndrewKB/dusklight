@@ -314,6 +314,9 @@ The smallest useful implementation starts with:
 - `alink.secondary`: the secondary ALINK state already being investigated: proc, animation frame/rate, relevant input/action bits, and model-data ownership summary.
 - `attention.state`: global attention owner, flags, lock truth, targets, counts, and lock/action/check lists with actor metadata.
 - `selected_target.state`: selected/player-state decisions after identity is known, such as target speed, facing, position, cut activity, and horse state. Continuous facts are latest/context only and must not drive JSONL events.
+- `defender.owner`: enemy-attack contact decisions after a collider touches a player, such as defender slot, guard/block state, shield-hit flags, and hit position. Contact events are semantic; held collisions should not emit every frame.
+  Bokoblin currently reports individual attack sphere labels such as `atk-sphere0 P2 hit`; the investigation notes live in `docs/coop-defender-owner-contact-investigation.md`.
+- `bokoblin.attack`: Bokoblin-local attack-state probe for the intermittent committed-attack loop. It records attack state, animation frame/play speed, target slot, attack-sphere contact facts, guarded-hit outcome, pre-active-window hit timing, and `loop_suspect` events without changing behavior.
 - `diagnostics.stats`: recorder health in `latest.json`, including per-provider event counts, byte counts, throttles, payload oversize counts, current budget-window counts, and configured provider budgets.
 
 Leave process-tree, heap, OSReport sink, and debug-viewer providers for follow-up unless the first implementation needs them to answer the current ALINK question.

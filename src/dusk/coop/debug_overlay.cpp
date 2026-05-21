@@ -1,7 +1,9 @@
 #include "dusk/coop/debug_overlay.h"
 
 #include "d/d_debug_viewer.h"
+#include "dusk/coop/bokoblin_attack_probe.h"
 #include "dusk/coop/damage_owner.h"
+#include "dusk/coop/defender_owner.h"
 #include "dusk/coop/enemy_targeting.h"
 #include "SSystem/SComponent/c_math.h"
 #include "f_op/f_op_actor.h"
@@ -28,6 +30,7 @@ constexpr s16 kVisionConeHalfAngle = 0x4000;
 constexpr int kVisionConeSegments = 8;
 constexpr int kRecentDecisionMaxFrameAge = 10;
 constexpr int kRecentDamageHitMaxFrameAge = 60;
+constexpr int kRecentDefenderContactMaxFrameAge = 60;
 
 struct ChosenDecision {
     const EnemyTargetDecisionDebug* decision = nullptr;
@@ -169,6 +172,24 @@ bool shouldDrawDamageHit(const damage_owner::DamageOwnerHitDebug& hit, u32 curre
            currentFrame - hit.simFrame <= static_cast<u32>(kRecentDamageHitMaxFrameAge);
 }
 
+bool shouldDrawDefenderContact(const defender_owner::DefenderOwnerDecisionDebug& decision,
+                               u32 currentFrame) {
+    return decision.eventId != 0 && decision.defender.found &&
+           decision.defender.slot != PlayerSlot::Invalid &&
+           currentFrame >= decision.simFrame &&
+           currentFrame - decision.simFrame <= static_cast<u32>(kRecentDefenderContactMaxFrameAge);
+}
+
+const char* defenderContactSource(const char* label) {
+    if (std::strstr(label, "attack_guard.0") != nullptr) {
+        return "atk-sphere0";
+    }
+    if (std::strstr(label, "attack_guard.1") != nullptr) {
+        return "atk-sphere1";
+    }
+    return "contact";
+}
+
 void drawDamageHitWorld() {
     if (!isDamageHitOverlayEnabled()) {
         return;
@@ -184,6 +205,24 @@ void drawDamageHitWorld() {
         const GXColor color = slotColor(hit.owner.slot, false);
         cXyz hitPos = hit.hitPos;
         dDbVw_drawSphereXlu(hitPos, 30.0f, color, TRUE);
+    }
+}
+
+void drawDefenderContactWorld() {
+    const defender_owner::DefenderOwnerDebugState& state =
+        defender_owner::getDefenderOwnerDebugState();
+    for (int i = 0; i < state.decisionCount; i++) {
+        const defender_owner::DefenderOwnerDecisionDebug& decision = state.decisions[i];
+        if (!shouldDrawDefenderContact(decision, state.currentSimFrame)) {
+            continue;
+        }
+
+        GXColor color = slotColor(decision.defender.slot, false);
+        if (decision.defender.guarded) {
+            color = {0x40, 0xff, 0xff, 0xd0};
+        }
+        cXyz hitPos = decision.defender.hitPos;
+        dDbVw_drawSphereXlu(hitPos, decision.defender.guarded ? 42.0f : 30.0f, color, TRUE);
     }
 }
 
@@ -312,6 +351,32 @@ void captureDamageHitLabels(const view_class* view, const view_port_class* viewp
     }
 }
 
+void captureDefenderContactLabels(const view_class* view, const view_port_class* viewport) {
+    const defender_owner::DefenderOwnerDebugState& state =
+        defender_owner::getDefenderOwnerDebugState();
+    for (int i = 0; i < state.decisionCount && s_lineLabelCount < kMaxLineLabels; i++) {
+        const defender_owner::DefenderOwnerDecisionDebug& decision = state.decisions[i];
+        if (!shouldDrawDefenderContact(decision, state.currentSimFrame)) {
+            continue;
+        }
+
+        f32 x = 0.0f;
+        f32 y = 0.0f;
+        f32 z = 0.0f;
+        if (!projectPoint(decision.defender.hitPos, view, viewport, &x, &y, &z)) {
+            continue;
+        }
+
+        LineLabel& label = s_lineLabels[s_lineLabelCount++];
+        label.x = static_cast<int>(x);
+        label.y = static_cast<int>(y);
+        std::snprintf(label.text, sizeof(label.text), "%s P%d %s",
+                      defenderContactSource(decision.label),
+                      slotIndex(decision.defender.slot) + 1,
+                      decision.defender.guarded ? "guard" : "hit");
+    }
+}
+
 int chooseDecisions(const EnemyTargetingDebugState& state, ChosenDecision* choices, int maxChoices) {
     const int latestFrame = latestSimFrame(state);
     int choiceCount = 0;
@@ -408,6 +473,32 @@ void drawText(const ChosenDecision* choices, int choiceCount) {
         shown++;
     }
 
+    const bokoblin_attack_probe::BokoblinAttackProbeDebugState& bokoState =
+        bokoblin_attack_probe::getBokoblinAttackProbeDebugState();
+    for (int i = 0; i < bokoState.probeCount && shown < kMaxTextDecisions; i++) {
+        const bokoblin_attack_probe::BokoblinAttackProbe& probe = bokoState.probes[i];
+        if (probe.eventId == 0 || !probe.loopSuspect) {
+            continue;
+        }
+
+        char line[160];
+        if (probe.targetSlot != PlayerSlot::Invalid) {
+            std::snprintf(line, sizeof(line),
+                          "boko %d attack-loop? state %d bck %d frame %.1f speed %.2f target P%d",
+                          probe.actorId, probe.state, probe.bck, probe.animFrame, probe.playSpeed,
+                          slotIndex(probe.targetSlot) + 1);
+        } else {
+            std::snprintf(line, sizeof(line),
+                          "boko %d attack-loop? state %d bck %d frame %.1f speed %.2f target none",
+                          probe.actorId, probe.state, probe.bck, probe.animFrame, probe.playSpeed);
+        }
+        drawList->AddText(ImVec2(14.0f, static_cast<float>(y + 2)), shadowColor, line);
+        drawList->AddText(ImVec2(12.0f, static_cast<float>(y)), IM_COL32(255, 120, 90, 245),
+                          line);
+        y += 15;
+        shown++;
+    }
+
     for (int i = 0; i < s_lineLabelCount; i++) {
         const ImGuiIO& io = ImGui::GetIO();
         const float scaleX = io.DisplaySize.x > 0.0f ? io.DisplaySize.x / static_cast<float>(FB_WIDTH) : 1.0f;
@@ -461,6 +552,7 @@ void drawEnemyTargetOverlay() {
         drawWorldDecision(*choices[i].decision, choices[i].priority);
     }
     drawDamageHitWorld();
+    drawDefenderContactWorld();
 }
 
 void captureEnemyTargetOverlayLabels(const view_class* view, const view_port_class* viewport) {
@@ -477,6 +569,7 @@ void captureEnemyTargetOverlayLabels(const view_class* view, const view_port_cla
         captureLineLabel(*choices[i].decision, choices[i].priority, view, viewport);
     }
     captureDamageHitLabels(view, viewport);
+    captureDefenderContactLabels(view, viewport);
 }
 
 void drawEnemyTargetTextOverlay() {
