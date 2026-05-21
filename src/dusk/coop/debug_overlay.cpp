@@ -5,8 +5,11 @@
 #include "dusk/coop/damage_owner.h"
 #include "dusk/coop/defender_owner.h"
 #include "dusk/coop/enemy_targeting.h"
+#include "c/c_dylink.h"
+#include "d/d_com_inf_game.h"
 #include "SSystem/SComponent/c_math.h"
 #include "f_op/f_op_actor.h"
+#include "f_op/f_op_actor_mng.h"
 #include "f_op/f_op_view.h"
 #include "dolphin/gx.h"
 #include "imgui.h"
@@ -20,10 +23,11 @@ namespace {
 
 bool s_enemyTargetOverlayEnabled = true;
 bool s_damageHitOverlayEnabled = true;
+bool s_enemyActorLabelOverlayEnabled = true;
 
 constexpr int kMaxTextDecisions = 10;
 constexpr int kMaxChosenDecisions = 16;
-constexpr int kMaxLineLabels = 32;
+constexpr int kMaxLineLabels = 96;
 constexpr float kMaxActiveOverlayDistanceXZ = 5000.0f;
 constexpr float kVisionConeLengthXZ = 1200.0f;
 constexpr s16 kVisionConeHalfAngle = 0x4000;
@@ -41,6 +45,11 @@ struct LineLabel {
     int x = 0;
     int y = 0;
     char text[96] = {};
+};
+
+struct ActorLabelCaptureContext {
+    const view_class* view = nullptr;
+    const view_port_class* viewport = nullptr;
 };
 
 LineLabel s_lineLabels[kMaxLineLabels];
@@ -82,6 +91,43 @@ int slotIndex(PlayerSlot slot) {
 cXyz debugPos(const fopAc_ac_c* actor, float yOffset) {
     cXyz pos = actor->current.pos;
     pos.y += yOffset;
+    return pos;
+}
+
+bool sourceNameStartsWith(const char* name, const char* prefix) {
+    return name != nullptr && std::strncmp(name, prefix, std::strlen(prefix)) == 0;
+}
+
+bool shouldLabelActor(const fopAc_ac_c* actor, const char* moduleName) {
+    if (actor == nullptr) {
+        return false;
+    }
+
+    return fopAcM_GetGroup(actor) == fopAc_ENEMY_e ||
+           (actor->actor_status & fopAcStts_BOSS_e) != 0 ||
+           sourceNameStartsWith(moduleName, "d_a_e_") ||
+           sourceNameStartsWith(moduleName, "d_a_b_");
+}
+
+void formatSourceName(char* out, size_t outSize, const fopAc_ac_c* actor, const char* moduleName) {
+    if (moduleName != nullptr) {
+        std::snprintf(out, outSize, "%s.cpp", moduleName);
+        return;
+    }
+
+    std::snprintf(out, outSize, "profile=%d", static_cast<int>(fopAcM_GetProfName(actor)));
+}
+
+cXyz actorLabelPos(const fopAc_ac_c* actor) {
+    cXyz pos = actor->attention_info.position;
+    if (pos.x == 0.0f && pos.y == 0.0f && pos.z == 0.0f) {
+        pos = actor->eyePos;
+    }
+    if (pos.x == 0.0f && pos.y == 0.0f && pos.z == 0.0f) {
+        pos = actor->current.pos;
+        pos.y += 140.0f;
+    }
+    pos.y += 40.0f;
     return pos;
 }
 
@@ -377,6 +423,43 @@ void captureDefenderContactLabels(const view_class* view, const view_port_class*
     }
 }
 
+int captureEnemyActorLabel(void* actorPtr, void* data) {
+    if (!isEnemyActorLabelOverlayEnabled() || s_lineLabelCount >= kMaxLineLabels ||
+        actorPtr == nullptr || data == nullptr || !fopAcM_IsActor(actorPtr))
+    {
+        return 0;
+    }
+
+    fopAc_ac_c* actor = static_cast<fopAc_ac_c*>(actorPtr);
+    const char* moduleName = cDyl_getModuleName(fopAcM_GetProfName(actor));
+    if (!shouldLabelActor(actor, moduleName)) {
+        return 0;
+    }
+
+    ActorLabelCaptureContext* context = static_cast<ActorLabelCaptureContext*>(data);
+    f32 x = 0.0f;
+    f32 y = 0.0f;
+    f32 z = 0.0f;
+    if (!projectPoint(actorLabelPos(actor), context->view, context->viewport, &x, &y, &z)) {
+        return 0;
+    }
+
+    LineLabel& label = s_lineLabels[s_lineLabelCount++];
+    label.x = static_cast<int>(x);
+    label.y = static_cast<int>(y);
+    formatSourceName(label.text, sizeof(label.text), actor, moduleName);
+    return 0;
+}
+
+void captureEnemyActorLabels(const view_class* view, const view_port_class* viewport) {
+    if (!isEnemyActorLabelOverlayEnabled() || s_lineLabelCount >= kMaxLineLabels) {
+        return;
+    }
+
+    ActorLabelCaptureContext context = {view, viewport};
+    fopAcIt_Executor(captureEnemyActorLabel, &context);
+}
+
 int chooseDecisions(const EnemyTargetingDebugState& state, ChosenDecision* choices, int maxChoices) {
     const int latestFrame = latestSimFrame(state);
     int choiceCount = 0;
@@ -449,11 +532,24 @@ void drawText(const ChosenDecision* choices, int choiceCount) {
     const ImU32 textColor = IM_COL32(255, 255, 255, 230);
     const ImU32 labelColor = IM_COL32(255, 220, 120, 235);
     int y = 72;
-    drawList->AddText(ImVec2(14.0f, static_cast<float>(y + 2)), shadowColor,
-                      "co-op enemy targets  orange=active red=committed");
-    drawList->AddText(ImVec2(12.0f, static_cast<float>(y)), textColor,
-                      "co-op enemy targets  orange=active red=committed");
-    y += 15;
+    if (isEnemyTargetOverlayEnabled()) {
+        drawList->AddText(ImVec2(14.0f, static_cast<float>(y + 2)), shadowColor,
+                          "co-op enemy targets  orange=active red=committed");
+        drawList->AddText(ImVec2(12.0f, static_cast<float>(y)), textColor,
+                          "co-op enemy targets  orange=active red=committed");
+        y += 15;
+    }
+
+    if (isEnemyActorLabelOverlayEnabled()) {
+        char stageLine[96];
+        const char* stageName = dComIfGp_getStartStageName();
+        std::snprintf(stageLine, sizeof(stageLine), "stage %s room %d",
+                      stageName != nullptr ? stageName : "",
+                      static_cast<int>(dComIfGp_getStartStageRoomNo()));
+        drawList->AddText(ImVec2(14.0f, static_cast<float>(y + 2)), shadowColor, stageLine);
+        drawList->AddText(ImVec2(12.0f, static_cast<float>(y)), textColor, stageLine);
+        y += 15;
+    }
 
     int shown = 0;
     for (int i = 0; i < choiceCount && shown < kMaxTextDecisions; i++) {
@@ -473,30 +569,32 @@ void drawText(const ChosenDecision* choices, int choiceCount) {
         shown++;
     }
 
-    const bokoblin_attack_probe::BokoblinAttackProbeDebugState& bokoState =
-        bokoblin_attack_probe::getBokoblinAttackProbeDebugState();
-    for (int i = 0; i < bokoState.probeCount && shown < kMaxTextDecisions; i++) {
-        const bokoblin_attack_probe::BokoblinAttackProbe& probe = bokoState.probes[i];
-        if (probe.eventId == 0 || !probe.loopSuspect) {
-            continue;
-        }
+    if (isEnemyTargetOverlayEnabled()) {
+        const bokoblin_attack_probe::BokoblinAttackProbeDebugState& bokoState =
+            bokoblin_attack_probe::getBokoblinAttackProbeDebugState();
+        for (int i = 0; i < bokoState.probeCount && shown < kMaxTextDecisions; i++) {
+            const bokoblin_attack_probe::BokoblinAttackProbe& probe = bokoState.probes[i];
+            if (probe.eventId == 0 || !probe.loopSuspect) {
+                continue;
+            }
 
-        char line[160];
-        if (probe.targetSlot != PlayerSlot::Invalid) {
-            std::snprintf(line, sizeof(line),
-                          "boko %d attack-loop? state %d bck %d frame %.1f speed %.2f target P%d",
-                          probe.actorId, probe.state, probe.bck, probe.animFrame, probe.playSpeed,
-                          slotIndex(probe.targetSlot) + 1);
-        } else {
-            std::snprintf(line, sizeof(line),
-                          "boko %d attack-loop? state %d bck %d frame %.1f speed %.2f target none",
-                          probe.actorId, probe.state, probe.bck, probe.animFrame, probe.playSpeed);
+            char line[160];
+            if (probe.targetSlot != PlayerSlot::Invalid) {
+                std::snprintf(line, sizeof(line),
+                              "boko %d attack-loop? state %d bck %d frame %.1f speed %.2f target P%d",
+                              probe.actorId, probe.state, probe.bck, probe.animFrame, probe.playSpeed,
+                              slotIndex(probe.targetSlot) + 1);
+            } else {
+                std::snprintf(line, sizeof(line),
+                              "boko %d attack-loop? state %d bck %d frame %.1f speed %.2f target none",
+                              probe.actorId, probe.state, probe.bck, probe.animFrame, probe.playSpeed);
+            }
+            drawList->AddText(ImVec2(14.0f, static_cast<float>(y + 2)), shadowColor, line);
+            drawList->AddText(ImVec2(12.0f, static_cast<float>(y)), IM_COL32(255, 120, 90, 245),
+                              line);
+            y += 15;
+            shown++;
         }
-        drawList->AddText(ImVec2(14.0f, static_cast<float>(y + 2)), shadowColor, line);
-        drawList->AddText(ImVec2(12.0f, static_cast<float>(y)), IM_COL32(255, 120, 90, 245),
-                          line);
-        y += 15;
-        shown++;
     }
 
     for (int i = 0; i < s_lineLabelCount; i++) {
@@ -538,7 +636,24 @@ void toggleDamageHitOverlay() {
     setDamageHitOverlayEnabled(!isDamageHitOverlayEnabled());
 }
 
+bool isEnemyActorLabelOverlayEnabled() {
+    return s_enemyActorLabelOverlayEnabled;
+}
+
+void setEnemyActorLabelOverlayEnabled(bool enabled) {
+    s_enemyActorLabelOverlayEnabled = enabled;
+}
+
+void toggleEnemyActorLabelOverlay() {
+    setEnemyActorLabelOverlayEnabled(!isEnemyActorLabelOverlayEnabled());
+}
+
 void drawEnemyTargetOverlay() {
+    if (!isEnemyTargetOverlayEnabled() && !isEnemyActorLabelOverlayEnabled()) {
+        return;
+    }
+
+    s_lineLabelCount = 0;
     if (!isEnemyTargetOverlayEnabled()) {
         return;
     }
@@ -546,7 +661,6 @@ void drawEnemyTargetOverlay() {
     const EnemyTargetingDebugState& state = getEnemyTargetingDebugState();
     ChosenDecision choices[kMaxChosenDecisions] = {};
     const int choiceCount = chooseDecisions(state, choices, kMaxChosenDecisions);
-    s_lineLabelCount = 0;
     for (int i = 0; i < choiceCount; i++) {
         drawVisionCone(*choices[i].decision, choices[i].priority);
         drawWorldDecision(*choices[i].decision, choices[i].priority);
@@ -556,30 +670,38 @@ void drawEnemyTargetOverlay() {
 }
 
 void captureEnemyTargetOverlayLabels(const view_class* view, const view_port_class* viewport) {
-    if (!isEnemyTargetOverlayEnabled() || view == nullptr || viewport == nullptr) {
+    if ((!isEnemyTargetOverlayEnabled() && !isEnemyActorLabelOverlayEnabled()) ||
+        view == nullptr || viewport == nullptr)
+    {
         return;
     }
     // Co-op: collect labels once for each rendered viewport. The final ImGui pass is fullscreen, so
     // viewport-aware projection is what keeps split-screen labels on the side whose camera sees them.
 
-    const EnemyTargetingDebugState& state = getEnemyTargetingDebugState();
-    ChosenDecision choices[kMaxChosenDecisions] = {};
-    const int choiceCount = chooseDecisions(state, choices, kMaxChosenDecisions);
-    for (int i = 0; i < choiceCount; i++) {
-        captureLineLabel(*choices[i].decision, choices[i].priority, view, viewport);
+    if (isEnemyTargetOverlayEnabled()) {
+        const EnemyTargetingDebugState& state = getEnemyTargetingDebugState();
+        ChosenDecision choices[kMaxChosenDecisions] = {};
+        const int choiceCount = chooseDecisions(state, choices, kMaxChosenDecisions);
+        for (int i = 0; i < choiceCount; i++) {
+            captureLineLabel(*choices[i].decision, choices[i].priority, view, viewport);
+        }
+        captureDamageHitLabels(view, viewport);
+        captureDefenderContactLabels(view, viewport);
     }
-    captureDamageHitLabels(view, viewport);
-    captureDefenderContactLabels(view, viewport);
+    captureEnemyActorLabels(view, viewport);
 }
 
 void drawEnemyTargetTextOverlay() {
-    if (!isEnemyTargetOverlayEnabled()) {
+    if (!isEnemyTargetOverlayEnabled() && !isEnemyActorLabelOverlayEnabled()) {
         return;
     }
 
-    const EnemyTargetingDebugState& state = getEnemyTargetingDebugState();
     ChosenDecision choices[kMaxChosenDecisions] = {};
-    const int choiceCount = chooseDecisions(state, choices, kMaxChosenDecisions);
+    int choiceCount = 0;
+    if (isEnemyTargetOverlayEnabled()) {
+        const EnemyTargetingDebugState& state = getEnemyTargetingDebugState();
+        choiceCount = chooseDecisions(state, choices, kMaxChosenDecisions);
+    }
     drawText(choices, choiceCount);
 }
 

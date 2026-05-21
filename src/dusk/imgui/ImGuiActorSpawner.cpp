@@ -83,6 +83,18 @@ void tryCoopHotkeyToggleEnemyTargetOverlay() {
                   : "Co-op enemy target overlay disabled");
 }
 
+void tryCoopHotkeyToggleEnemyActorLabelOverlay() {
+    const ImGuiIO& io = ImGui::GetIO();
+    if (!io.KeyCtrl || io.KeyShift || !io.KeyAlt || !ImGui::IsKeyPressed(ImGuiKey_F12)) {
+        return;
+    }
+
+    dusk::coop::debug_overlay::toggleEnemyActorLabelOverlay();
+    DuskToast(dusk::coop::debug_overlay::isEnemyActorLabelOverlayEnabled()
+                  ? "Co-op enemy actor labels enabled"
+                  : "Co-op enemy actor labels disabled");
+}
+
 void secondaryAlinkProbeCheckbox(const char* label, dusk::coop::SecondaryAlinkProbeFlag flag) {
     unsigned int flags = dusk::coop::getSecondaryAlinkProbeFlags();
     bool enabled = (flags & static_cast<unsigned int>(flag)) != 0;
@@ -110,6 +122,7 @@ void secondaryAlinkProbeCheckbox(const char* label, dusk::coop::SecondaryAlinkPr
 void ImGuiMenuTools::ShowActorSpawner() {
     tryCoopHotkeySpawnSecondary();
     tryCoopHotkeyToggleEnemyTargetOverlay();
+    tryCoopHotkeyToggleEnemyActorLabelOverlay();
 
     if (!m_showActorSpawner) {
         return;
@@ -173,8 +186,14 @@ void ImGuiMenuTools::ShowActorSpawner() {
     if (ImGui::Checkbox("Show damage hit overlay", &damageHitOverlayEnabled)) {
         dusk::coop::debug_overlay::setDamageHitOverlayEnabled(damageHitOverlayEnabled);
     }
+    bool enemyActorLabelOverlayEnabled = dusk::coop::debug_overlay::isEnemyActorLabelOverlayEnabled();
+    if (ImGui::Checkbox("Show enemy actor labels", &enemyActorLabelOverlayEnabled)) {
+        dusk::coop::debug_overlay::setEnemyActorLabelOverlayEnabled(enemyActorLabelOverlayEnabled);
+    }
     ImGui::TextDisabled("Hotkey: %s toggles enemy target overlay",
                         dusk::hotkeys::COOP_TOGGLE_ENEMY_TARGET_OVERLAY);
+    ImGui::TextDisabled("Hotkey: %s toggles enemy actor labels",
+                        dusk::hotkeys::COOP_TOGGLE_ENEMY_ACTOR_LABEL_OVERLAY);
     if (diagnosticsEnabled) {
         if (ImGui::SmallButton("Flush diagnostics")) {
             dusk::diagnostics::flush("manual-ui");

@@ -14,7 +14,10 @@ actor patches -> enemy_targeting -> player_query
 - `enemy_targeting`: policy for choosing and retaining a target through reusable behavior scopes.
 - actor patches: narrow conversions at concrete enemy callsites, preserving vanilla behavior outside the scoped PC/co-op hook.
 
-The current Bokoblin proof now uses `enemy_targeting` over `player_query`. Bokoblin remains the first validation surface; do not convert additional enemies until the scoped-target foundation has been revalidated in game.
+The current Bokoblin and Tektite proofs now use `enemy_targeting` over `player_query`.
+Bokoblin remains the richer melee validation surface; Tektite is the first compact non-Bokoblin
+port. Choose the next enemy from the audit queue rather than widening either proof surface by
+default.
 
 ## Target Policy Requirements
 
@@ -50,7 +53,8 @@ For each enemy family, classify and test these layers separately:
 | Actor | File | Profile | Current State | Notes |
 | --- | --- | --- | --- | --- |
 | Hanging Helmasaur | `src/d/actor/d_a_e_hm.cpp` | `E_HM` | raw-query proof | Only `e_hm.up_wait` wake/proximity is converted. Other combat and damage behavior remains P1/global. |
-| Basic Bokoblin | `src/d/actor/d_a_e_oc.cpp` | `E_OC` | raw-query proof, behavior validated | Search, head-search, find/chase, move-out, attack gates, and first follow-through facing use nearest active player. This proved recognition alone was not enough; downstream attack gates also needed the selected target. |
+| Basic Bokoblin | `src/d/actor/d_a_e_oc.cpp` | `E_OC` | policy-backed targeting, owner APIs validated | Search, head-search, find/chase, move-out, attack gates, and follow-through use `enemy_targeting`; sword-sound awareness uses `selected_target_state`; sword hit reactions use `damage_owner`; guard collision uses `defender_owner`. |
+| Tektite | `src/d/actor/d_a_e_tt.cpp` | `E_TT` | policy-backed targeting, owner APIs validated | Search/chase/attack/out-range use `enemy_targeting`; ordinary target facts and first-attack prediction use `selected_target_state`; cut reactions use `damage_owner`. Culling remains render/visibility work. |
 
 ## Reviewed Evidence
 
@@ -240,7 +244,7 @@ The table below is machine-assisted from `src/d/actor/d_a_e_*.cpp` and profile s
 
 | Priority | Actor/File | Profile | Lookup Count | Initial Classification | Notes |
 | --- | --- | --- | ---: | --- | --- |
-| Done proof | `d_a_e_oc.cpp` | `E_OC` | 48 | regular melee | First regular-enemy proof; existing proof systems now route through `enemy_targeting` V1. Validate before using as the template. |
+| Done proof | `d_a_e_oc.cpp` | `E_OC` | 48 | regular melee | First regular-enemy proof; targeting, damage-owner, selected-target-state, and defender-owner paths are validated. |
 | Done proof | `d_a_e_hm.cpp` | `E_HM` | low | proximity enemy | One wake trigger converted; full combat not audited. |
 | High risk | `d_a_e_wb.cpp` | `E_WB` | 75 | mounted/boss/setpiece likely | Very high singleton density; defer until ordinary enemies are stable. |
 | High risk | `d_a_e_po.cpp` | `E_PO` | 63 | special/ghost-like | High singleton density; classify before patching. |
@@ -263,7 +267,7 @@ The table below is machine-assisted from `src/d/actor/d_a_e_*.cpp` and profile s
 | Candidate | `d_a_e_s1.cpp` | `E_S1` | 24 | regular enemy candidate | Ceiling-hanging spider with physics web; loads "E_S2" resource; Skulltula variant. Hang/wolfbite paths need audit before policy targeting. |
 | Candidate | `d_a_e_dt.cpp` | `E_DT` | 24 | boss/setpiece likely | Many press/demo/special-position calls; defer. |
 | Candidate | `d_a_e_gi.cpp` | `E_GI` | 22 | regular humanoid/undead candidate | Sleep/wait and sword model evidence; promising after basic sticky policy exists. |
-| Candidate | `d_a_e_tt.cpp` | `E_TT` | 21 | regular enemy candidate | HIO label `テクタイト`; compact chase/attack state. |
+| Done proof | `d_a_e_tt.cpp` | `E_TT` | 21 | regular enemy | HIO label `テクタイト`; compact chase/attack state; first non-Bokoblin port validated for targeting, damage-owner, and selected-target-state surfaces. |
 | Candidate | `d_a_e_th.cpp` | `E_TH` | 20 | special/miniboss-class enemy | Confirmed: Darkhammer; `dark_hammer_one_hit` achievement signal; chain-ball weapon. Defer. |
 | Candidate | `d_a_e_sf.cpp` | `E_SF` | 20 | regular humanoid with demo intro | Guard/sitwait/op-demo paths need care. |
 
@@ -284,13 +288,16 @@ Use these groups to minimize manual per-enemy work. Each group should map to reu
 
 ## First Policy-Backed Wave
 
-The audit was sufficient to begin the `enemy_targeting` V1 module without broad enemy conversion. Bokoblin now has the reusable policy spine on only the existing raw-query proof systems. Tektite has been ported as the first compact non-Bokoblin specimen and still needs in-game validation before choosing the next ground enemy.
+The audit was sufficient to begin the `enemy_targeting` V1 module without broad enemy conversion.
+Bokoblin now has the reusable policy spine plus damage-owner, selected-target-state, and
+defender-owner proof surfaces. Tektite has been ported and validated as the first compact
+non-Bokoblin specimen.
 
-After Bokoblin validates, use one clean ground enemy to prove the pattern ports well:
+After Bokoblin and Tektite, choose one clean ground enemy to continue breadth testing:
 
-1. **Tektite (`E_TT`)** - first non-Bokoblin specimen. The search/chase/attack callsites are compact and isolated in `checkPlayerSearch`, `executeChase`, `executeAttack`, and `executeOutRange`. It also forces us to thread target pose/direction without touching story/demo systems.
-2. **Non-flying ground melee backup (`E_KG`, `E_BS`, or `E_SH`)** - choose based on accessible test location. These have smaller lookup counts and should prove the policy is not Bokoblin-specific.
-3. **Do not pick White Wolfos (`E_WW`) for the first port.** It is valuable, but its wolf-form and target-state checks should wait until selected-target state helpers exist.
+1. **Non-flying ground melee backup (`E_KG`, `E_BS`, or `E_SH`)** - choose based on accessible test location. These have smaller lookup counts and should prove the policy is not Bokoblin- or Tektite-specific.
+2. **Target-state-sensitive enemy (`E_WW`, `E_GI`, `E_KK`, or `E_BA`)** - now reasonable because `selected_target_state` exists, but classify form/guard/damage reads before patching.
+3. **Avoid grab-heavy or setpiece enemies** until caught/grab-owner and event/camera policies exist.
 
 This sequence keeps the manual work small: build one policy API, convert one already validated actor, then port the same shape to one compact enemy before touching target-state-sensitive families.
 
@@ -309,8 +316,8 @@ Use this queue before writing more enemy behavior code:
    - grab/caught-state,
    - miniboss/boss/story/demo.
 3. ~~For each likely regular enemy, inspect only enough code to mark search/chase/attack/follow-through/damage risk. Do not patch during this pass.~~ Priority 1 regular-enemy callsite classification is complete enough for the first policy wave. Continue classification opportunistically for candidates outside that wave.
-4. ~~Pick the first policy-backed wave from the best understood regular enemies, not necessarily from the highest lookup counts.~~ First wave chosen: policy-backed `E_OC`, then `E_TT`, then one accessible compact ground melee backup (`E_KG`, `E_BS`, or `E_SH`).
-5. Validate `enemy_targeting` V1 before converting more actors. Keep target choice in `enemy_targeting`, selected target facts in `selected_target_state`, hit ownership in `damage_owner`, enemy-attack contact in `defender_owner`, and diagnostics quiet.
+4. ~~Pick the first policy-backed wave from the best understood regular enemies, not necessarily from the highest lookup counts.~~ First wave chosen and validated: policy-backed `E_OC`, then `E_TT`.
+5. Keep target choice in `enemy_targeting`, selected target facts in `selected_target_state`, hit ownership in `damage_owner`, enemy-attack contact in `defender_owner`, and diagnostics quiet while selecting the next actor.
 
 ## Full Machine Inventory
 
@@ -417,10 +424,10 @@ This inventory is generated from `src/d/actor/d_a_e_*.cpp` file names and `g_pro
 
 ## Next Steps
 
-1. Validate policy-backed Bokoblin in game: acquire P2, avoid nearest-player flicker, and retain the chosen target through committed attack follow-through.
-2. Confirm `enemy.targeting` JSONL is quiet while players stand still and that continuous distance/angle/timer fields remain latest/context rather than event drivers.
-3. After Bokoblin validates, port the same pattern to Tektite (`E_TT`) as the first non-Bokoblin proof.
-4. Continue classifying/test-locating remaining regular enemies in parallel, especially the accessible compact ground enemies (`E_KG`, `E_BS`, `E_SH`) and the target-state-sensitive second wave (`E_WW`, `E_GI`, `E_KK`).
+1. Choose the next regular enemy from an accessible test location, preferably `E_KG`, `E_BS`, or `E_SH` if one can be found quickly in-game.
+2. Before patching, classify its singleton reads into targeting, selected-target state, damage-owner, defender/collision-owner, caught/grab-owner, primary/global, and render/culling.
+3. Convert only the smallest coherent behavior slice, using actor-local helpers over the API families proven by Bokoblin and Tektite.
+4. Continue classifying/test-locating target-state-sensitive second-wave enemies (`E_WW`, `E_GI`, `E_KK`, `E_BA`) in parallel.
 
 ## Multiplayer AI Notes
 

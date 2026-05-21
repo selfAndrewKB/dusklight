@@ -22,6 +22,7 @@ constexpr const char* TOGGLE_FULLSCREEN = "F11";
 
 constexpr const char* COOP_SPAWN_SECONDARY_LINK = "Ctrl+F12";
 constexpr const char* COOP_TOGGLE_ENEMY_TARGET_OVERLAY = "Ctrl+Shift+F12";
+constexpr const char* COOP_TOGGLE_ENEMY_ACTOR_LABEL_OVERLAY = "Ctrl+Alt+F12";
 
 constexpr const char* TURBO = "Tab";
 

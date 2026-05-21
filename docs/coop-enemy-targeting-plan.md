@@ -238,7 +238,7 @@ This prevents designing the policy exclusively around Bokoblin while still keepi
 - Start an attack and confirm the target is retained through the committed attack/follow-through path.
 - Flush diagnostics and confirm `enemy.targeting` explains selected target, reason, committed hint, and candidate facts.
 - Confirm `events.jsonl` does not grow from distance/angle drift while players stand still.
-- For Tektite, confirm P2 can wake, chase, face, be attacked, drive damage-owner cut reactions, and populate `selected_target.state` during ordinary chase/attack/out-range tests without changing culling paths.
+- For Tektite, P2 can wake, chase, face, be attacked, drive damage-owner cut reactions, and populate `selected_target.state` during ordinary chase/attack/out-range tests without changing culling paths.
 - For Bokoblin guard collision, confirm `defender_owner` chooses the player actually hit by the attack sphere before reading guard/block state.
 
 ## Implementation Progress
@@ -257,4 +257,4 @@ This prevents designing the policy exclusively around Bokoblin while still keepi
 - [x] Convert Tektite in a separate follow-up patch after Bokoblin validates.
 - [x] Add `selected_target_state` V1 and route Tektite ordinary combat target facts, Tektite first-attack prediction, and Bokoblin sword-sound awareness through it.
 - [x] Add `defender_owner` V1 and route Bokoblin guard collision through the actual hit defender.
-- [ ] Validate Tektite in game and inspect `enemy.targeting` labels `e_tt.search`, `e_tt.chase`, `e_tt.attack`, and `e_tt.out_range`.
+- [x] Validate Tektite in game and inspect `enemy.targeting` labels `e_tt.search`, `e_tt.chase`, `e_tt.attack`, and `e_tt.out_range`.

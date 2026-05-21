@@ -19,8 +19,9 @@
 #include "m_Do/m_Do_ext2.h"
 #endif
 
+// Dusk PC uses statically linked actors, but the original REL name table is still useful as
+// read-only source-file metadata for debug overlays and actor identification tools.
 static DynamicNameTableEntry const DynamicNameTable[] = {
-#if !TARGET_PC
     {fpcNm_ALLDIE_e, "d_a_alldie"},
     {fpcNm_Obj_Swpush_e, "d_a_obj_swpush"},
     {fpcNm_Obj_Swpush2_e, "d_a_obj_swpush2"},
@@ -800,7 +801,6 @@ static DynamicNameTableEntry const DynamicNameTable[] = {
     #if VERSION != VERSION_SHIELD_DEBUG
     {fpcNm_GRASS_e, "d_a_grass"},
     #endif
-#endif
     {-1, NULL},
 };
 
@@ -880,6 +880,20 @@ BOOL cCc_Check() {
 
 BOOL cDyl_IsInitialized() {
     return cDyl_Initialized;
+}
+
+const char* cDyl_getModuleName(s16 i_ProfName) {
+    for (int i = 0; i < ARRAY_SIZEU(DynamicNameTable); i++) {
+        const DynamicNameTableEntry& entry = DynamicNameTable[i];
+        if (entry.name == NULL) {
+            break;
+        }
+        if (entry.mKey == i_ProfName) {
+            return entry.name;
+        }
+    }
+
+    return NULL;
 }
 
 BOOL cDyl_IsLinked(s16 i_ProfName) {

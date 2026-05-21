@@ -22,6 +22,7 @@ void cDyl_InitAsync();
 BOOL cDyl_IsLinked(s16 i_ProfName);
 BOOL cDyl_Unlink(s16 i_ProfName);
 int cDyl_LinkASync(s16 i_ProfName);
+const char* cDyl_getModuleName(s16 i_ProfName);
 
 BOOL cCc_Check();
 
