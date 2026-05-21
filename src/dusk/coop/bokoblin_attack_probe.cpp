@@ -26,7 +26,8 @@ BokoblinAttackProbeDebugState s_debugState;
 AttackRunState s_runs[kProbeCount] = {};
 u32 s_currentSimFrame = 0;
 u64 s_nextEventId = 1;
-int s_nextEvict = 0;
+int s_nextRunEvict = 0;
+int s_nextProbeEvict = 0;
 
 AttackRunState* findRun(uintptr_t actor) {
     for (AttackRunState& run : s_runs) {
@@ -43,7 +44,7 @@ AttackRunState* findRun(uintptr_t actor) {
         }
     }
 
-    AttackRunState& run = s_runs[s_nextEvict++ % kProbeCount];
+    AttackRunState& run = s_runs[s_nextRunEvict++ % kProbeCount];
     run = {};
     run.actor = actor;
     run.startedFrame = s_currentSimFrame;
@@ -61,7 +62,7 @@ BokoblinAttackProbe* findProbe(uintptr_t actor) {
         return &s_debugState.probes[s_debugState.probeCount++];
     }
 
-    return &s_debugState.probes[s_nextEvict++ % kProbeCount];
+    return &s_debugState.probes[s_nextProbeEvict++ % kProbeCount];
 }
 
 bool sameSemanticState(const BokoblinAttackProbe& lhs, const BokoblinAttackProbe& rhs) {

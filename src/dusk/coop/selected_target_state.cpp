@@ -95,8 +95,7 @@ SelectedTargetState stateForSlot(PlayerSlot slot, fopAc_ac_c* actor) {
     return state;
 }
 
-SelectedTargetState stateForEnemyTarget(const EnemyTargetResult& target, const char* label) {
-    (void) label;
+SelectedTargetState stateForEnemyTarget(const EnemyTargetResult& target) {
     return stateForSlot(target.slot, target.localActor);
 }
 

@@ -81,8 +81,14 @@ void assignFallbackPrimary(DamageOwnerResult* result, DamageOwnerReason reason) 
 fopAc_ac_c* findBoomerangOwner(const fopAc_ac_c* boomerang) {
     for (int i = 0; i < kPlayerSlotCount; i++) {
         fopAc_ac_c* actor = getPlayer(static_cast<PlayerSlot>(i));
+        if (actor == nullptr || fopAcM_GetName(actor) != fpcNm_ALINK_e) {
+            continue;
+        }
+
         daAlink_c* player = static_cast<daAlink_c*>(actor);
-        if (player != nullptr && player->getBoomerangActor() == boomerang) {
+        // Co-op: boomerang actor-keeps are human ALINK item state; do not read them from
+        // non-ALINK actors or wolf-form player state.
+        if (!player->checkWolf() && player->getBoomerangActor() == boomerang) {
             return actor;
         }
     }
@@ -97,7 +103,6 @@ void fillColliderFacts(DamageOwnerResult* result, cCcD_Obj* collider) {
 
     result->attackType = collider->GetAtType();
     result->atp = collider->GetAtAtp();
-    result->attackPower = collider->GetAtAtp();
 
     dCcD_GObjInf* gobj = static_cast<dCcD_GObjInf*>(collider->GetGObjInf());
     if (gobj != nullptr) {

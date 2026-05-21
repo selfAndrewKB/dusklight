@@ -43,7 +43,6 @@ struct DamageOwnerResult {
     DamageActorDebug hitActorDebug;
     DamageActorDebug ownerDebug;
     u32 attackType = 0;
-    u16 attackPower = 0;
     u8 atp = 0;
     int special = 0;
     int cutType = -1;

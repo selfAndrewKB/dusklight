@@ -52,7 +52,9 @@ struct SelectedTargetDebugState {
 using PlayerStatePredicate = bool (*)(const SelectedTargetState& state);
 
 SelectedTargetState stateForSlot(PlayerSlot slot, fopAc_ac_c* actor);
-SelectedTargetState stateForEnemyTarget(const EnemyTargetResult& target, const char* label);
+// Snapshot only. Actor files that need diagnostics should record the returned state with
+// recordSelectedTargetState() so observer and label ownership stay explicit.
+SelectedTargetState stateForEnemyTarget(const EnemyTargetResult& target);
 SelectedTargetState findNearestPlayerState(const fopAc_ac_c* observer, const char* label,
                                            PlayerStatePredicate predicate,
                                            f32 maxDistanceXZ = -1.0f);

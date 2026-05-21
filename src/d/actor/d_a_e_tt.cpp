@@ -209,7 +209,7 @@ static bool coOpSelectTargetState(daE_TT_c* i_this, const char* label, bool comm
 
     const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
     const dusk::coop::selected_target_state::SelectedTargetState targetState =
-        dusk::coop::selected_target_state::stateForEnemyTarget(target, label);
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
     dusk::coop::selected_target_state::recordSelectedTargetState(
         i_this, label, targetState,
         targetState.available
