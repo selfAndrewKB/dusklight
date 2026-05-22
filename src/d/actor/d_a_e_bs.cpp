@@ -8,6 +8,12 @@
 #include "d/actor/d_a_e_bs.h"
 #include "f_op/f_op_actor_enemy.h"
 
+#if TARGET_PC
+#include "dusk/coop/defender_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 class daE_BS_HIO_c : public JORReflexible {
 public:
     daE_BS_HIO_c();
@@ -41,6 +47,73 @@ daE_BS_HIO_c::daE_BS_HIO_c() {
     attack_start_range = 200.0f;
     battle_start_range = 200.0f;
 }
+
+#if TARGET_PC
+// Co-op: Baby Stalfos uses one combat target owner; labels identify vanilla callsites for
+// diagnostics and must not create independent retention state.
+static bool coOpSelectTargetState(e_bs_class* i_this, const char* label, bool committed,
+                                  dusk::coop::EnemyTargetMode mode,
+                                  dusk::coop::selected_target_state::SelectedTargetState* state,
+                                  f32* distance_xz, s16* angle_y, s16* angle_x) {
+    fopAc_ac_c* actor = &i_this->enemy;
+    dusk::coop::EnemyTargetContext context;
+    context.observer = actor;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        actor, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance_xz != NULL) {
+        *distance_xz = target.distanceXZ;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    if (angle_x != NULL) {
+        *angle_x = fopAcM_searchActorAngleX(actor, targetState.actor);
+    }
+    return true;
+}
+
+static void coOpUpdateTargetMetrics(e_bs_class* i_this, const char* label, bool committed,
+                                    dusk::coop::EnemyTargetMode mode) {
+    f32 distance_xz = 0.0f;
+    s16 angle_y = 0;
+    s16 angle_x = 0;
+    if (coOpSelectTargetState(i_this, label, committed, mode, NULL, &distance_xz, &angle_y,
+                              &angle_x))
+    {
+        i_this->player_dist = distance_xz;
+        i_this->angleY_to_player = angle_y;
+        i_this->angleX_to_player = angle_x;
+    }
+}
+
+// Co-op: enemy attack contact asks which player actually defended the hit; this is not damage
+// ownership, nearest player, or the retained combat target.
+static bool coOpAttackHitGuarded(e_bs_class* i_this, dCcD_GObjInf* attackCollider,
+                                 const char* label) {
+    const dusk::coop::defender_owner::DefenderOwnerResult defender =
+        dusk::coop::defender_owner::resolveDefenderOwner(&i_this->enemy, attackCollider);
+    dusk::coop::defender_owner::recordDefenderOwnerContact(label, &i_this->enemy, defender);
+    return defender.found && defender.guarded;
+}
+#endif
 
 static void wepon_anm_init(e_bs_class* i_this, int i_anm) {
     i_this->weponModelMorf->setAnm((J3DAnmTransform*)dComIfG_getObjectRes("E_BS", i_anm), 2, 5.0f, 1.0f, 0.0f, -1.0f, NULL);
@@ -105,6 +178,17 @@ static int daE_BS_Draw(e_bs_class* i_this) {
 static BOOL player_way_check(e_bs_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: attack gating compares against the selected combat target's facing, not P1.
+    if (coOpSelectTargetState(i_this, "e_bs.way_check", false,
+                              dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL,
+                              NULL, NULL) &&
+        targetState.actor != NULL)
+    {
+        player = targetState.actor;
+    }
+#endif
 
     s16 angle_diff = actor->shape_angle.y - player->shape_angle.y;
     if (angle_diff < 0) {
@@ -146,6 +230,19 @@ static BOOL way_bg_check(e_bs_class* i_this, f32 i_dist, f32 i_height) {
 static int pl_check(e_bs_class* i_this, f32 i_range, s16 i_angle) {
     fopAc_ac_c* actor = &i_this->enemy;
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: recognition is an awareness gate, so it may immediately acquire a closer visible
+    // player instead of being blocked by stale chase stickiness.
+    if (coOpSelectTargetState(i_this, "e_bs.pl_check", false,
+                              dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState,
+                              &i_this->player_dist, &i_this->angleY_to_player,
+                              &i_this->angleX_to_player) &&
+        targetState.actor != NULL)
+    {
+        player = targetState.actor;
+    }
+#endif
     
     if (i_this->player_dist < i_range) {
         s16 angle_diff = actor->shape_angle.y - i_this->angleY_to_player;
@@ -403,7 +500,13 @@ static void e_bs_attack(e_bs_class* i_this) {
 
     if (i_this->is_wep_attack) {
         fopAc_ac_c* at_hit_actor = at_hit_check(i_this);
-        if (at_hit_actor != NULL && fopAcM_GetName(at_hit_actor) == fpcNm_ALINK_e && daPy_getPlayerActorClass()->checkPlayerGuard()) {
+        if (at_hit_actor != NULL && fopAcM_GetName(at_hit_actor) == fpcNm_ALINK_e &&
+#if TARGET_PC
+            coOpAttackHitGuarded(i_this, &i_this->atSph, "e_bs.attack_guard")
+#else
+            daPy_getPlayerActorClass()->checkPlayerGuard()
+#endif
+        ) {
             i_this->modelMorf->setPlaySpeed(0.0f);
             i_this->action = ACTION_FIGHT_RUN;
             i_this->mode = 0;
@@ -504,6 +607,17 @@ static void action(e_bs_class* i_this) {
     i_this->player_dist = fopAcM_searchPlayerDistanceXZ(actor);
     i_this->angleY_to_player = fopAcM_searchPlayerAngleY(actor);
     i_this->angleX_to_player = fopAcM_searchPlayerAngleX(actor);
+#if TARGET_PC
+    // Co-op: central per-frame target metrics feed Baby Stalfos' existing appear, chase, and
+    // attack gates without making each callsite maintain its own target.
+    if (i_this->action == ACTION_APPEAR || i_this->action == ACTION_NORMAL) {
+        coOpUpdateTargetMetrics(i_this, "e_bs.awareness", false,
+                                dusk::coop::EnemyTargetMode::ImmediateAcquire);
+    } else {
+        coOpUpdateTargetMetrics(i_this, "e_bs.combat", i_this->action == ACTION_ATTACK,
+                                dusk::coop::EnemyTargetMode::StickyCombat);
+    }
+#endif
     i_this->pl_recognize_dist = l_HIO.pl_recognize_dist;
 
     damage_check(i_this);
@@ -538,7 +652,20 @@ static void action(e_bs_class* i_this) {
         i_this->sound.setLinkSearch(false);
     }
 
-    if (fopAcM_otherBgCheck(player, actor)) {
+    fopAc_ac_c* bgCheckPlayer = player;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState bgState;
+    // Co-op: attention visibility follows the same selected target used by the current behavior.
+    if (coOpSelectTargetState(i_this, "e_bs.attention", false,
+                              dusk::coop::EnemyTargetMode::StickyCombat, &bgState, NULL, NULL,
+                              NULL) &&
+        bgState.actor != NULL)
+    {
+        bgCheckPlayer = bgState.actor;
+    }
+#endif
+
+    if (fopAcM_otherBgCheck(bgCheckPlayer, actor)) {
         attn_ON = FALSE;
     }
 
@@ -592,17 +719,38 @@ static void action(e_bs_class* i_this) {
     s16 spA = 0;
 
     if (i_this->field_0x6a8 > 0) {
+#if TARGET_PC
+        cXyz targetEyePos = player->eyePos;
+        dusk::coop::selected_target_state::SelectedTargetState lookState;
+        // Co-op: head tracking reads the selected target's eye position after combat identity is
+        // known; it should not keep staring at P1 while fighting P2.
+        if (coOpSelectTargetState(i_this, "e_bs.look", false,
+                                  dusk::coop::EnemyTargetMode::StickyCombat, &lookState, NULL,
+                                  NULL, NULL) &&
+            lookState.actor != NULL)
+        {
+            targetEyePos = lookState.actor->eyePos;
+        }
+#endif
         if (i_this->field_0x6a8 == 5) {
             if ((i_this->counter & 15) == 0 && cM_rndF(1.0f) < 0.3f) {
                 i_this->field_0x6b4 = cM_rndFX(2500.0f);
             }
         } else {
             if (i_this->field_0x6a8 == 1) {
+#if TARGET_PC
+                sp54 = targetEyePos - actor->current.pos;
+#else
                 sp54 = player->eyePos - actor->current.pos;
+#endif
             } else if (i_this->field_0x6a8 == 2) {
                 sp54 = i_this->field_0x6c8 - actor->current.pos;
             } else {
+#if TARGET_PC
+                sp54 = targetEyePos - actor->current.pos;
+#else
                 sp54 = player->eyePos - actor->current.pos;
+#endif
             }
             sp54.y += -(150.0f + TREG_F(2)) * l_HIO.base_size;
 
@@ -780,6 +928,10 @@ static int daE_BS_IsDelete(e_bs_class* i_this) {
 static int daE_BS_Delete(e_bs_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
     fopAcM_RegisterDeleteID(i_this, "E_BS");
+#if TARGET_PC
+    // Co-op: Baby Stalfos target sidecar state is actor-lifetime data and must not outlive delete.
+    dusk::coop::clearAllEnemyTargets(actor);
+#endif
     dComIfG_resDelete(&i_this->phase, "E_BS");
 
     if (i_this->HIOInit) {

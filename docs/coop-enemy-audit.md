@@ -14,10 +14,10 @@ actor patches -> enemy_targeting -> player_query
 - `enemy_targeting`: policy for choosing and retaining a target through reusable behavior scopes.
 - actor patches: narrow conversions at concrete enemy callsites, preserving vanilla behavior outside the scoped PC/co-op hook.
 
-The current Bokoblin and Tektite proofs now use `enemy_targeting` over `player_query`.
-Bokoblin remains the richer melee validation surface; Tektite is the first compact non-Bokoblin
-port. Choose the next enemy from the audit queue rather than widening either proof surface by
-default.
+The current Bokoblin, Tektite, and Stalhound proofs now use `enemy_targeting` over
+`player_query`. Bokoblin remains the richer melee validation surface; Tektite is the first
+compact non-Bokoblin port, and Stalhound is the first post-Tektite breadth proof. Choose the next
+enemy from the audit queue rather than widening any one proof surface by default.
 
 ## Target Policy Requirements
 
@@ -50,11 +50,13 @@ For each enemy family, classify and test these layers separately:
 
 ## Current Proofs
 
-| Actor | File | Profile | Current State | Notes |
-| --- | --- | --- | --- | --- |
-| Hanging Helmasaur | `src/d/actor/d_a_e_hm.cpp` | `E_HM` | raw-query proof | Only `e_hm.up_wait` wake/proximity is converted. Other combat and damage behavior remains P1/global. |
-| Basic Bokoblin | `src/d/actor/d_a_e_oc.cpp` | `E_OC` | policy-backed targeting, owner APIs validated | Search, head-search, find/chase, move-out, attack gates, and follow-through use `enemy_targeting`; sword-sound awareness uses `selected_target_state`; sword hit reactions use `damage_owner`; guard collision uses `defender_owner`. |
-| Tektite | `src/d/actor/d_a_e_tt.cpp` | `E_TT` | policy-backed targeting, owner APIs validated | Search/chase/attack/out-range use `enemy_targeting`; ordinary target facts and first-attack prediction use `selected_target_state`; cut reactions use `damage_owner`. Culling remains render/visibility work. |
+| Actor | Name | File | Profile | Current State | Notes |
+| --- | --- | --- | --- | --- | --- |
+| Hanging Helmasaur | Hanging Helmasaur | `src/d/actor/d_a_e_hm.cpp` | `E_HM` | raw-query proof | Only `e_hm.up_wait` wake/proximity is converted. Other combat and damage behavior remains P1/global. |
+| Basic Bokoblin | Bokoblin | `src/d/actor/d_a_e_oc.cpp` | `E_OC` | policy-backed targeting, owner APIs validated | Search, head-search, find/chase, move-out, attack gates, and follow-through use `enemy_targeting`; sword-sound awareness uses `selected_target_state`; sword hit reactions use `damage_owner`; guard collision uses `defender_owner`. |
+| Tektite | Tektite | `src/d/actor/d_a_e_tt.cpp` | `E_TT` | policy-backed targeting, owner APIs validated | Search/chase/attack/out-range use `enemy_targeting`; ordinary target facts and first-attack prediction use `selected_target_state`; cut reactions use `damage_owner`. Culling remains render/visibility work. |
+| Stalhound | Stalhound | `src/d/actor/d_a_e_sh.cpp` | `E_SH` | policy-backed targeting, first-pass validated | Central target metrics, movement speed, attack commitment, head tracking, and damage knockback angle route through the co-op API families. No P1 guard-state read was found; attack shield response currently uses the collision `ChkAtShieldHit()` flag. First surface test looked good. |
+| Baby Stalfos | Baby Stalfos | `src/d/actor/d_a_e_bs.cpp` | `E_BS` | policy-backed targeting, awaiting validation | Swarm-style ground melee proof. Recognition, chase/attack target metrics, attack-facing checks, head tracking, and attack guard response route through the co-op API families. |
 
 ## Reviewed Evidence
 
@@ -293,11 +295,12 @@ Bokoblin now has the reusable policy spine plus damage-owner, selected-target-st
 defender-owner proof surfaces. Tektite has been ported and validated as the first compact
 non-Bokoblin specimen.
 
-After Bokoblin and Tektite, choose one clean ground enemy to continue breadth testing:
+After Bokoblin, Tektite, and Stalhound, Baby Stalfos is the current swarm-style ground-enemy breadth test:
 
-1. **Non-flying ground melee backup (`E_KG`, `E_BS`, or `E_SH`)** - choose based on accessible test location. These have smaller lookup counts and should prove the policy is not Bokoblin- or Tektite-specific.
-2. **Target-state-sensitive enemy (`E_WW`, `E_GI`, `E_KK`, or `E_BA`)** - now reasonable because `selected_target_state` exists, but classify form/guard/damage reads before patching.
-3. **Avoid grab-heavy or setpiece enemies** until caught/grab-owner and event/camera policies exist.
+1. **Baby Stalfos (`E_BS`)** - current patch surface. This is a swarm-style ground melee proof and should test multiple enemies selecting targets at once.
+2. **Next non-flying ground melee backup (`E_KG`)** - choose based on accessible test location after Baby Stalfos validates.
+3. **Target-state-sensitive enemy (`E_WW`, `E_GI`, `E_KK`, or `E_BA`)** - now reasonable because `selected_target_state` exists, but classify form/guard/damage reads before patching.
+4. **Avoid grab-heavy or setpiece enemies** until caught/grab-owner and event/camera policies exist.
 
 This sequence keeps the manual work small: build one policy API, convert one already validated actor, then port the same shape to one compact enemy before touching target-state-sensitive families.
 
@@ -316,7 +319,7 @@ Use this queue before writing more enemy behavior code:
    - grab/caught-state,
    - miniboss/boss/story/demo.
 3. ~~For each likely regular enemy, inspect only enough code to mark search/chase/attack/follow-through/damage risk. Do not patch during this pass.~~ Priority 1 regular-enemy callsite classification is complete enough for the first policy wave. Continue classification opportunistically for candidates outside that wave.
-4. ~~Pick the first policy-backed wave from the best understood regular enemies, not necessarily from the highest lookup counts.~~ First wave chosen and validated: policy-backed `E_OC`, then `E_TT`.
+4. ~~Pick the first policy-backed wave from the best understood regular enemies, not necessarily from the highest lookup counts.~~ First wave chosen and validated: policy-backed `E_OC`, then `E_TT`. `E_SH` passed first surface testing; `E_BS` is the current breadth candidate.
 5. Keep target choice in `enemy_targeting`, selected target facts in `selected_target_state`, hit ownership in `damage_owner`, enemy-attack contact in `defender_owner`, and diagnostics quiet while selecting the next actor.
 
 ## Full Machine Inventory

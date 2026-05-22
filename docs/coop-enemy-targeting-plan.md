@@ -201,7 +201,11 @@ Bokoblin is also the first validation surface for the foundation rewrite:
 - attack commitment freezes the active combat target.
 - wake/search checks use immediate acquisition on the same combat owner so stale retention cannot suppress a closer eligible player.
 
-Tektite (`src/d/actor/d_a_e_tt.cpp`, `E_TT`) is the first non-Bokoblin proof because its search/chase/attack callsites are compact and mostly isolated. Its first pass uses the same actor-local helper pattern for `checkPlayerSearch`, `executeChase`, `executeAttack`, and `executeOutRange`. Damage/cut-type ownership is split to `damage_owner`; selected target facts such as facing, position, speed, and horse state are routed through `selected_target_state` in both ordinary combat paths and the rarer first-attack prediction path; and culling belongs to render/visibility or split-screen culling work. Pick one accessible compact ground enemy after Tektite validation (`E_KG`, `E_BS`, or `E_SH`) before tackling broader target-state-sensitive families such as White Wolfos.
+Tektite (`src/d/actor/d_a_e_tt.cpp`, `E_TT`) is the first non-Bokoblin proof because its search/chase/attack callsites are compact and mostly isolated. Its first pass uses the same actor-local helper pattern for `checkPlayerSearch`, `executeChase`, `executeAttack`, and `executeOutRange`. Damage/cut-type ownership is split to `damage_owner`; selected target facts such as facing, position, speed, and horse state are routed through `selected_target_state` in both ordinary combat paths and the rarer first-attack prediction path; and culling belongs to render/visibility or split-screen culling work.
+
+Stalhound (`src/d/actor/d_a_e_sh.cpp`, `E_SH`) is the first breadth proof after Tektite. Its central action metrics, movement speed reads, attack commitment, head tracking, and damage knockback angle use the same API families without introducing a new owner model.
+
+Baby Stalfos (`src/d/actor/d_a_e_bs.cpp`, `E_BS`) is the current swarm-style ground melee proof. Its recognition, chase/attack target metrics, selected-target facing checks, head tracking, and attack guard response use the same API families. Validate this before moving to larger target-state-sensitive enemies such as White Wolfos.
 
 ## Future Policy Knobs
 
@@ -258,3 +262,5 @@ This prevents designing the policy exclusively around Bokoblin while still keepi
 - [x] Add `selected_target_state` V1 and route Tektite ordinary combat target facts, Tektite first-attack prediction, and Bokoblin sword-sound awareness through it.
 - [x] Add `defender_owner` V1 and route Bokoblin guard collision through the actual hit defender.
 - [x] Validate Tektite in game and inspect `enemy.targeting` labels `e_tt.search`, `e_tt.chase`, `e_tt.attack`, and `e_tt.out_range`.
+- [x] First-pass validate Stalhound `E_SH` as the next compact ground-melee breadth proof.
+- [ ] Validate Baby Stalfos `E_BS` as the first swarm-style ground-melee proof.

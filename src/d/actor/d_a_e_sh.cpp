@@ -10,6 +10,12 @@
 #include "f_op/f_op_actor_enemy.h"
 #include "f_op/f_op_camera_mng.h"
 
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 class daE_SH_HIO_c : public JORReflexible {
 public:
     daE_SH_HIO_c();
@@ -187,7 +193,20 @@ static void damage_check(e_sh_class* i_this) {
                     }
                 }
 
+#if TARGET_PC
+                // Co-op: damage knockback should point away from the player who caused the hit,
+                // not whichever player the enemy was already targeting.
+                dusk::coop::damage_owner::DamageOwnerResult damage_owner =
+                    dusk::coop::damage_owner::resolveDamageOwner(actor, i_this->mAtInfo.mpCollider);
+                if (damage_owner.localPlayerActor != NULL) {
+                    i_this->field_0x6a8 =
+                        fopAcM_searchActorAngleY(actor, damage_owner.localPlayerActor);
+                } else {
+                    i_this->field_0x6a8 = fopAcM_searchPlayerAngleY(actor);
+                }
+#else
                 i_this->field_0x6a8 = fopAcM_searchPlayerAngleY(actor);
+#endif
 
                 if (actor->health > 1) {
                     return;
@@ -205,6 +224,57 @@ static void damage_check(e_sh_class* i_this) {
 static bool hio_set;
 
 static daE_SH_HIO_c l_HIO;
+
+#if TARGET_PC
+// Co-op: Stalhound uses one Dusk-owned combat target for wake/move/attack decisions; labels are
+// diagnostic callsite names, not independent target owners.
+static bool coOpSelectTargetState(e_sh_class* i_this, const char* label, bool committed,
+                                  dusk::coop::EnemyTargetMode mode,
+                                  dusk::coop::selected_target_state::SelectedTargetState* state,
+                                  f32* distance, s16* angle_y) {
+    fopAc_ac_c* actor = (fopAc_ac_c*)&i_this->enemy;
+    dusk::coop::EnemyTargetContext context;
+    context.observer = actor;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        actor, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+
+    return true;
+}
+
+static void coOpUpdateTargetMetrics(e_sh_class* i_this, const char* label, bool committed,
+                                    dusk::coop::EnemyTargetMode mode) {
+    f32 distance = 0.0f;
+    s16 angle_y = 0;
+    if (coOpSelectTargetState(i_this, label, committed, mode, NULL, &distance, &angle_y)) {
+        i_this->field_0x68c = angle_y;
+        i_this->field_0x690 = i_this->field_0x694 * distance;
+    }
+}
+#endif
 
 static void e_sh_stop(e_sh_class* i_this) {
     static u16 ap_name[3] = {
@@ -273,6 +343,15 @@ static void e_sh_move(e_sh_class* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)&i_this->enemy;
 
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    const bool targetStateFound = coOpSelectTargetState(
+        i_this, "e_sh.move", false, dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL,
+        NULL);
+    const f32 targetSpeedF = targetStateFound ? targetState.speedF : player->speedF;
+#else
+    const f32 targetSpeedF = player->speedF;
+#endif
 
     cXyz vecToHome;
     dScnKy_env_light_c* envLight = dKy_getEnvlight();
@@ -338,7 +417,7 @@ static void e_sh_move(e_sh_class* i_this) {
             {
                 i_this->field_0x678 = 5;
             } else {
-                unkFloat1 = player->speedF - 10.0f + TREG_F(11);
+                unkFloat1 = targetSpeedF - 10.0f + TREG_F(11);
                 if (unkFloat1 < 0.0f) {
                     unkFloat1 = 0.0f;
                 }
@@ -437,7 +516,7 @@ lbl_4a8:
                 i_this->field_0x688 = (int)i_this->field_0x68c;
             }
         } else {
-            f32 targetSpeed = player->speedF + 5.0f + TREG_F(11);
+            f32 targetSpeed = targetSpeedF + 5.0f + TREG_F(11);
             cLib_addCalc2(&actor->speedF, targetSpeed, 1.0f,
                           l_HIO.mWalkSpeed * 0.2f);
 
@@ -521,7 +600,11 @@ lbl_4a8:
 static void e_sh_attack(e_sh_class* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)&i_this->enemy;
 
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#if TARGET_PC
+    // Co-op: attack startup and follow-through stay committed to the shared combat target.
+    coOpUpdateTargetMetrics(i_this, "e_sh.attack", true,
+                            dusk::coop::EnemyTargetMode::StickyCombat);
+#endif
     cXyz unusedXyz1;
 
     s16 unkShort1 = 0;
@@ -708,6 +791,17 @@ static void action(e_sh_class* i_this) {
 
     i_this->field_0x68c = fopAcM_searchPlayerAngleY(enemy);
     i_this->field_0x690 = i_this->field_0x694 * fopAcM_searchPlayerDistance(enemy);
+#if TARGET_PC
+    // Co-op: wake/appear can immediately acquire a visible player, while active movement keeps
+    // Stalhound on its retained combat target and attack freezes that same target.
+    if (i_this->field_0x676 == 0 || i_this->field_0x676 == 1) {
+        coOpUpdateTargetMetrics(i_this, "e_sh.awareness", false,
+                                dusk::coop::EnemyTargetMode::ImmediateAcquire);
+    } else {
+        coOpUpdateTargetMetrics(i_this, "e_sh.combat", i_this->field_0x676 == 3,
+                                dusk::coop::EnemyTargetMode::StickyCombat);
+    }
+#endif
     i_this->field_0xcea = 1;
     i_this->field_0xcec = 0;
 
@@ -794,9 +888,25 @@ static void action(e_sh_class* i_this) {
 
     if (i_this->field_0x6aa != 0) {
         fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#if TARGET_PC
+        cXyz targetEyePos = player->eyePos;
+        dusk::coop::selected_target_state::SelectedTargetState lookState;
+        // Co-op: head tracking is a selected-target state read once combat identity is known.
+        if (coOpSelectTargetState(i_this, "e_sh.look", false,
+                                  dusk::coop::EnemyTargetMode::StickyCombat, &lookState, NULL,
+                                  NULL) &&
+            lookState.actor != NULL)
+        {
+            targetEyePos = lookState.actor->eyePos;
+        }
+#endif
 
         if ((i_this->field_0x674 & 0x7) == 0) {
+#if TARGET_PC
+            baseVec = targetEyePos - enemy->current.pos;
+#else
             baseVec = player->eyePos - enemy->current.pos;
+#endif
             baseVec.y += TREG_F(2) + -60.0f;
             i_this->field_0x6b0 = cM_atan2s(baseVec.x, baseVec.z) - enemy->shape_angle.y;
             i_this->field_0x6b2 =
@@ -1115,6 +1225,11 @@ static int daE_SH_IsDelete(e_sh_class* i_this) {
 static int daE_SH_Delete(e_sh_class* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)&i_this->enemy;
     fopAcM_RegisterDeleteID(i_this, "E_SH");
+
+#if TARGET_PC
+    // Co-op: Stalhound target sidecar state is actor-lifetime data and must not outlive deletion.
+    dusk::coop::clearAllEnemyTargets(actor);
+#endif
 
     dComIfG_resDelete(&i_this->mPhase, "E_sh");
 
