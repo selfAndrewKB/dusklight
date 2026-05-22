@@ -114,7 +114,8 @@ Retention is expressed as simulation seconds, not frame counts. V1 uses `retainS
 - `dusk::coop::selected_target_state` for facts about the chosen target, such as form, speed, facing, guard, horse, swim, or damage-wait state;
 - `dusk::coop::damage_owner` for facts about the player/weapon that actually struck an enemy, such as cut type and hit reaction ownership. Enemy targeting must not answer cut type/count, weapon owner, boomerang/head-jump hit direction, or hit-reaction ownership.
 - `dusk::coop::defender_owner` for enemy-attack contact facts, such as which player blocked or guarded the enemy's swing. This must not use damage-owner, nearest-player, selected-target, or P1 global state.
-- caught/grab-owner helpers for a player currently captured, carried, eaten, or otherwise retained by an enemy;
+- `dusk::coop::caught_stun_owner` for retained stun effects such as Gibdo scream, where the enemy must keep using the same owner slot for release input and camera ownership until the effect ends, while optional affected slots can share the same effect timer;
+- future caught/grab-owner helpers for a player currently captured, carried, eaten, hung from, or otherwise physically retained by an enemy;
 - broader collision-owner helpers for contact-driven actors with no explicit search/chase targeting surface;
 - render/visibility or split-screen culling helpers for distance checks that only gate model calculation or presentation work.
 
@@ -205,7 +206,13 @@ Tektite (`src/d/actor/d_a_e_tt.cpp`, `E_TT`) is the first non-Bokoblin proof bec
 
 Stalhound (`src/d/actor/d_a_e_sh.cpp`, `E_SH`) is the first breadth proof after Tektite. Its central action metrics, movement speed reads, attack commitment, head tracking, and damage knockback angle use the same API families without introducing a new owner model.
 
-Baby Stalfos (`src/d/actor/d_a_e_bs.cpp`, `E_BS`) is the current swarm-style ground melee proof. Its recognition, chase/attack target metrics, selected-target facing checks, head tracking, and attack guard response use the same API families. Validate this before moving to larger target-state-sensitive enemies such as White Wolfos.
+Baby Stalfos (`src/d/actor/d_a_e_bs.cpp`, `E_BS`) is the swarm-style ground melee proof. Its recognition, chase/attack target metrics, selected-target facing checks, head tracking, and attack guard response use the same API families.
+
+Gibdo (`src/d/actor/d_a_e_gi.cpp`, `E_GI`) is the first target-state-sensitive humanoid/undead proof after the compact melee and swarm passes. Its sleep/wait awareness uses immediate acquisition, while chase/damage recovery and head tracking use sticky combat ownership. The close-range attack/scream gate uses immediate acquisition on the same combat scope so a stale chase target outside attack range cannot suppress a nearer in-range player. Ordinary sword cut reactions use `damage_owner`. Scream stun uses `caught_stun_owner` so the retained slot owns release input and best-effort camera lock, while nearby affected slots receive the same scream animation for the same vanilla timer. The affected-player radius is intentionally wider than vanilla detection range during co-op tests so one vanilla-owned scream can cover nearby partners without opening simultaneous scream ownership. Wolf-bite ownership remains deferred caught/grab work because that path physically retains a player and should not be faked with targeting or damage-owner guesses.
+
+The current Gibdo pass has a focused `gibdo.state` probe because in-game testing showed a real P2-first failure where Gibdos can become active but inert without an actual scream resolving. The probe records native wake/chase/attack gates, current BCK, animation progress, `field_0x684` attack delay, `m_cry_gi` state, selected slot, range/angle/LOS checks, and loop-suspect state. Treat this as a measurement surface for finding the broken interaction between Gibdo's native choreography and the co-op APIs, not as an explanation that the behavior is vanilla.
+
+Simultaneous Gibdo screams are deferred. The logs show vanilla `m_cry_gi` is both scream ownership and group attack choreography: one Gibdo can own the scream while another waits, then follows up once the owner reaches attack start. A future retained-effect policy could allow one active scream per player slot, but V1 keeps the single vanilla owner and broadens the affected-player area instead.
 
 ## Future Policy Knobs
 
@@ -263,4 +270,5 @@ This prevents designing the policy exclusively around Bokoblin while still keepi
 - [x] Add `defender_owner` V1 and route Bokoblin guard collision through the actual hit defender.
 - [x] Validate Tektite in game and inspect `enemy.targeting` labels `e_tt.search`, `e_tt.chase`, `e_tt.attack`, and `e_tt.out_range`.
 - [x] First-pass validate Stalhound `E_SH` as the next compact ground-melee breadth proof.
-- [ ] Validate Baby Stalfos `E_BS` as the first swarm-style ground-melee proof.
+- [x] Validate Baby Stalfos `E_BS` as the first swarm-style ground-melee proof.
+- [x] Validate Gibdo `E_GI` as the first target-state-sensitive humanoid/undead proof, with wolf-bite hang ownership deferred to a later caught/grab-owner proof enemy.

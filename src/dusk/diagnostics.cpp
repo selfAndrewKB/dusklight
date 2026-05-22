@@ -7,9 +7,11 @@
 #include "dusk/coop/alink_probes.h"
 #include "dusk/coop/bokoblin_attack_probe.h"
 #include "dusk/coop/camera.h"
+#include "dusk/coop/caught_stun_owner.h"
 #include "dusk/coop/damage_owner.h"
 #include "dusk/coop/defender_owner.h"
 #include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/gibdo_state_probe.h"
 #include "dusk/coop/input.h"
 #include "dusk/coop/player_query.h"
 #include "dusk/coop/player_slots.h"
@@ -667,6 +669,34 @@ void emitDefenderOwnerEvents(const Provider& provider, const json& data) {
     }
 }
 
+void emitCaughtStunOwnerEvents(const Provider& provider, const json& data) {
+    if (!data.contains("decisions") || !data["decisions"].is_array()) {
+        return;
+    }
+
+    for (const json& decision : data["decisions"]) {
+        const u64 eventId = decision.value("event_id", 0ull);
+        if (eventId == 0) {
+            continue;
+        }
+
+        const json eventKey = {
+            {"event_id", eventId},
+        };
+        const std::string stateKey =
+            fmt::format(FMT_STRING("caught_stun.owner:{}"), static_cast<unsigned long long>(eventId));
+        if (provider.emitOnChange && !shouldEmitProviderEvent(stateKey, eventKey)) {
+            continue;
+        }
+
+        const json eventData = {
+            {"schema_version", data.value("schema_version", 1)},
+            {"decision", decision},
+        };
+        emitProviderEvent(provider, "stun", eventData);
+    }
+}
+
 void emitBokoblinAttackProbeEvents(const Provider& provider, const json& data) {
     if (!data.contains("probes") || !data["probes"].is_array()) {
         return;
@@ -683,6 +713,35 @@ void emitBokoblinAttackProbeEvents(const Provider& provider, const json& data) {
         };
         const std::string stateKey = fmt::format(
             FMT_STRING("bokoblin.attack:{}"), static_cast<unsigned long long>(eventId));
+        if (provider.emitOnChange && !shouldEmitProviderEvent(stateKey, eventKey)) {
+            continue;
+        }
+
+        const json eventData = {
+            {"schema_version", data.value("schema_version", 1)},
+            {"probe", probe},
+        };
+        emitProviderEvent(provider, probe.value("loop_suspect", false) ? "loop_suspect" : "state",
+                          eventData);
+    }
+}
+
+void emitGibdoStateProbeEvents(const Provider& provider, const json& data) {
+    if (!data.contains("probes") || !data["probes"].is_array()) {
+        return;
+    }
+
+    for (const json& probe : data["probes"]) {
+        const u64 eventId = probe.value("event_id", 0ull);
+        if (eventId == 0) {
+            continue;
+        }
+
+        const json eventKey = {
+            {"event_id", eventId},
+        };
+        const std::string stateKey = fmt::format(
+            FMT_STRING("gibdo.state:{}"), static_cast<unsigned long long>(eventId));
         if (provider.emitOnChange && !shouldEmitProviderEvent(stateKey, eventKey)) {
             continue;
         }
@@ -1573,6 +1632,71 @@ json collectDefenderOwner() {
     };
 }
 
+json caughtStunActorSummary(const coop::caught_stun_owner::CaughtStunActorDebug& actor) {
+    json data = {
+        {"actor_uid", nullptr},
+        {"ptr", ptrString(actor.ptr)},
+        {"stable_actor_uid_deferred", true},
+        {"available", actor.available},
+    };
+    if (!actor.available) {
+        return data;
+    }
+
+    data["profile"] = actor.profile;
+    data["name"] = actor.name;
+    data["id"] = actor.id;
+    data["room"] = actor.room;
+    data["argument"] = actor.argument;
+    data["pos"] = {actor.pos[0], actor.pos[1], actor.pos[2]};
+    data["angle_y"] = static_cast<int>(actor.angleY);
+    return data;
+}
+
+json caughtStunOwnerDecisionSummary(
+    const coop::caught_stun_owner::CaughtStunOwnerDecisionDebug& decision) {
+    const coop::caught_stun_owner::CaughtStunOwnerState& state = decision.state;
+    json affectedSlots = json::array();
+    for (int i = 0; i < state.affectedCount; i++) {
+        affectedSlots.push_back({
+            {"slot", state.affectedSlots[i] != coop::PlayerSlot::Invalid
+                         ? static_cast<int>(state.affectedSlots[i])
+                         : -1},
+            {"local_actor", actorSummary(state.affectedLocalActors[i])},
+        });
+    }
+
+    return {
+        {"event_id", static_cast<unsigned long long>(decision.eventId)},
+        {"sim_frame", static_cast<unsigned int>(decision.simFrame)},
+        {"label", decision.label},
+        {"enemy", caughtStunActorSummary(state.enemyDebug)},
+        {"player", caughtStunActorSummary(state.playerDebug)},
+        {"owner_slot", state.slot != coop::PlayerSlot::Invalid ? static_cast<int>(state.slot) : -1},
+        {"affected_count", state.affectedCount},
+        {"affected_slots", affectedSlots},
+        {"found", state.found},
+        {"active", state.active},
+        {"reason", coop::caught_stun_owner::caughtStunOwnerReasonName(state.reason)},
+        {"stun_timer", state.stunTimer},
+        {"cry_timer", state.cryTimer},
+    };
+}
+
+json collectCaughtStunOwner() {
+    const coop::caught_stun_owner::CaughtStunOwnerDebugState& state =
+        coop::caught_stun_owner::getCaughtStunOwnerDebugState();
+    json decisions = json::array();
+    for (int i = 0; i < state.decisionCount; i++) {
+        decisions.push_back(caughtStunOwnerDecisionSummary(state.decisions[i]));
+    }
+
+    return {
+        {"schema_version", 1},
+        {"decisions", decisions},
+    };
+}
+
 json bokoblinAttackProbeSummary(
     const coop::bokoblin_attack_probe::BokoblinAttackProbe& probe) {
     return {
@@ -1627,6 +1751,59 @@ json collectBokoblinAttackProbe() {
             continue;
         }
         probes.push_back(bokoblinAttackProbeSummary(state.probes[i]));
+    }
+
+    return {
+        {"schema_version", 1},
+        {"probes", probes},
+    };
+}
+
+json gibdoStateProbeSummary(const coop::gibdo_state_probe::GibdoStateProbe& probe) {
+    return {
+        {"event_id", static_cast<unsigned long long>(probe.eventId)},
+        {"sim_frame", static_cast<unsigned int>(probe.simFrame)},
+        {"actor", ptrString(probe.actor)},
+        {"actor_id", probe.actorId},
+        {"label", probe.label != nullptr ? probe.label : ""},
+        {"action", probe.action},
+        {"move_mode", probe.moveMode},
+        {"bck", probe.bck},
+        {"anim_frame", probe.animFrame},
+        {"play_speed", probe.playSpeed},
+        {"speed_f", probe.speedF},
+        {"attack_delay", probe.attackDelay},
+        {"stun_timer", probe.stunTimer},
+        {"cry_timer", probe.cryTimer},
+        {"target_slot", probe.targetSlot != coop::PlayerSlot::Invalid
+                            ? static_cast<int>(probe.targetSlot)
+                            : -1},
+        {"target_found", probe.targetFound},
+        {"target_distance", probe.targetDistance},
+        {"target_angle_y", static_cast<int>(probe.targetAngleY)},
+        {"range_gate", probe.rangeGate},
+        {"angle_gate", probe.angleGate},
+        {"los_clear", probe.losClear},
+        {"delay_gate", probe.delayGate},
+        {"attack_gate", probe.attackGate},
+        {"attack_start", probe.attackStart},
+        {"scream_owner_active", probe.screamOwnerActive},
+        {"scream_owner_attack_started", probe.screamOwnerAttackStarted},
+        {"cry_owner", ptrString(probe.cryOwner)},
+        {"state_run_frames", static_cast<unsigned int>(probe.stateRunFrames)},
+        {"loop_suspect", probe.loopSuspect},
+    };
+}
+
+json collectGibdoStateProbe() {
+    const coop::gibdo_state_probe::GibdoStateProbeDebugState& state =
+        coop::gibdo_state_probe::getGibdoStateProbeDebugState();
+    json probes = json::array();
+    for (int i = 0; i < state.probeCount; i++) {
+        if (state.probes[i].eventId == 0) {
+            continue;
+        }
+        probes.push_back(gibdoStateProbeSummary(state.probes[i]));
     }
 
     return {
@@ -1765,7 +1942,9 @@ Provider s_providers[] = {
     {"selected_target.state", 1, "cheap", 5, true, 240, 8192, collectSelectedTargetState},
     {"damage.owner", 1, "cheap", 1, true, 600, 12288, collectDamageOwner},
     {"defender.owner", 1, "cheap", 1, true, 600, 12288, collectDefenderOwner},
+    {"caught_stun.owner", 1, "cheap", 1, true, 240, 8192, collectCaughtStunOwner},
     {"bokoblin.attack", 1, "cheap", 1, true, 240, 8192, collectBokoblinAttackProbe},
+    {"gibdo.state", 1, "cheap", 1, true, 240, 8192, collectGibdoStateProbe},
     {"coop.probes", 1, "cheap", 30, true, 20, 4096, collectCoopProbes},
     {"alink.secondary", 4, "cheap", 1, true, 120, 8192, collectAlinkSecondary},
 };
@@ -1927,8 +2106,16 @@ void tick(u32 frame) {
             emitDefenderOwnerEvents(provider, data);
             continue;
         }
+        if (std::string(provider.name) == "caught_stun.owner") {
+            emitCaughtStunOwnerEvents(provider, data);
+            continue;
+        }
         if (std::string(provider.name) == "bokoblin.attack") {
             emitBokoblinAttackProbeEvents(provider, data);
+            continue;
+        }
+        if (std::string(provider.name) == "gibdo.state") {
+            emitGibdoStateProbeEvents(provider, data);
             continue;
         }
 

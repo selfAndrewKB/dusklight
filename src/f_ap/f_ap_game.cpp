@@ -29,9 +29,11 @@
 #if TARGET_PC
 #include "tracy/Tracy.hpp"
 #include "dusk/coop/bokoblin_attack_probe.h"
+#include "dusk/coop/caught_stun_owner.h"
 #include "dusk/coop/damage_owner.h"
 #include "dusk/coop/defender_owner.h"
 #include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/gibdo_state_probe.h"
 #include <dusk/gamepad_color.h>
 #include <dusk/autosave.h>
 #endif
@@ -841,8 +843,12 @@ void fapGm_Execute() {
     dusk::coop::damage_owner::advanceDamageOwnerFrame(sExecCount);
     // Co-op: defender/contact overlays use the same simulation clock as enemy combat decisions.
     dusk::coop::defender_owner::advanceDefenderOwnerFrame(sExecCount);
+    // Co-op: caught/stun ownership also expires and emits diagnostics by simulation frame.
+    dusk::coop::caught_stun_owner::advanceCaughtStunOwnerFrame(sExecCount);
     // Co-op: Bokoblin attack-loop diagnostics compare attack-state progress by simulation frame.
     dusk::coop::bokoblin_attack_probe::advanceBokoblinAttackProbeFrame(sExecCount);
+    // Co-op: Gibdo diagnostics track native wake/chase/scream gates by simulation frame.
+    dusk::coop::gibdo_state_probe::advanceGibdoStateProbeFrame(sExecCount);
 #endif
 
 #ifdef TARGET_PC

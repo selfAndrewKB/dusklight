@@ -7,6 +7,8 @@
 #include "d/d_cc_uty.h"
 #include "f_op/f_op_actor_mng.h"
 
+class daPy_py_c;
+
 /**
  * @ingroup actors-enemies
  * @class daE_GI_c
@@ -24,7 +26,7 @@ public:
     void setActionMode(int, int);
     void damage_check();
     void setWeaponAtBit(u8);
-    bool setCryStop();
+    bool setCryStop(daPy_py_c*);
     void setAttackEffect();
     void setDragSwordEffect();
     void setDeathSmokeEffect();

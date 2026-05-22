@@ -1417,10 +1417,12 @@ set(DUSK_FILES
         include/dusk/coop/alink_probes.h
         include/dusk/coop/bokoblin_attack_probe.h
         include/dusk/coop/camera.h
+        include/dusk/coop/caught_stun_owner.h
         include/dusk/coop/damage_owner.h
         include/dusk/coop/defender_owner.h
         include/dusk/coop/debug_overlay.h
         include/dusk/coop/enemy_targeting.h
+        include/dusk/coop/gibdo_state_probe.h
         include/dusk/coop/input.h
         include/dusk/coop/player_query.h
         include/dusk/coop/player_slots.h
@@ -1431,10 +1433,12 @@ set(DUSK_FILES
         src/dusk/coop/alink_probes.cpp
         src/dusk/coop/bokoblin_attack_probe.cpp
         src/dusk/coop/camera.cpp
+        src/dusk/coop/caught_stun_owner.cpp
         src/dusk/coop/damage_owner.cpp
         src/dusk/coop/defender_owner.cpp
         src/dusk/coop/debug_overlay.cpp
         src/dusk/coop/enemy_targeting.cpp
+        src/dusk/coop/gibdo_state_probe.cpp
         src/dusk/coop/player_query.cpp
         src/dusk/coop/player_slots.cpp
         src/dusk/coop/selected_target_state.cpp

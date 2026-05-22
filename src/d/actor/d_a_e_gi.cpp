@@ -10,6 +10,16 @@
 #include "f_op/f_op_actor_enemy.h"
 #include "f_op/f_op_camera_mng.h"
 
+#if TARGET_PC
+#include "dusk/coop/camera.h"
+#include "dusk/coop/caught_stun_owner.h"
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/gibdo_state_probe.h"
+#include "dusk/coop/input.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 class daE_GI_HIO_c : public JORReflexible {
 public:
     daE_GI_HIO_c();
@@ -145,6 +155,11 @@ static int daE_GI_Draw(daE_GI_c* a_this) {
 }
 
 void daE_GI_c::setBck(int i_anm, u8 i_mode, f32 i_morf, f32 i_speed) {
+#if TARGET_PC
+    // Co-op: Gibdo state diagnostics need the current BCK id to distinguish idle, scream,
+    // chase, and sword-swing wait states without changing the decompiled animation wrapper.
+    dusk::coop::gibdo_state_probe::noteGibdoBck(this, i_anm);
+#endif
     mpModelMorf->setAnm((J3DAnmTransform*)dComIfG_getObjectRes("E_GI", i_anm), i_mode, i_morf, i_speed, 0.0f, -1.0f);
 }
 
@@ -159,6 +174,88 @@ void daE_GI_c::setActionMode(int i_actionMode, int i_moveMode) {
 static u8 hio_set;
 
 static daE_GI_HIO_c l_HIO;
+
+#if TARGET_PC
+// Co-op: Gibdo's combat state repeatedly asks for player distance/angle/visibility. Keep those
+// reads on one Dusk-owned combat target while leaving scream/wolf-bite stun ownership separate.
+static bool coOpSelectTargetState(daE_GI_c* i_this, const char* label, bool committed,
+                                  dusk::coop::EnemyTargetMode mode,
+                                  dusk::coop::selected_target_state::SelectedTargetState* state,
+                                  f32* distance, s16* angle_y, s16* angle_x) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    if (angle_x != NULL) {
+        *angle_x = fopAcM_searchActorAngleX(i_this, targetState.actor);
+    }
+    return true;
+}
+
+static dCamera_c* coOpCryCameraForSlot(dusk::coop::PlayerSlot slot) {
+    if (slot == dusk::coop::PlayerSlot::Primary) {
+        return dCam_getBody();
+    }
+
+    if (slot == dusk::coop::PlayerSlot::Secondary && dusk::coop::camera::isSecondaryCameraReady()) {
+        camera_process_class* camera = dComIfGp_getCamera(dusk::coop::camera::kSecondaryCameraId);
+        return camera != NULL ? &camera->mCamera : NULL;
+    }
+
+    return NULL;
+}
+
+static void coOpForceCryLockOn(fopAc_ac_c* enemy, dusk::coop::PlayerSlot slot) {
+    // Co-op: P2 scream stun may use camera 1, but must not hijack P1's camera if camera 1 is absent.
+    dCamera_c* camera = coOpCryCameraForSlot(slot);
+    if (camera != NULL) {
+        camera->ForceLockOn(enemy);
+    }
+}
+
+static void coOpForceCryLockOff(fopAc_ac_c* enemy) {
+    for (int i = 0; i < 2; i++) {
+        dCamera_c* camera = coOpCryCameraForSlot(static_cast<dusk::coop::PlayerSlot>(i));
+        if (camera != NULL) {
+            camera->ForceLockOff(enemy);
+        }
+    }
+}
+
+static void coOpClearEnemyTargets(daE_GI_c* i_this) {
+    dusk::coop::clearAllEnemyTargets(i_this);
+}
+
+static f32 coOpScreamAffectedRange() {
+    // Co-op: keep vanilla's single scream owner, but let the scream sound affect nearby partners
+    // across a wider co-op fight space so we do not need simultaneous Gibdo scream ownership yet.
+    return l_HIO.player_detect_range * 1.5f;
+}
+#endif
 
 void daE_GI_c::damage_check() {
     daPy_py_c* player = daPy_getPlayerActorClass();
@@ -183,6 +280,20 @@ void daE_GI_c::damage_check() {
             }
 
             cc_at_check(this, &mAtInfo);
+
+#if TARGET_PC
+            // Co-op: ordinary hit reactions follow the player who struck Gibdo; wolf-bite
+            // ownership below remains a caught/stun-owner problem and stays on vanilla P1.
+            dusk::coop::damage_owner::DamageOwnerResult damage_owner =
+                dusk::coop::damage_owner::resolveDamageOwner(this, mAtInfo.mpCollider);
+            daPy_py_c* hit_player =
+                dusk::coop::damage_owner::resolveDamageOwnerPlayer(damage_owner);
+            if (hit_player == NULL) {
+                hit_player = player;
+            }
+#else
+            daPy_py_c* hit_player = player;
+#endif
 
             if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_WOLF_ATTACK | AT_TYPE_WOLF_CUT_TURN | AT_TYPE_10000000 | AT_TYPE_MIDNA_LOCK)) {
                 mInvulnerabilityTimer = 20;
@@ -227,7 +338,7 @@ void daE_GI_c::damage_check() {
                 if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_NORMAL_SWORD)) {
                     if (cM_rnd() <= 0.15f) {
                         try_cry_stop = TRUE;
-                    } else if (daPy_getPlayerActorClass()->getCutCount() >= 4 || ((dCcD_GObjInf*)mAtInfo.mpCollider)->GetAtSpl() == 1) {
+                    } else if (hit_player->getCutCount() >= 4 || ((dCcD_GObjInf*)mAtInfo.mpCollider)->GetAtSpl() == 1) {
                         if (cM_rnd() <= 0.25f) {
                             try_cry_stop = TRUE;
                         }
@@ -239,7 +350,7 @@ void daE_GI_c::damage_check() {
                 switch (field_0x6a0) {
                 case 0:
                     if (try_cry_stop) {
-                        if (setCryStop()) {
+                        if (setCryStop(hit_player)) {
                             setActionMode(ACTION_CHASE_e, 2);
                             return;
                         }
@@ -248,7 +359,7 @@ void daE_GI_c::damage_check() {
                         break;
                     }
                     
-                    if (daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_JUMP && daPy_getPlayerActorClass()->checkCutJumpCancelTurn()) {
+                    if (hit_player->getCutType() == daPy_py_c::CUT_TYPE_JUMP && hit_player->checkCutJumpCancelTurn()) {
                         mInvulnerabilityTimer = 3;
                     }
 
@@ -283,9 +394,23 @@ void daE_GI_c::setWeaponAtBit(u8 i_onBit) {
 
 static daE_GI_c* m_cry_gi;
 
-bool daE_GI_c::setCryStop() {
+bool daE_GI_c::setCryStop(daPy_py_c* player) {
     if (m_cry_gi == NULL) {
-        if (!daPy_getPlayerActorClass()->checkNowWolf()) {
+        if (player == NULL) {
+            player = daPy_getPlayerActorClass();
+        }
+#if TARGET_PC
+        // Co-op: scream stun is a retained player effect. The selected/damage-owner slot owns
+        // release/camera state; nearby slots can share the same scream animation timer.
+        dusk::coop::caught_stun_owner::CaughtStunOwnerState stunOwner =
+            dusk::coop::caught_stun_owner::beginCaughtStunArea("e_gi.scream", this, player,
+                                                               coOpScreamAffectedRange());
+        if (stunOwner.localPlayer != NULL) {
+            player = stunOwner.localPlayer;
+        }
+#endif
+
+        if (!player->checkWolf()) {
             mPlayerStunTimer = 9.0f + l_HIO.link_stun_time;
         } else {
             mPlayerStunTimer = 9.0f + l_HIO.wolf_stun_time;
@@ -296,7 +421,13 @@ bool daE_GI_c::setCryStop() {
         mCryTimer = mPlayerStunTimer + l_HIO.scream_prevention_time;
         m_cry_gi = this;
 
+#if TARGET_PC
+        dusk::coop::caught_stun_owner::updateCaughtStun("e_gi.scream", this, mPlayerStunTimer,
+                                                        mCryTimer);
+        coOpForceCryLockOn(this, stunOwner.slot);
+#else
         dCam_getBody()->ForceLockOn(this);
+#endif
         speedF = 0.0f;
         setBck(10, 0, 5.0f, 1.0f);
         field_0x6a0 = 3;
@@ -373,6 +504,25 @@ static void* s_battle_gi(void* i_actor, void* i_other) {
 }
 
 void daE_GI_c::executeSleep() {
+#if TARGET_PC
+    // Co-op: wake/turn reads are awareness checks, so they acquire the nearest visible combat
+    // target immediately instead of inheriting stale chase stickiness.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    fopAc_ac_c* target_actor = daPy_getPlayerActorClass();
+    f32 player_dist = fopAcM_searchPlayerDistance(this);
+    s16 player_angle = fopAcM_searchPlayerAngleY(this);
+    if (coOpSelectTargetState(this, "e_gi.sleep", false,
+                              dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState,
+                              &player_dist, &player_angle, NULL))
+    {
+        target_actor = targetState.actor;
+    }
+#else
+    fopAc_ac_c* target_actor = daPy_getPlayerActorClass();
+    f32 player_dist = fopAcM_searchPlayerDistance(this);
+    s16 player_angle = fopAcM_searchPlayerAngleY(this);
+#endif
+
     switch (mMoveMode) {
     case 0:
         field_0x6a0 = 0;
@@ -392,7 +542,7 @@ void daE_GI_c::executeSleep() {
                 mMoveMode = 2;
             }
         } else {
-            if (fopAcM_searchPlayerDistance(this) < l_HIO.player_detect_range && !fopAcM_otherBgCheck(this, daPy_getPlayerActorClass())) {
+            if (player_dist < l_HIO.player_detect_range && !fopAcM_otherBgCheck(this, target_actor)) {
                 mpModelMorf->setPlaySpeed(1.0f);
                 mMoveMode = 2;
             }
@@ -415,12 +565,12 @@ void daE_GI_c::executeSleep() {
             } else {
                 cLib_chaseF(&speedF, 2.0f, 0.5f);
             }
-            cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 0x10, field_0x66c, 0x40);
+            cLib_addCalcAngleS(&shape_angle.y, player_angle, 0x10, field_0x66c, 0x40);
             current.angle.y = shape_angle.y;
         }
 
         if (mpModelMorf->isStop()) {
-            if (fopAcM_searchPlayerDistance(this) > l_HIO.player_detect_range) {
+            if (player_dist > l_HIO.player_detect_range) {
                 setActionMode(ACTION_WAIT_e, 0);
             } else {
                 setActionMode(ACTION_CHASE_e, 10);
@@ -432,6 +582,21 @@ void daE_GI_c::executeSleep() {
 
 void daE_GI_c::executeWait() {
     f32 player_dist = fopAcM_searchPlayerDistance(this);
+    s16 player_angle = fopAcM_searchPlayerAngleY(this);
+    fopAc_ac_c* target_actor = daPy_getPlayerActorClass();
+    daPy_py_c* cry_player = daPy_getPlayerActorClass();
+#if TARGET_PC
+    // Co-op: idle awareness may wake on any active player; if scream stun starts, bind it to
+    // that selected target through caught/stun ownership.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    if (coOpSelectTargetState(this, "e_gi.wait", false,
+                              dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState,
+                              &player_dist, &player_angle, NULL))
+    {
+        target_actor = targetState.actor;
+        cry_player = targetState.player;
+    }
+#endif
 
     switch (mMoveMode) {
     case 0:
@@ -441,8 +606,43 @@ void daE_GI_c::executeWait() {
         mMoveMode = 1;
     case 1:
         if ((mSwbit2 == 0xFF || dComIfGs_isSwitch(mSwbit2, fopAcM_GetRoomNo(this))) && player_dist < l_HIO.player_detect_range) {
-            if (abs((s16)(fopAcM_searchPlayerAngleY(this) - shape_angle.y)) < (s16)l_HIO.attack_angle && !fopAcM_otherBgCheck(this, daPy_getPlayerActorClass())) {
-                if (player_dist < l_HIO.player_attack_range && setCryStop()) {
+            const bool angle_gate = abs((s16)(player_angle - shape_angle.y)) < (s16)l_HIO.attack_angle;
+            const bool los_clear = !fopAcM_otherBgCheck(this, target_actor);
+#if TARGET_PC
+            {
+                dusk::coop::gibdo_state_probe::GibdoStateProbe probe;
+                probe.actor = reinterpret_cast<uintptr_t>(this);
+                probe.actorId = fopAcM_GetID(this);
+                probe.action = mActionMode;
+                probe.moveMode = mMoveMode;
+                probe.bck = dusk::coop::gibdo_state_probe::currentGibdoBck(this);
+                probe.animFrame = mpModelMorf->getFrame();
+                probe.playSpeed = mpModelMorf->getPlaySpeed();
+                probe.speedF = speedF;
+                probe.attackDelay = field_0x684;
+                probe.stunTimer = mPlayerStunTimer;
+                probe.cryTimer = mCryTimer;
+                probe.targetSlot = targetState.slot;
+                probe.targetFound = targetState.available;
+                probe.targetDistance = player_dist;
+                probe.targetAngleY = player_angle;
+                probe.rangeGate = true;
+                probe.angleGate = angle_gate;
+                probe.losClear = los_clear;
+                probe.delayGate = true;
+                probe.attackGate = angle_gate && los_clear;
+                probe.attackStart = mIsAttackStart;
+                probe.screamOwnerActive = m_cry_gi != NULL;
+                probe.screamOwnerAttackStarted = m_cry_gi != NULL && m_cry_gi->isAttackStart();
+                probe.cryOwner = reinterpret_cast<uintptr_t>(m_cry_gi);
+                probe.label = "e_gi.wait";
+                // Co-op: diagnostics only. This records why an awake Gibdo did or did not leave
+                // wait state for a selected co-op player without altering vanilla gates.
+                dusk::coop::gibdo_state_probe::recordGibdoStateProbe(probe);
+            }
+#endif
+            if (angle_gate && los_clear) {
+                if (player_dist < l_HIO.player_attack_range && setCryStop(cry_player)) {
                     setActionMode(ACTION_CHASE_e, 2);
                 } else {
                     setActionMode(ACTION_CHASE_e, 0);
@@ -459,6 +659,22 @@ void daE_GI_c::executeWait() {
 
 void daE_GI_c::executeChase() {
     field_0x698 = 1;
+    f32 player_dist = fopAcM_searchPlayerDistance(this);
+    s16 player_angle = fopAcM_searchPlayerAngleY(this);
+    fopAc_ac_c* target_actor = daPy_getPlayerActorClass();
+    daPy_py_c* cry_player = daPy_getPlayerActorClass();
+#if TARGET_PC
+    // Co-op: chase/attack gates use sticky combat target state so movement, distance checks,
+    // and attack setup agree on the same player until combat retention permits a switch.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    if (coOpSelectTargetState(this, "e_gi.chase", false,
+                              dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
+                              &player_dist, &player_angle, NULL))
+    {
+        target_actor = targetState.actor;
+        cry_player = targetState.player;
+    }
+#endif
 
     switch (mMoveMode) {
     case 0:
@@ -476,7 +692,7 @@ void daE_GI_c::executeChase() {
         field_0x66c = 1024.0f + cM_rndFX(256.0f);
         field_0x684 = 30;
 
-        if (fopAcM_searchPlayerDistance(this) < 50.0f + l_HIO.player_attack_range && abs((s16)(fopAcM_searchPlayerAngleY(this) - shape_angle.y)) < 0x2800 && !fopAcM_otherBgCheck(this, daPy_getPlayerActorClass())) {
+        if (player_dist < 50.0f + l_HIO.player_attack_range && abs((s16)(player_angle - shape_angle.y)) < 0x2800 && !fopAcM_otherBgCheck(this, target_actor)) {
             field_0x684 = 0;
         }
     case 1: {
@@ -495,12 +711,58 @@ void daE_GI_c::executeChase() {
             cLib_chaseF(&speedF, 0.5f, 0.5f);
         }
 
-        cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 0x10, field_0x66c, 0x40);
+        cLib_addCalcAngleS(&shape_angle.y, player_angle, 0x10, field_0x66c, 0x40);
         current.angle.y = shape_angle.y;
 
-        if (fopAcM_searchPlayerDistance(this) < (50.0f + l_HIO.player_attack_range)) {
-            if (abs((s16)(fopAcM_searchPlayerAngleY(this) - shape_angle.y)) < 0x2800 && !fopAcM_otherBgCheck(this, daPy_getPlayerActorClass()) && field_0x684 == 0) {
-                if (setCryStop()) {
+#if TARGET_PC
+        // Co-op: chase remains sticky, but the moment-to-moment attack/scream gate should ask
+        // which player is actually close enough now so stale retention cannot suppress a valid hit.
+        coOpSelectTargetState(this, "e_gi.attack_gate", false,
+                              dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState,
+                              &player_dist, &player_angle, NULL);
+        target_actor = targetState.available ? targetState.actor : target_actor;
+        cry_player = targetState.available ? targetState.player : cry_player;
+#endif
+
+        if (player_dist < (50.0f + l_HIO.player_attack_range)) {
+            const bool angle_gate = abs((s16)(player_angle - shape_angle.y)) < 0x2800;
+            const bool los_clear = !fopAcM_otherBgCheck(this, target_actor);
+            const bool delay_gate = field_0x684 == 0;
+#if TARGET_PC
+            {
+                dusk::coop::gibdo_state_probe::GibdoStateProbe probe;
+                probe.actor = reinterpret_cast<uintptr_t>(this);
+                probe.actorId = fopAcM_GetID(this);
+                probe.action = mActionMode;
+                probe.moveMode = mMoveMode;
+                probe.bck = dusk::coop::gibdo_state_probe::currentGibdoBck(this);
+                probe.animFrame = mpModelMorf->getFrame();
+                probe.playSpeed = mpModelMorf->getPlaySpeed();
+                probe.speedF = speedF;
+                probe.attackDelay = field_0x684;
+                probe.stunTimer = mPlayerStunTimer;
+                probe.cryTimer = mCryTimer;
+                probe.targetSlot = targetState.slot;
+                probe.targetFound = targetState.available;
+                probe.targetDistance = player_dist;
+                probe.targetAngleY = player_angle;
+                probe.rangeGate = true;
+                probe.angleGate = angle_gate;
+                probe.losClear = los_clear;
+                probe.delayGate = delay_gate;
+                probe.attackGate = angle_gate && los_clear && delay_gate;
+                probe.attackStart = mIsAttackStart;
+                probe.screamOwnerActive = m_cry_gi != NULL;
+                probe.screamOwnerAttackStarted = m_cry_gi != NULL && m_cry_gi->isAttackStart();
+                probe.cryOwner = reinterpret_cast<uintptr_t>(m_cry_gi);
+                probe.label = "e_gi.attack_gate";
+                // Co-op: diagnostics only. This captures the exact close-range gate so a
+                // P2-first wake stall can be traced to range, angle, line of sight, delay, or scream lock.
+                dusk::coop::gibdo_state_probe::recordGibdoStateProbe(probe);
+            }
+#endif
+            if (angle_gate && los_clear && delay_gate) {
+                if (setCryStop(cry_player)) {
                     mMoveMode = 2;
                 } else {
                     setActionMode(ACTION_ATTACK_e, 5);
@@ -508,7 +770,7 @@ void daE_GI_c::executeChase() {
                     speedF = 0.0f;
                 }
             }
-        } else if (fopAcM_searchPlayerDistance(this) > (200.0f + l_HIO.player_detect_range)) {
+        } else if (player_dist > (200.0f + l_HIO.player_detect_range)) {
             setActionMode(ACTION_WAIT_e, 0);
         }
         break;
@@ -532,6 +794,13 @@ void daE_GI_c::executeChase() {
 
 void daE_GI_c::executeAttack() {
     field_0x698 = 1;
+    s16 player_angle = fopAcM_searchPlayerAngleY(this);
+#if TARGET_PC
+    // Co-op: attack follow-through keeps the same committed combat target through the swing.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectTargetState(this, "e_gi.attack", true, dusk::coop::EnemyTargetMode::StickyCombat,
+                          &targetState, NULL, &player_angle, NULL);
+#endif
 
     switch (mMoveMode) {
     case 0:
@@ -541,6 +810,38 @@ void daE_GI_c::executeAttack() {
         mMoveMode = 1;
         /* fallthrough */
     case 1:
+#if TARGET_PC
+        {
+            dusk::coop::gibdo_state_probe::GibdoStateProbe probe;
+            probe.actor = reinterpret_cast<uintptr_t>(this);
+            probe.actorId = fopAcM_GetID(this);
+            probe.action = mActionMode;
+            probe.moveMode = mMoveMode;
+            probe.bck = dusk::coop::gibdo_state_probe::currentGibdoBck(this);
+            probe.animFrame = mpModelMorf->getFrame();
+            probe.playSpeed = mpModelMorf->getPlaySpeed();
+            probe.speedF = speedF;
+            probe.attackDelay = field_0x684;
+            probe.stunTimer = mPlayerStunTimer;
+            probe.cryTimer = mCryTimer;
+            probe.targetSlot = targetState.slot;
+            probe.targetFound = targetState.available;
+            probe.targetAngleY = player_angle;
+            probe.rangeGate = true;
+            probe.angleGate = true;
+            probe.losClear = true;
+            probe.delayGate = true;
+            probe.attackGate = true;
+            probe.attackStart = true;
+            probe.screamOwnerActive = m_cry_gi != NULL;
+            probe.screamOwnerAttackStarted = m_cry_gi != NULL && m_cry_gi->isAttackStart();
+            probe.cryOwner = reinterpret_cast<uintptr_t>(m_cry_gi);
+            probe.label = "e_gi.attack_swing";
+            // Co-op: diagnostics only. A real sword swing has distinct animation progress, so this
+            // separates genuine attacks from pre-swing attack wait states.
+            dusk::coop::gibdo_state_probe::recordGibdoStateProbe(probe);
+        }
+#endif
         if (mpModelMorf->checkFrame(60.0f)) {
             mSound.startCreatureVoice(Z2SE_EN_GI_V_ATK, -1);
         }
@@ -556,7 +857,7 @@ void daE_GI_c::executeAttack() {
 
         if (mpModelMorf->getFrame() < 70.0f) {
             cLib_chaseF(&mWallCheckRadius, 200.0f, 1.5f);
-            cLib_addCalcAngleS(&shape_angle.y, (fopAcM_searchPlayerAngleY(this) + 0x400), 0x10, 0x200, 0x80);
+            cLib_addCalcAngleS(&shape_angle.y, (player_angle + 0x400), 0x10, 0x200, 0x80);
             current.angle.y = shape_angle.y;
         } else if (mpModelMorf->getFrame() <= 80.0f) {
             setWeaponAtBit(1);
@@ -600,6 +901,38 @@ void daE_GI_c::executeAttack() {
         mMoveMode = 6;
         /* fallthrough */
     case 6:
+#if TARGET_PC
+        {
+            dusk::coop::gibdo_state_probe::GibdoStateProbe probe;
+            probe.actor = reinterpret_cast<uintptr_t>(this);
+            probe.actorId = fopAcM_GetID(this);
+            probe.action = mActionMode;
+            probe.moveMode = mMoveMode;
+            probe.bck = dusk::coop::gibdo_state_probe::currentGibdoBck(this);
+            probe.animFrame = mpModelMorf->getFrame();
+            probe.playSpeed = mpModelMorf->getPlaySpeed();
+            probe.speedF = speedF;
+            probe.attackDelay = field_0x684;
+            probe.stunTimer = mPlayerStunTimer;
+            probe.cryTimer = mCryTimer;
+            probe.targetSlot = targetState.slot;
+            probe.targetFound = targetState.available;
+            probe.targetAngleY = player_angle;
+            probe.rangeGate = true;
+            probe.angleGate = true;
+            probe.losClear = true;
+            probe.delayGate = m_cry_gi == NULL || m_cry_gi->isAttackStart();
+            probe.attackGate = probe.delayGate;
+            probe.attackStart = mIsAttackStart;
+            probe.screamOwnerActive = m_cry_gi != NULL;
+            probe.screamOwnerAttackStarted = m_cry_gi != NULL && m_cry_gi->isAttackStart();
+            probe.cryOwner = reinterpret_cast<uintptr_t>(m_cry_gi);
+            probe.label = "e_gi.attack_wait";
+            // Co-op: diagnostics only. Gibdo can enter attack mode before a sword swing; this
+            // records whether the native scream coordinator is preventing that transition.
+            dusk::coop::gibdo_state_probe::recordGibdoStateProbe(probe);
+        }
+#endif
         if (m_cry_gi == NULL) {
             field_0x684 = cM_rndF(20.0f);
             mMoveMode = 7;
@@ -609,6 +942,38 @@ void daE_GI_c::executeAttack() {
         }
         break;
     case 7:
+#if TARGET_PC
+        {
+            dusk::coop::gibdo_state_probe::GibdoStateProbe probe;
+            probe.actor = reinterpret_cast<uintptr_t>(this);
+            probe.actorId = fopAcM_GetID(this);
+            probe.action = mActionMode;
+            probe.moveMode = mMoveMode;
+            probe.bck = dusk::coop::gibdo_state_probe::currentGibdoBck(this);
+            probe.animFrame = mpModelMorf->getFrame();
+            probe.playSpeed = mpModelMorf->getPlaySpeed();
+            probe.speedF = speedF;
+            probe.attackDelay = field_0x684;
+            probe.stunTimer = mPlayerStunTimer;
+            probe.cryTimer = mCryTimer;
+            probe.targetSlot = targetState.slot;
+            probe.targetFound = targetState.available;
+            probe.targetAngleY = player_angle;
+            probe.rangeGate = true;
+            probe.angleGate = true;
+            probe.losClear = true;
+            probe.delayGate = field_0x684 == 0;
+            probe.attackGate = field_0x684 == 0;
+            probe.attackStart = mIsAttackStart;
+            probe.screamOwnerActive = m_cry_gi != NULL;
+            probe.screamOwnerAttackStarted = m_cry_gi != NULL && m_cry_gi->isAttackStart();
+            probe.cryOwner = reinterpret_cast<uintptr_t>(m_cry_gi);
+            probe.label = "e_gi.attack_delay";
+            // Co-op: diagnostics only. This countdown must reach zero before the real sword
+            // animation starts; if it loops, the probe will show that delay rather than targeting.
+            dusk::coop::gibdo_state_probe::recordGibdoStateProbe(probe);
+        }
+#endif
         if (field_0x684 == 0) {
             mMoveMode = 0;
         }
@@ -617,6 +982,14 @@ void daE_GI_c::executeAttack() {
 }
 
 void daE_GI_c::executeDamage() {
+    f32 player_dist = fopAcM_searchPlayerDistance(this);
+#if TARGET_PC
+    // Co-op: damage recovery re-entry should test the retained combat target, not always P1.
+    coOpSelectTargetState(this, "e_gi.damage", false,
+                          dusk::coop::EnemyTargetMode::StickyCombat, NULL, &player_dist, NULL,
+                          NULL);
+#endif
+
     switch (mMoveMode) {
     case 0:
     case 1:
@@ -639,7 +1012,7 @@ void daE_GI_c::executeDamage() {
         }
 
         if (mpModelMorf->isStop()) {
-            if (fopAcM_searchPlayerDistance(this) < l_HIO.player_attack_range && cM_rnd() < 0.5 && !fpcM_Search(s_other_gi, this)) {
+            if (player_dist < l_HIO.player_attack_range && cM_rnd() < 0.5 && !fpcM_Search(s_other_gi, this)) {
                 setActionMode(ACTION_ATTACK_e, 0);
             } else {
                 setActionMode(ACTION_CHASE_e, 0);
@@ -660,7 +1033,13 @@ void daE_GI_c::executeDamage() {
         mMoveMode = 11;
 
         if (m_cry_gi == this) {
+#if TARGET_PC
+            // Co-op: death also releases the retained scream owner/camera slot.
+            coOpForceCryLockOff(this);
+            dusk::coop::caught_stun_owner::clearCaughtStun("e_gi.scream", this);
+#else
             dCam_getBody()->ForceLockOff(this);
+#endif
             m_cry_gi = NULL;
         }
         break;
@@ -743,6 +1122,36 @@ void daE_GI_c::executeBiteDamage() {
 
 void daE_GI_c::PushButtonCount() {
     if (mPlayerStunTimer != 0) {
+#if TARGET_PC
+        // Co-op: scream release input belongs to the retained stunned slot, not always PAD_1.
+        dusk::coop::caught_stun_owner::CaughtStunOwnerState stunOwner =
+            dusk::coop::caught_stun_owner::updateCaughtStun("e_gi.scream", this,
+                                                            mPlayerStunTimer, mCryTimer);
+        if (!stunOwner.found) {
+            stunOwner = dusk::coop::caught_stun_owner::beginCaughtStun(
+                "e_gi.scream", this, daPy_getPlayerActorClass());
+        }
+        dusk::coop::PlayerInputState input = dusk::coop::readLocalInput(stunOwner.slot);
+        if (abs((s16)(mPrevStickAngle - input.stickAngle3D)) > 0x1000) {
+            mPushButtonCount++;
+        }
+
+        if (input.triggerButtons & PAD_BUTTON_A) {
+            mPushButtonCount += 2;
+        }
+
+        if (input.triggerButtons & PAD_BUTTON_B) {
+            mPushButtonCount += 2;
+        }
+
+        if (input.triggerButtons & PAD_TRIGGER_L) {
+            mPushButtonCount += 2;
+        }
+
+        if (input.triggerButtons & PAD_TRIGGER_R) {
+            mPushButtonCount += 2;
+        }
+#else
         if (abs((s16)(mPrevStickAngle - mDoCPd_c::getStickAngle3D(PAD_1))) > 0x1000) {
             mPushButtonCount++;
         }
@@ -762,6 +1171,7 @@ void daE_GI_c::PushButtonCount() {
         if (mDoCPd_c::getTrigR(PAD_1)) {
             mPushButtonCount += 2;
         }
+#endif
 
         mPlayerStunTimer -= mPushButtonCount / 2;
         if (mPlayerStunTimer < 0) {
@@ -772,7 +1182,17 @@ void daE_GI_c::PushButtonCount() {
         mPushButtonCount &= 1;
     }
 
+#if TARGET_PC
+    dusk::coop::caught_stun_owner::CaughtStunOwnerState stunOwner =
+        dusk::coop::caught_stun_owner::getCaughtStun(this);
+    if (stunOwner.found) {
+        mPrevStickAngle = dusk::coop::readLocalInput(stunOwner.slot).stickAngle3D;
+    } else {
+        mPrevStickAngle = mDoCPd_c::getStickAngle3D(PAD_1);
+    }
+#else
     mPrevStickAngle = mDoCPd_c::getStickAngle3D(PAD_1);
+#endif
 }
 
 void daE_GI_c::action() {
@@ -825,7 +1245,15 @@ void daE_GI_c::action() {
     PushButtonCount();
 
     if (field_0x698 != 0) {
-        s16 var_r28 = fopAcM_searchPlayerAngleY(this) - shape_angle.y;
+        s16 target_angle = fopAcM_searchPlayerAngleY(this);
+#if TARGET_PC
+        // Co-op: the head aim follows the selected combat target so visual attention matches
+        // chase/attack ownership instead of snapping back to P1.
+        coOpSelectTargetState(this, "e_gi.look", false,
+                              dusk::coop::EnemyTargetMode::StickyCombat, NULL, NULL,
+                              &target_angle, NULL);
+#endif
+        s16 var_r28 = target_angle - shape_angle.y;
         if (var_r28 > 0x2000) {
             var_r28 = 0x2000;
         }
@@ -922,15 +1350,40 @@ int daE_GI_c::execute() {
     if (mPlayerStunTimer != 0) {
         mPlayerStunTimer--;
 
-        if (daPy_getPlayerActorClass()->getDamageWaitTimer() < 30) {
-            if (!daPy_getPlayerActorClass()->checkNowWolf()) {
+#if TARGET_PC
+        // Co-op: the scream owner remains the release/camera slot, but the sound itself can also
+        // paralyze nearby active players for the same vanilla Gibdo timer.
+        dusk::coop::caught_stun_owner::CaughtStunOwnerState stunOwner =
+            dusk::coop::caught_stun_owner::updateCaughtStun("e_gi.scream", this,
+                                                            mPlayerStunTimer, mCryTimer);
+        for (int i = 0; i < stunOwner.affectedCount; i++) {
+            daPy_py_c* stun_player =
+                static_cast<daPy_py_c*>(stunOwner.affectedLocalActors[i]);
+            if (stun_player == NULL || stun_player->getDamageWaitTimer() >= 30) {
+                continue;
+            }
+
+            if (!stun_player->checkWolf()) {
                 if (mPlayerStunTimer < (l_HIO.link_stun_time + l_HIO.lever_spin_time)) {
-                    daPy_getPlayerActorClass()->onNsScreamAnm();
+                    stun_player->onNsScreamAnm();
                 }
             } else if (mPlayerStunTimer < (l_HIO.wolf_stun_time + l_HIO.lever_spin_time)) {
-                daPy_getPlayerActorClass()->onNsScreamAnm();
+                stun_player->onNsScreamAnm();
             }
         }
+#else
+        daPy_py_c* stun_player = daPy_getPlayerActorClass();
+
+        if (stun_player->getDamageWaitTimer() < 30) {
+            if (!stun_player->checkWolf()) {
+                if (mPlayerStunTimer < (l_HIO.link_stun_time + l_HIO.lever_spin_time)) {
+                    stun_player->onNsScreamAnm();
+                }
+            } else if (mPlayerStunTimer < (l_HIO.wolf_stun_time + l_HIO.lever_spin_time)) {
+                stun_player->onNsScreamAnm();
+            }
+        }
+#endif
     }
 
     if (mContinuousHitTimer != 0) {
@@ -940,7 +1393,13 @@ int daE_GI_c::execute() {
     if (mCryTimer != 0) {
         mCryTimer--;
         if (mCryTimer == 0 && m_cry_gi == this) {
+#if TARGET_PC
+            // Co-op: release whichever camera slot the retained scream owner used.
+            coOpForceCryLockOff(this);
+            dusk::coop::caught_stun_owner::clearCaughtStun("e_gi.scream", this);
+#else
             dCam_getBody()->ForceLockOff(this);
+#endif
             m_cry_gi = NULL;
         }
     }
@@ -967,6 +1426,19 @@ static int daE_GI_IsDelete(daE_GI_c* a_this) {
 }
 
 int daE_GI_c::_delete() {
+#if TARGET_PC
+    // Co-op: remove retained targeting/debug state before this actor pointer can be reused.
+    coOpClearEnemyTargets(this);
+    if (m_cry_gi == this) {
+        // Co-op: the global scream owner blocks future screams; if this owner unloads before its
+        // own cry timer clears, release the sidecar/camera state and restore the native null owner.
+        coOpForceCryLockOff(this);
+        m_cry_gi = NULL;
+    }
+    dusk::coop::caught_stun_owner::clearCaughtStun("e_gi.scream", this);
+    dusk::coop::gibdo_state_probe::clearGibdoStateProbe(this);
+#endif
+
     dComIfG_resDelete(&mPhase, "E_GI");
 
     if (mHIOInit) {

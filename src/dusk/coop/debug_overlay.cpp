@@ -153,10 +153,10 @@ int decisionPriority(const EnemyTargetDecisionDebug& decision) {
     if (decision.committed || systemContains(decision, ".attack")) {
         return 40;
     }
-    if (systemContains(decision, ".find") || systemContains(decision, ".move_out")) {
+    if (decision.mode == EnemyTargetMode::StickyCombat) {
         return 30;
     }
-    if (systemContains(decision, ".search")) {
+    if (decision.mode == EnemyTargetMode::ImmediateAcquire) {
         return 10;
     }
     return 0;

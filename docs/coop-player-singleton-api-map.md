@@ -45,6 +45,18 @@ The first proof surface is Bokoblin guard collision. See
 `docs/coop-defender-owner-contact-investigation.md` for the current attack-sphere findings and the
 known V1 limitation that a sphere's retained hit object is not a full multi-contact trace.
 
+`caught_stun_owner` answers **"which player is retained by this enemy effect?"** These are not
+ordinary target or damage reads: once a grab, scream, stun, carry, or hang begins, the enemy must
+keep talking to that same player slot until release. The first proof surface is Gibdo scream stun,
+which now binds release input and best-effort camera lock to the retained slot, while also allowing
+the same scream timer to animate nearby affected player slots.
+
+Gibdo currently preserves the vanilla single global scream owner (`m_cry_gi`) because that pointer
+also coordinates follow-up attacks between Gibdos. Dusk broadens the affected-player range for the
+single owned scream instead of allowing simultaneous per-player screams. A future retained-effect
+policy may allow one active scream per player slot, but that must explicitly preserve or replace
+the native group choreography.
+
 ## Routing Table
 
 | Question the callsite is asking | Use | Current status |
@@ -56,7 +68,7 @@ known V1 limitation that a sphere's retained hit object is not a full multi-cont
 | "What is the selected target's form/speed/guard/horse/swim/damage state?" | `dusk::coop::selected_target_state` | Initial implementation for target speed/facing/position/cut/horse facts |
 | "Who did this enemy attack touch, and was that player guarding/blocking?" | `dusk::coop::defender_owner` | Initial direct-player implementation for Bokoblin guard collision |
 | "Which player collided, rode, pushed, stood on, or picked this up?" | broader collision-owner helpers | Not implemented yet |
-| "Which player is caught, grabbed, carried, swallowed, or retained by this actor?" | caught/grab-owner helpers | Not implemented yet |
+| "Which player is caught, stunned, grabbed, carried, swallowed, or retained by this actor?" | `dusk::coop::caught_stun_owner` / future caught-grab helpers | Initial implementation for Gibdo scream stun |
 | "Which player owns this item/tool instance?" | item-owner helpers / owner keeps | Partially implemented by item ownership patches |
 | "Which player owns camera/HUD/message/story/save state?" | camera/HUD/story-specific APIs | Partially implemented for split-screen camera only |
 
@@ -78,8 +90,10 @@ known V1 limitation that a sphere's retained hit object is not a full multi-cont
 - **Broader collision-owner:** contact-driven logic with no explicit search/chase surface, such as
   ride, push, stand-on, pickup, and object interaction. Keep it out of `enemy_targeting`; it needs
   its own ownership model.
-- **Caught/grab-owner:** a retained interaction with one specific player. It must not retarget to the
-  nearest player while the grab is active.
+- **Caught/grab-owner / caught-stun-owner:** a retained interaction with one specific player. It
+  must not retarget to the nearest player while the grab/stun is active, and it must not borrow P1
+  camera/body/controller state for P2. Gibdo scream stun now uses `caught_stun_owner`; Gibdo
+  wolf-bite ownership remains deferred caught/grab work.
 - **Primary/global state:** story protagonist, demo/cutscene, save/restart, HUD, message, or
   single-camera state. Keep P1/global until a dedicated milestone proves otherwise.
 

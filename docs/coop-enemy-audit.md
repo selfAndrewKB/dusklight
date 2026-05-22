@@ -14,10 +14,11 @@ actor patches -> enemy_targeting -> player_query
 - `enemy_targeting`: policy for choosing and retaining a target through reusable behavior scopes.
 - actor patches: narrow conversions at concrete enemy callsites, preserving vanilla behavior outside the scoped PC/co-op hook.
 
-The current Bokoblin, Tektite, and Stalhound proofs now use `enemy_targeting` over
-`player_query`. Bokoblin remains the richer melee validation surface; Tektite is the first
-compact non-Bokoblin port, and Stalhound is the first post-Tektite breadth proof. Choose the next
-enemy from the audit queue rather than widening any one proof surface by default.
+The current Bokoblin, Tektite, Stalhound, Stalchild, and Gibdo proofs now use `enemy_targeting`
+over `player_query`. Bokoblin remains the richer melee validation surface; Tektite is the first
+compact non-Bokoblin port, Stalhound and Stalchild are breadth proofs, and Gibdo is the first
+target-state-sensitive humanoid/undead proof. Choose the next enemy from the audit queue rather
+than widening any one proof surface by default.
 
 ## Target Policy Requirements
 
@@ -56,7 +57,8 @@ For each enemy family, classify and test these layers separately:
 | Basic Bokoblin | Bokoblin | `src/d/actor/d_a_e_oc.cpp` | `E_OC` | policy-backed targeting, owner APIs validated | Search, head-search, find/chase, move-out, attack gates, and follow-through use `enemy_targeting`; sword-sound awareness uses `selected_target_state`; sword hit reactions use `damage_owner`; guard collision uses `defender_owner`. |
 | Tektite | Tektite | `src/d/actor/d_a_e_tt.cpp` | `E_TT` | policy-backed targeting, owner APIs validated | Search/chase/attack/out-range use `enemy_targeting`; ordinary target facts and first-attack prediction use `selected_target_state`; cut reactions use `damage_owner`. Culling remains render/visibility work. |
 | Stalhound | Stalhound | `src/d/actor/d_a_e_sh.cpp` | `E_SH` | policy-backed targeting, first-pass validated | Central target metrics, movement speed, attack commitment, head tracking, and damage knockback angle route through the co-op API families. No P1 guard-state read was found; attack shield response currently uses the collision `ChkAtShieldHit()` flag. First surface test looked good. |
-| Baby Stalfos | Baby Stalfos | `src/d/actor/d_a_e_bs.cpp` | `E_BS` | policy-backed targeting, awaiting validation | Swarm-style ground melee proof. Recognition, chase/attack target metrics, attack-facing checks, head tracking, and attack guard response route through the co-op API families. |
+| Stalchild | Stalchild | `src/d/actor/d_a_e_bs.cpp` | `E_BS` | policy-backed targeting, first-pass validated | Swarm-style ground melee proof. Recognition, chase/attack target metrics, attack-facing checks, head tracking, and attack guard response route through the co-op API families. |
+| Gibdo | Gibdo | `src/d/actor/d_a_e_gi.cpp` | `E_GI` | policy-backed targeting, owner APIs validated | Sleep/wait/chase/attack/damage recovery and head tracking route through `enemy_targeting` plus `selected_target_state`; the close-range attack/scream gate uses immediate acquisition so stale chase retention cannot suppress an in-range player; ordinary sword cut reactions use `damage_owner`; scream stun uses `caught_stun_owner` so the retained slot owns release input and best-effort camera lock while nearby affected slots share the scream animation timer with an expanded co-op AoE. Wolf-bite ownership remains intentionally deferred to a later caught/grab-owner proof enemy. `gibdo.state` remains available for follow-up debugging and records native range/angle/LOS/delay/scream-owner gates. Some placed Gibdos use `mSwbit2` switch gating before sight checks, so apparent P1-only activation may also involve room script state. Simultaneous per-player scream ownership is documented as deferred because vanilla `m_cry_gi` also coordinates follow-up attacks. |
 
 ## Reviewed Evidence
 
@@ -96,7 +98,7 @@ These rows are from a second source pass. They are mostly classification gates: 
 | `d_a_e_dk.cpp` | `E_DK` | wait/chase/attack/damage/death actions; separate core model | regular/complex enemy candidate | Looks policy-relevant but has a core/body split; audit after simpler ground enemies. |
 | `d_a_e_fb.cpp` | `E_FB` | wait/attack/damage/bullet actions; vertical player-distance gates | static/ranged special enemy | Good later ranged/static test; vertical checks should not drive first ground policy. |
 | `d_a_e_ge.cpp` | `E_GE` | wait/fly/attack/back/caw/wind/shield actions | flying enemy candidate | Needs vertical/circle-flight policy; good second-wave airborne specimen. |
-| `d_a_e_gi.cpp` | `E_GI` | sleep/wait and sword model evidence | regular humanoid/undead candidate | Promising humanoid target after basic sticky policy exists; likely has stun/freeze/paralysis edge cases. |
+| `d_a_e_gi.cpp` | `E_GI` | sleep/wait and sword model evidence | regular humanoid/undead candidate | Gibdo. First pass covers combat targeting, ordinary damage-owner reads, and scream stun ownership; wolf-bite ownership remains deferred caught/grab work. |
 | `d_a_e_gm.cpp` | `E_GM` | egg/core/wait/damage/rebound actions and statue checks | boss/miniboss special | Core/egg state and statue interactions make it a deferred special actor. |
 | `d_a_e_gs.cpp` | `E_GS` | wait/appear/disappear alpha behavior | ghost/proximity special | Simple state shape but invisibility/proximity presentation make it a later ghost policy test. |
 | `d_a_e_hp.cpp` | `E_HP` | wait/move/retreat/attack/down/dead actions | ghost enemy candidate | Good later policy test once target retention exists, but wolf/pull-out/down states need damage ownership audit. |
@@ -213,7 +215,7 @@ Do not leave these permanently primary-player-only just because V1 is cautious. 
 | `d_a_e_ww.cpp` | `E_WW` | White Wolfos | ~30 | ~15 | 0 | **Second-wave** — 45 total callsites; wolf-form checks and demo logic mixed in; needs per-callsite read before any redirect |
 | `d_a_e_sf.cpp` | `E_SF` | (humanoid) | ~8 | ~12 | 0 | **Defer** — story intro calls `changeOriginalDemo()`/`setPlayerPosAndAngle()` are protagonist-locked |
 | `d_a_e_kk.cpp` | `E_KK` | Ice Swordsman | ~20 | ~16 | 0 | **Second-wave** — most calls targeting but `getDamageWaitTimer()` state checks intermixed |
-| `d_a_e_gi.cpp` | `E_GI` | (humanoid undead) | ~10 | ~12 | 0 | **Second-wave** — wolf-form `checkNowWolf()` checks mixed with targeting distance calls |
+| `d_a_e_gi.cpp` | `E_GI` | Gibdo | ~10 | ~12 | 0 | **Current proof** — combat targeting, ordinary damage-owner reads, and scream stun ownership converted; wolf-bite ownership remains deferred caught/grab work |
 | `d_a_e_hz.cpp` | `E_HZ` | (hazard enemy) | ~12 | ~7 | 0 | **Defer** — boots/armor/throw-damage checks are primary-player-specific equipment state |
 | `d_a_e_st.cpp` | `E_ST` | Skulltula | ~15 | ~36 | 0 | **Protagonist-locked** — `getStCaught()` grab state is protagonist-specific; no callsites are safe to redirect without a co-op caught-state ownership model |
 
@@ -268,7 +270,7 @@ The table below is machine-assisted from `src/d/actor/d_a_e_*.cpp` and profile s
 | Candidate | `d_a_e_dn.cpp` | `E_DN` | 25 | complex enemy | Guard/hookshot/wolf/hit reactions appear in code; defer until policy and damage checks exist. |
 | Candidate | `d_a_e_s1.cpp` | `E_S1` | 24 | regular enemy candidate | Ceiling-hanging spider with physics web; loads "E_S2" resource; Skulltula variant. Hang/wolfbite paths need audit before policy targeting. |
 | Candidate | `d_a_e_dt.cpp` | `E_DT` | 24 | boss/setpiece likely | Many press/demo/special-position calls; defer. |
-| Candidate | `d_a_e_gi.cpp` | `E_GI` | 22 | regular humanoid/undead candidate | Sleep/wait and sword model evidence; promising after basic sticky policy exists. |
+| Current proof | `d_a_e_gi.cpp` | `E_GI` | 22 | regular humanoid/undead candidate | Gibdo. Combat targeting, ordinary damage-owner reads, and scream stun ownership are policy-backed; wolf-bite ownership is deferred. |
 | Done proof | `d_a_e_tt.cpp` | `E_TT` | 21 | regular enemy | HIO label `テクタイト`; compact chase/attack state; first non-Bokoblin port validated for targeting, damage-owner, and selected-target-state surfaces. |
 | Candidate | `d_a_e_th.cpp` | `E_TH` | 20 | special/miniboss-class enemy | Confirmed: Darkhammer; `dark_hammer_one_hit` achievement signal; chain-ball weapon. Defer. |
 | Candidate | `d_a_e_sf.cpp` | `E_SF` | 20 | regular humanoid with demo intro | Guard/sitwait/op-demo paths need care. |
@@ -295,11 +297,11 @@ Bokoblin now has the reusable policy spine plus damage-owner, selected-target-st
 defender-owner proof surfaces. Tektite has been ported and validated as the first compact
 non-Bokoblin specimen.
 
-After Bokoblin, Tektite, and Stalhound, Baby Stalfos is the current swarm-style ground-enemy breadth test:
+After Bokoblin, Tektite, Stalhound, Stalchild, and Gibdo, the next choices are:
 
-1. **Baby Stalfos (`E_BS`)** - current patch surface. This is a swarm-style ground melee proof and should test multiple enemies selecting targets at once.
-2. **Next non-flying ground melee backup (`E_KG`)** - choose based on accessible test location after Baby Stalfos validates.
-3. **Target-state-sensitive enemy (`E_WW`, `E_GI`, `E_KK`, or `E_BA`)** - now reasonable because `selected_target_state` exists, but classify form/guard/damage reads before patching.
+1. **Next non-flying ground melee backup (`E_KG`)** - choose based on accessible test location.
+2. **Next target-state-sensitive enemy (`E_WW`, `E_KK`, or `E_BA`)** - now reasonable because `selected_target_state` exists, but classify form/guard/damage reads before patching.
+3. **A future caught/grab-owner proof enemy** - needed for wolf-bite hang ownership and similar retained physical interactions; Gibdo's wolf-bite path is explicitly deferred.
 4. **Avoid grab-heavy or setpiece enemies** until caught/grab-owner and event/camera policies exist.
 
 This sequence keeps the manual work small: build one policy API, convert one already validated actor, then port the same shape to one compact enemy before touching target-state-sensitive families.
@@ -319,7 +321,7 @@ Use this queue before writing more enemy behavior code:
    - grab/caught-state,
    - miniboss/boss/story/demo.
 3. ~~For each likely regular enemy, inspect only enough code to mark search/chase/attack/follow-through/damage risk. Do not patch during this pass.~~ Priority 1 regular-enemy callsite classification is complete enough for the first policy wave. Continue classification opportunistically for candidates outside that wave.
-4. ~~Pick the first policy-backed wave from the best understood regular enemies, not necessarily from the highest lookup counts.~~ First wave chosen and validated: policy-backed `E_OC`, then `E_TT`. `E_SH` passed first surface testing; `E_BS` is the current breadth candidate.
+4. ~~Pick the first policy-backed wave from the best understood regular enemies, not necessarily from the highest lookup counts.~~ First wave chosen and validated: policy-backed `E_OC`, then `E_TT`. `E_SH` and `E_BS` passed first surface testing; `E_GI` is the current target-state-sensitive proof.
 5. Keep target choice in `enemy_targeting`, selected target facts in `selected_target_state`, hit ownership in `damage_owner`, enemy-attack contact in `defender_owner`, and diagnostics quiet while selecting the next actor.
 
 ## Full Machine Inventory
@@ -427,10 +429,10 @@ This inventory is generated from `src/d/actor/d_a_e_*.cpp` file names and `g_pro
 
 ## Next Steps
 
-1. Choose the next regular enemy from an accessible test location, preferably `E_KG`, `E_BS`, or `E_SH` if one can be found quickly in-game.
+1. Choose the next regular enemy from an accessible test location, preferably `E_KG` or another compact non-flying ground enemy.
 2. Before patching, classify its singleton reads into targeting, selected-target state, damage-owner, defender/collision-owner, caught/grab-owner, primary/global, and render/culling.
 3. Convert only the smallest coherent behavior slice, using actor-local helpers over the API families proven by Bokoblin and Tektite.
-4. Continue classifying/test-locating target-state-sensitive second-wave enemies (`E_WW`, `E_GI`, `E_KK`, `E_BA`) in parallel.
+4. Continue classifying/test-locating target-state-sensitive second-wave enemies (`E_WW`, `E_KK`, `E_BA`) in parallel.
 
 ## Multiplayer AI Notes
 

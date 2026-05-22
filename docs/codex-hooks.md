@@ -25,9 +25,11 @@ The hooks are guardrails, not a replacement for judgment. They exist to preserve
 - Remind diagnostics-provider edits to keep `events.jsonl` bounded: semantic-change events, no empty/default spam, no frame-churn fields unless the profile specifically tests them, sensible cadence, and lean events versus richer `latest.json`.
 - Remind enemy actor edits to classify player-singleton reads before patching: targeting, selected-target state, primary/global state, damage-owner, caught/grab-owner, or collision-owner. This is meant to prevent naive enemy-wide replacements and keep conversions routed through `enemy_targeting`.
 - Remind enemy-targeting edits to use actor-local helpers, keep `EnemyTargetScope` as the behavior owner, keep callsite strings as diagnostic labels, use `EnemyTargetMode` for callsite policy, and avoid independent per-callsite retention machines.
+- Remind enemy-targeting edits that `EnemyTargetResult::slot` is the durable identity and `EnemyTargetResult::localActor` is the local process pointer; do not reintroduce old `result.actor` usage in enemy patches.
 - Remind damage-owner edits that nearest player and current enemy target do not answer "who hit me?"; route cut type/count, weapon-owner, hit direction, and hit-reaction ownership through `dusk::coop::damage_owner`.
 - Remind selected-target-state edits that target speed, facing, position, form, horse, swim, guard, and damage-state reads belong behind `dusk::coop::selected_target_state` once target identity is known.
 - Remind defender/collision-owner edits that damage-owner, nearest player, selected target, and P1 globals do not answer "who did my attack touch?"; route enemy-attack guard/block/defender-state checks through `dusk::coop::defender_owner`.
+- Remind caught/stun-owner edits that targeting and damage ownership do not answer "which player is retained by this effect?"; route scream/stun/grab/carry/hang release ownership through a retained owner API such as `dusk::coop::caught_stun_owner`, and name local pointer caches explicitly, such as `localPlayerActor` or `affectedLocalActors`.
 - Remind attention/status work that clean P2 input does not prove independent P2 state; capture shared `dComIfGp`/attention facts before changing shield or lock-on behavior.
 - Remind plan/doc edits to reconcile plan lifecycle: exactly one current active co-op plan in `AGENTS.md`, completed evidence docs pointing forward, and stale `current`/`active`/`next`/`todo` language cleaned up when a milestone changes state.
 - After supported edit/check tools run, add focused review context for C++ edits, original/decomp edits, docs-map drift, new source files that may need `files.cmake`, fmt/MSVC logging hazards, and real `git diff --check` whitespace failures.
@@ -40,9 +42,11 @@ The hooks are guardrails, not a replacement for judgment. They exist to preserve
 - `.codex/hooks/post_tool_use_review.ps1`: adds post-edit review reminders and forces attention on `git diff --check` whitespace failures.
   - Also watches diagnostics provider edits and reminds Codex to apply the bounded-output checklist before adding new JSONL-producing data.
   - Also watches enemy actor edits and reminds Codex to classify singleton reads before touching targeting behavior, then route targeting through actor-local helper wrappers over scoped `enemy_targeting`.
+  - Also reminds enemy-targeting edits to consume `EnemyTargetResult::localActor` rather than any old `actor` field; selected-target snapshots may still expose `SelectedTargetState::actor`.
   - Also reminds enemy/damage edits that hit-reaction ownership belongs to `damage_owner`, not nearest-player or current-target policy.
   - Also reminds enemy/player-state edits that selected target facts belong to `selected_target_state`, not direct P1 globals or new nearest-player guesses.
   - Also reminds enemy/collision edits that defender contact belongs to `defender_owner`, not damage-owner, targeting, or primary-player state.
+  - Also reminds enemy/caught-state edits that retained stun/grab/carry/hang effects need a retained owner slot, not nearest-player or current-target recomputation.
   - Also watches plan-map edits and reminds Codex to retire completed plans cleanly instead of leaving stale active-plan breadcrumbs.
 
 ## Limitations

@@ -23,6 +23,7 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
 - Damage-owner reads must use `dusk::coop::damage_owner`, not nearest-player or current enemy target. Use it for cut type/count, weapon owner, hit direction, and hit-reaction ownership questions where the real question is "who hit me?"
 - Selected-target state reads must use `dusk::coop::selected_target_state` once a target identity is known. Use it for target speed, facing, position, form, horse, swim, guard, or damage-state facts; do not answer those with fresh nearest-player guesses or P1 globals.
 - Defender/collision-owner reads must use `dusk::coop::defender_owner` when the real question is "who did my attack touch?" Use it for enemy-attack contact, guard/block, and defender-state checks; do not answer those with damage-owner, nearest-player, selected-target, or P1 globals.
+- Retained stun/grab/carry/hang effects need a retained owner slot. Use `dusk::coop::caught_stun_owner` for Gibdo-style scream stun ownership; nearby players may be affected by the same retained effect, but do not recompute the owner from nearest player, current enemy target, or damage owner after the effect begins.
 - Do not propose or implement "temporary now, proper later" co-op fixes unless the user explicitly asks for a disposable experiment. Measure the engine behavior as much as needed, then choose the durable architecture first so prototype debt does not become the project foundation.
 
 ## Repository Map
