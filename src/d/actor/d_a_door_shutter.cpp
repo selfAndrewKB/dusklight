@@ -13,6 +13,7 @@
 #include "d/d_com_inf_game.h"
 #include "d/d_msg_object.h"
 #include "d/d_map_path_dmap.h"
+#include "dusk/coop/render_visibility.h"
 #include "SSystem/SComponent/c_math.h"
 #include <cstdio>
 #include <cstring>
@@ -1289,7 +1290,9 @@ int daDoor20_c::draw() {
         createKey();
         setDoorAngleSpec();
     }
-    if (fopAcM_cullingCheck(this)) {
+    // Co-op: this door has an actor-local cull in addition to the central actor draw gate.
+    // Bypass it during native split-screen so P1's camera cannot hide a door visible to P2.
+    if (!dusk::coop::render_visibility::shouldBypassDrawCulling() && fopAcM_cullingCheck(this)) {
         return 1;
     }
     calcMtx();

@@ -6,6 +6,7 @@
 #include "SSystem/SComponent/c_counter.h"
 
 #include "dusk/frame_interpolation.h"
+#include "dusk/coop/render_visibility.h"
 
 const u16 l_J_Ohana00_64TEX__width = 63;
 const u16 l_J_Ohana00_64TEX__height = 63;
@@ -599,6 +600,9 @@ dFlower_packet_c::dFlower_packet_c() {
 
 void dFlower_packet_c::draw() {
     dScnKy_env_light_c* kankyo = dKy_getEnvlight();
+#if TARGET_PC
+    bool split_screen_visibility = dusk::coop::render_visibility::shouldBypassDrawCulling();
+#endif
     j3dSys.reinitGX();
 
     GXSetNumIndStages(0);
@@ -697,6 +701,11 @@ void dFlower_packet_c::draw() {
                     Mtx flower_mtx;
                     if (dusk::frame_interp::lookup_replacement(&sp44->m_modelMtx, flower_mtx)) {
                         cMtx_concat(j3dSys.getViewMtx(), flower_mtx, flower_mtx);
+                        GXLoadPosMtxImm(flower_mtx, 0);
+                    } else if (split_screen_visibility) {
+                        // Co-op: split-screen stores flower detail as world-space matrices so each
+                        // viewport can apply its own camera instead of inheriting P1's baked view.
+                        cMtx_concat(j3dSys.getViewMtx(), sp44->m_modelMtx, flower_mtx);
                         GXLoadPosMtxImm(flower_mtx, 0);
                     } else
 #endif
@@ -857,6 +866,11 @@ void dFlower_packet_c::draw() {
                     if (dusk::frame_interp::lookup_replacement(&sp34->m_modelMtx, flower_mtx)) {
                         cMtx_concat(j3dSys.getViewMtx(), flower_mtx, flower_mtx);
                         GXLoadPosMtxImm(flower_mtx, 0);
+                    } else if (split_screen_visibility) {
+                        // Co-op: split-screen stores flower detail as world-space matrices so each
+                        // viewport can apply its own camera instead of inheriting P1's baked view.
+                        cMtx_concat(j3dSys.getViewMtx(), sp34->m_modelMtx, flower_mtx);
+                        GXLoadPosMtxImm(flower_mtx, 0);
                     } else
 #endif
                     {
@@ -948,6 +962,11 @@ static f32 flowerCheckGroundY(cXyz& param_0) {
 
 void dFlower_packet_c::update() {
     dFlower_anm_c* var_r29 = getAnm();
+#if TARGET_PC
+    bool split_screen_visibility = dusk::coop::render_visibility::shouldBypassDrawCulling();
+#else
+    bool split_screen_visibility = false;
+#endif
 
     for (int i = 0; i < 72; i++) {
         mDoMtx_stack_c::YrotS(var_r29->m_angY);
@@ -975,7 +994,8 @@ void dFlower_packet_c::update() {
 
             sp28.set(data_p->m_pos.x, 260.0f + data_p->m_pos.y, data_p->m_pos.z);
 
-            if (mDoLib_clipper::clip(j3dSys.getViewMtx(), sp28, 260.0f)) {
+            if (!split_screen_visibility &&
+                mDoLib_clipper::clip(j3dSys.getViewMtx(), sp28, 260.0f)) {
                 cLib_onBit<u8>(data_p->m_state, 4);
                 data_p->deleteAnm();
             } else {
@@ -990,7 +1010,11 @@ void dFlower_packet_c::update() {
                 
                 mDoMtx_stack_c::copy(temp_r28);
                 mDoMtx_stack_c::scaleM(temp_f31, temp_f31, temp_f31);
-                cMtx_concat(j3dSys.getViewMtx(), temp_r28, data_p->m_modelMtx);
+                if (split_screen_visibility) {
+                    cMtx_copy(temp_r28, data_p->m_modelMtx);
+                } else {
+                    cMtx_concat(j3dSys.getViewMtx(), temp_r28, data_p->m_modelMtx);
+                }
 #ifdef TARGET_PC
                 dusk::frame_interp::record_final_mtx(temp_r28, data_p->m_modelMtx);
 #endif

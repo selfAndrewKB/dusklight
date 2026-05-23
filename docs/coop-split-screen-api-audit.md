@@ -221,6 +221,22 @@ Validation result:
   `viewport_render_state`, foliage/detail visibility, and actor-specific render ownership surfaces
   rather than broadening the draw-culling bypass blindly.
 
+Follow-up investigation:
+
+- Grass and flower packets precompute detail matrices in their update step with
+  `j3dSys.getViewMtx()`, then reuse those matrices during the per-viewport draw loop. In native
+  split-screen this can bake P1's view into large detail patches before P2 renders. The current
+  follow-up stores world-space detail matrices while split-screen visibility bypass is active and
+  applies the active viewport view in `dGrass_packet_c::draw()` / `dFlower_packet_c::draw()`.
+- `daDoor20_c::draw()` has an actor-local `fopAcM_cullingCheck(this)` in addition to the central
+  actor draw gate. This is now routed through the same `render_visibility` policy so shutter-style
+  doors do not remain P1-camera-culled after the central actor gate has been bypassed.
+- World lighting remains a separate `viewport_render_state` problem. `dKy_setLight_nowroom_common()`
+  and related environment paths still read `dComIfGp_getCamera(0)` for camera-eye-dependent light
+  selection even though the split-screen painter has an active current viewport camera. The durable
+  next step is a current-view/current-camera render-state API for environment code, not more
+  visibility bypasses.
+
 ## First Reopened Split-Screen Pass
 
 1. Switch development back to the co-op split-screen branch/context.
