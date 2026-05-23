@@ -11,6 +11,11 @@
 #include "d/d_s_play.h"
 #include "f_op/f_op_kankyo_mng.h"
 
+#if TARGET_PC
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 enum Action {
     /* 0x0 */ ACT_TK_WAIT,
     /* 0x1 */ ACT_TK_FIND,
@@ -90,6 +95,46 @@ static int daE_TK_Draw(e_tk_class* i_this) {
     return 1;
 }
 
+#if TARGET_PC
+// Co-op: Tadpoles use one combat target for wake/find/attack decisions; labels are diagnostics
+// only and must not become independent target-retention owners.
+static bool coOpSelectCombatTargetState(
+    e_tk_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance, s16* angle_y) {
+    fopAc_ac_c* actor = i_this;
+    dusk::coop::EnemyTargetContext context;
+    context.observer = actor;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        actor, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+
+    return true;
+}
+#endif
+
 static int other_bg_check(e_tk_class* i_this, fopAc_ac_c* i_ac) {
     fopAc_ac_c* actor = i_this;
     dBgS_LinChk line_check;
@@ -113,6 +158,19 @@ static int other_bg_check(e_tk_class* i_this, fopAc_ac_c* i_ac) {
 
 static int pl_y_check(e_tk_class* i_this) {
     fopAc_ac_c* actor = i_this;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    const dusk::coop::EnemyTargetMode targetMode =
+        i_this->mAction == ACT_TK_WAIT || i_this->mAction == ACT_TK_PATHSWIM
+            ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+            : dusk::coop::EnemyTargetMode::StickyCombat;
+    // Co-op: vertical attack eligibility follows the selected active target.
+    if (coOpSelectCombatTargetState(i_this, "e_tk.y_check", i_this->mAction == ACT_TK_ATTACK,
+                                    targetMode, &targetState, NULL, NULL))
+    {
+        return actor->current.pos.y - targetState.pos.y <= 130.0f;
+    }
+#endif
 #if DEBUG  // TODO: Debug Fakematch. On retail, actor is accessed before the gameInfo.
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
     if (actor->current.pos.y - player->current.pos.y > 130.0f) {
@@ -128,6 +186,30 @@ static int pl_y_check(e_tk_class* i_this) {
 static int pl_check(e_tk_class* i_this, f32 i_limit, s16 i_max_diff) {
     fopAc_ac_c* actor = i_this;
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    const dusk::coop::EnemyTargetMode targetMode =
+        i_this->mAction == ACT_TK_WAIT || i_this->mAction == ACT_TK_PATHSWIM
+            ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+            : dusk::coop::EnemyTargetMode::StickyCombat;
+    // Co-op: awareness and continuation gates test LOS/facing against the selected active player.
+    if (coOpSelectCombatTargetState(i_this, "e_tk.pl_check", i_this->mAction == ACT_TK_ATTACK,
+                                    targetMode, &targetState, &i_this->mPlayerDistanceLimit,
+                                    &i_this->mPlayerAngleY))
+    {
+        if (i_this->mPlayerDistanceLimit < i_limit) {
+            s16 diff = actor->shape_angle.y - i_this->mPlayerAngleY;
+            if (diff < i_max_diff && diff > (s16)-i_max_diff &&
+                !other_bg_check(i_this, targetState.actor))
+            {
+                return 1;
+            }
+        }
+
+        return 0;
+    }
+#endif
 
     if (i_this->mPlayerDistanceLimit < i_limit) {
         s16 diff = actor->shape_angle.y - i_this->mPlayerAngleY;
@@ -530,8 +612,25 @@ static void action(e_tk_class* i_this) {
     cXyz _unk1;
     cXyz _unk2;
 
+#if TARGET_PC
+    {
+        const dusk::coop::EnemyTargetMode targetMode =
+            i_this->mAction == ACT_TK_WAIT || i_this->mAction == ACT_TK_PATHSWIM
+                ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                : dusk::coop::EnemyTargetMode::StickyCombat;
+        // Co-op: action-wide target metrics keep Tadpole movement and attack checks on one Combat owner.
+        if (!coOpSelectCombatTargetState(i_this, "e_tk.action",
+                                         i_this->mAction == ACT_TK_ATTACK, targetMode, NULL,
+                                         &i_this->mPlayerDistanceLimit, &i_this->mPlayerAngleY))
+        {
+            i_this->mPlayerAngleY = fopAcM_searchPlayerAngleY(actor);
+            i_this->mPlayerDistanceLimit = fopAcM_searchPlayerDistance(actor);
+        }
+    }
+#else
     i_this->mPlayerAngleY = fopAcM_searchPlayerAngleY(actor);
     i_this->mPlayerDistanceLimit = fopAcM_searchPlayerDistance(actor);
+#endif
     damage_check(i_this);
 
     s8 link_search_flag = false;
@@ -705,6 +804,10 @@ static int daE_TK_Delete(e_tk_class* i_this) {
     fopAc_ac_c* actor = i_this;
 
     fopAcM_RegisterDeleteID(i_this, "E_TK");
+#if TARGET_PC
+    // Co-op: delete purges sidecar target/debug state for this actor.
+    dusk::coop::clearAllEnemyTargets(actor);
+#endif
 
     dComIfG_resDelete(&i_this->mPhaseReq, "E_tk");
     if (i_this->mInitHIO) {

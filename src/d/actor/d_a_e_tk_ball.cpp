@@ -9,6 +9,12 @@
 #include "d/actor/d_a_player.h"
 #include "d/d_s_play.h"
 
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 enum Action {
     /* 0x00 */ ACT_TK_BALL_MOVE,    // Move in a straight line
     /* 0x01 */ ACT_TK_BALL_RETURN,  // Return to sender (when player locks on target and reflects)
@@ -94,16 +100,88 @@ static void impact_eff_set(e_tk_ball_class* i_this) {
     }
 }
 
+#if TARGET_PC
+static fopAc_ac_c* coOpResolveLaunchTarget(e_tk_ball_class* i_this) {
+    fopAc_ac_c* actor = i_this;
+    fopAc_ac_c* parent = fopAcM_SearchByID(actor->parentActorID);
+
+    dusk::coop::EnemyTargetContext context;
+    // Co-op: projectile aim inherits the parent tadpole's Combat target when the parent still
+    // exists; fallback to the ball itself keeps orphaned projectiles vanilla-like.
+    context.observer = parent != NULL ? parent : actor;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = parent != NULL ? dusk::coop::EnemyTargetMode::StickyCombat
+                                  : dusk::coop::EnemyTargetMode::ImmediateAcquire;
+    context.label = parent != NULL ? "e_tk_ball.parent_target" : "e_tk_ball.orphan_target";
+    context.committed = true;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        actor, context.label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (targetState.available) {
+        return targetState.actor;
+    }
+
+    return dComIfGp_getPlayer(0);
+}
+
+static dusk::coop::damage_owner::DamageOwnerResult coOpResolveReflectOwner(e_tk_ball_class* i_this) {
+    fopAc_ac_c* actor = i_this;
+    cCcD_Obj* hitObj = i_this->mTgSph.GetTgHitObj();
+    if (hitObj == NULL) {
+        return dusk::coop::damage_owner::DamageOwnerResult{};
+    }
+
+    // Co-op: a reflected tadpole ball should read the player who struck the ball, not P1.
+    dusk::coop::damage_owner::DamageOwnerResult owner =
+        dusk::coop::damage_owner::resolveDamageOwner(actor, hitObj);
+    dusk::coop::damage_owner::recordDamageOwnerHit("e_tk_ball.reflect", actor, owner, NULL);
+    return owner;
+}
+
+static bool coOpShouldReturnToParent(const dusk::coop::EnemyTargetResult& parentTarget,
+                                     const dusk::coop::damage_owner::DamageOwnerResult& reflectOwner,
+                                     bool actorLockon) {
+    // Co-op: unknown reflect owners must not fall back to P1's cut state for projectile returns.
+    if (!reflectOwner.found) {
+        return false;
+    }
+
+    daPy_py_c* reflectPlayer = dusk::coop::damage_owner::resolveDamageOwnerPlayer(reflectOwner);
+    if (reflectPlayer == NULL || reflectPlayer->getCutType() == daPy_py_c::CUT_TYPE_NONE) {
+        return false;
+    }
+
+    if (reflectOwner.slot == dusk::coop::PlayerSlot::Primary) {
+        return actorLockon;
+    }
+
+    // Co-op: additional players do not currently own the vanilla global Attention lockon path, so
+    // treat "the firing tadpole was targeting this slot" as the co-op equivalent for return shots.
+    return parentTarget.found && parentTarget.slot == reflectOwner.slot;
+}
+#endif
+
 static void e_tk_ball_move(e_tk_ball_class* i_this) {
     fopAc_ac_c* actor = i_this;
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
 
     cXyz direction_vec;
     cXyz speed_vec;
     cXyz unk1;
 
     switch (i_this->mMode) {
-    case MODE_TK_BALL_INIT:
+    case MODE_TK_BALL_INIT: {
+#if TARGET_PC
+        // Co-op: choose the projectile's target once at launch, not every move frame.
+        fopAc_ac_c* player = coOpResolveLaunchTarget(i_this);
+#else
+        fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
         i_this->mMode = MODE_TK_BALL_MOVE;
         i_this->mInitalPosition = actor->current.pos;
         direction_vec = player->eyePos;
@@ -130,6 +208,7 @@ static void e_tk_ball_move(e_tk_ball_class* i_this) {
         i_this->mAtSph.OffAtVsEnemyBit();
         i_this->mAtSph.StartCAt(actor->current.pos);
         i_this->mActionTimer[0] = 100;
+    }
         /* [[fallthrough]] */
 
     case MODE_TK_BALL_MOVE:
@@ -154,7 +233,27 @@ static void e_tk_ball_move(e_tk_ball_class* i_this) {
     if (i_this->mTgSph.ChkTgHit() || i_this->mAtSph.ChkAtShieldHit()) {
         impact_eff_set(i_this);
         actor->current.angle.x *= -1;
-        if (actor_lockon && daPy_getPlayerActorClass()->getCutType() != daPy_py_c::CUT_TYPE_NONE) {
+#if TARGET_PC
+        dusk::coop::EnemyTargetResult parentTarget;
+        if (parent_actor != NULL) {
+            dusk::coop::EnemyTargetContext context;
+            // Co-op: return-shot eligibility checks the parent target only at reflect time.
+            context.observer = parent_actor;
+            context.scope = dusk::coop::EnemyTargetScope::Combat;
+            context.mode = dusk::coop::EnemyTargetMode::StickyCombat;
+            context.label = "e_tk_ball.reflect_parent";
+            context.committed = true;
+            parentTarget = dusk::coop::selectEnemyTarget(context);
+        }
+        const dusk::coop::damage_owner::DamageOwnerResult reflectOwner = coOpResolveReflectOwner(i_this);
+        daPy_py_c* reflectPlayer = dusk::coop::damage_owner::resolveDamageOwnerPlayer(reflectOwner);
+        const bool shouldReturn = coOpShouldReturnToParent(parentTarget, reflectOwner, actor_lockon);
+#else
+        daPy_py_c* reflectPlayer = daPy_getPlayerActorClass();
+        const bool shouldReturn =
+            actor_lockon && reflectPlayer->getCutType() != daPy_py_c::CUT_TYPE_NONE;
+#endif
+        if (shouldReturn) {
             i_this->mAction = ACT_TK_BALL_RETURN;
             i_this->mMode = MODE_TK_BALL_INIT;
             ANGLE_ADD(actor->current.angle.y, 0x8000);
@@ -175,7 +274,7 @@ static void e_tk_ball_move(e_tk_ball_class* i_this) {
         i_this->mInitalDistance = direction_vec.abs();
         speed_vec.x = 0.0;
         speed_vec.y = 0.0;
-        if (daPy_getPlayerActorClass()->getCutType() != daPy_py_c::CUT_TYPE_NONE) {
+        if (reflectPlayer->getCutType() != daPy_py_c::CUT_TYPE_NONE) {
             speed_vec.z = 60.0f + TREG_F(16);
         }
         cMtx_YrotS(*calc_mtx, actor->current.angle.y);
@@ -357,6 +456,10 @@ static int daE_TK_BALL_IsDelete(e_tk_ball_class* i_this) {
 static int daE_TK_BALL_Delete(e_tk_ball_class* i_this) {
     fopAc_ac_c* actor = i_this;
     fopAcM_RegisterDeleteID(i_this, "E_TK_BALL");
+#if TARGET_PC
+    // Co-op: delete purges any orphan projectile target/debug state.
+    dusk::coop::clearAllEnemyTargets(actor);
+#endif
     if (i_this->mType == TYPE_TK_BALL_WATER) {
         dComIfG_resDelete(&i_this->mPhaseReq, "E_tk");
     } else {

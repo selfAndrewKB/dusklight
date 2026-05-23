@@ -10,6 +10,11 @@
 #include "d/actor/d_a_player.h"
 #include "c/c_damagereaction.h"
 
+#if TARGET_PC
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 daE_GS_HIO_c::daE_GS_HIO_c() {
     id = -1;
     base_size = 1.2f;
@@ -51,6 +56,45 @@ static u8 hio_set;
 
 static daE_GS_HIO_c l_HIO;
 
+#if TARGET_PC
+// Co-op: ghost proximity uses one combat target for appear/disappear checks; the wolf-sense
+// visibility gate remains a separate selected-player/form surface.
+static bool coOpSelectCombatTargetState(
+    e_gs_class* a_this, const char* label,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance, s16* angle_y) {
+    fopAc_ac_c* actor = &a_this->enemy;
+    dusk::coop::EnemyTargetContext context;
+    context.observer = actor;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = dusk::coop::EnemyTargetMode::ImmediateAcquire;
+    context.label = label;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        actor, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+
+    return true;
+}
+#endif
+
 static void e_gs_wait(e_gs_class* a_this) {
     switch (a_this->mode) {
     case 0:
@@ -83,8 +127,18 @@ static void action(e_gs_class* a_this) {
 
     cXyz sp14;
     cXyz sp8;
+#if TARGET_PC
+    // Co-op: action-wide proximity metrics make the ghost respond to any active player in range.
+    if (!coOpSelectCombatTargetState(a_this, "e_gs.action", NULL, &a_this->player_dist,
+                                     &a_this->angle_to_player))
+    {
+        a_this->player_dist = fopAcM_searchPlayerDistance(actor);
+        a_this->angle_to_player = fopAcM_searchPlayerAngleY(actor);
+    }
+#else
     a_this->player_dist = fopAcM_searchPlayerDistance(actor);
     a_this->angle_to_player = fopAcM_searchPlayerAngleY(actor);
+#endif
 
     switch (a_this->action) {
     case 0:
@@ -155,6 +209,10 @@ static int daE_GS_Delete(e_gs_class* a_this) {
     fopAc_ac_c* actor = &a_this->enemy;
 
     fopAcM_GetID(actor);
+#if TARGET_PC
+    // Co-op: delete purges sidecar target/debug state for this actor.
+    dusk::coop::clearAllEnemyTargets(actor);
+#endif
     dComIfG_resDelete(&a_this->phase, "E_gs");
 
     if (a_this->hio_init) {
