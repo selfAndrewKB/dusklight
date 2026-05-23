@@ -14,6 +14,11 @@
 #include "d/d_item.h"
 #include "f_op/f_op_actor_enemy.h"
 
+#if TARGET_PC
+#include "dusk/coop/defender_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
 
 class daE_FZ_HIO_c {
 public:
@@ -168,6 +173,59 @@ static u8 data_806C1BA0;
 
 static daE_FZ_HIO_c l_HIO;
 
+#if TARGET_PC
+// Co-op: Mini Freezard uses one combat target for wait/move/attack checks; labels are diagnostic
+// callsite names, not independent target-retention owners.
+static bool coOpSelectCombatTargetState(
+    daE_FZ_c* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance, s16* angle_y) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+
+    return true;
+}
+
+// Co-op: rebound angles are selected-target state, not P1 globals. True item-owner bias is a
+// separate item-awareness family and is documented in the audit when left out.
+static s16 coOpReboundAngleY(daE_FZ_c* i_this, const char* label) {
+    s16 targetAngle = 0;
+    if (coOpSelectCombatTargetState(i_this, label, false,
+                                    dusk::coop::EnemyTargetMode::StickyCombat, NULL, NULL,
+                                    &targetAngle))
+    {
+        return targetAngle + 32768;
+    }
+
+    return fopAcM_searchPlayerAngleY(i_this) + 32768;
+}
+#endif
+
 void daE_FZ_c::damage_check() {
     csXyz s_pos;
     cXyz pos;
@@ -197,7 +255,11 @@ void daE_FZ_c::damage_check() {
                     if (mTgCoSph.GetTgHitObj()->ChkAtType(AT_TYPE_40) ||
                         mTgCoSph.GetTgHitObj()->ChkAtType(AT_TYPE_BOOMERANG))
                     {
+#if TARGET_PC
+                        current.angle.y = coOpReboundAngleY(this, "e_fz.damage_rebound");
+#else
                         current.angle.y = fopAcM_searchPlayerAngleY(this) + 32768;
+#endif
                         f32 tmp_l_hio = l_HIO.field_0x28;
                         speedF = tmp_l_hio;
                         field_0x6fc = tmp_l_hio;
@@ -216,7 +278,11 @@ void daE_FZ_c::damage_check() {
                     if (mTgCoSph.GetTgHitObj()->ChkAtType(AT_TYPE_SPINNER) ||
                         mTgCoSph.GetTgHitObj()->ChkAtType(AT_TYPE_ARROW))
                     {
+#if TARGET_PC
+                        current.angle.y = coOpReboundAngleY(this, "e_fz.item_rebound");
+#else
                         current.angle.y = fopAcM_searchPlayerAngleY(this) + 32768;
+#endif
                         f32 tmp_l_hio = l_HIO.field_0x28;
                         speedF = tmp_l_hio;
                         field_0x6fc = tmp_l_hio;
@@ -233,7 +299,11 @@ void daE_FZ_c::damage_check() {
                         health -= 20;
 
                         if (1 < health) {
+#if TARGET_PC
+                            current.angle.y = coOpReboundAngleY(this, "e_fz.hookshot_rebound");
+#else
                             current.angle.y = fopAcM_searchPlayerAngleY(this) + 32768;
+#endif
 
                             f32 tmp_l_hio = l_HIO.field_0x28;
                             speedF = tmp_l_hio;
@@ -321,6 +391,34 @@ void daE_FZ_c::damage_check() {
                     }
 
                     if (mAtSph.ChkAtHit()) {
+#if TARGET_PC
+                        // Co-op: attack contact is defender ownership; the hit player may be any
+                        // local slot, and the rebound should face away from the combat target.
+                        const dusk::coop::defender_owner::DefenderOwnerResult defender =
+                            dusk::coop::defender_owner::resolveDefenderOwner(this, &mAtSph);
+                        dusk::coop::defender_owner::recordDefenderOwnerContact("e_fz.attack_contact",
+                                                                                this, defender);
+                        current.angle.y = coOpReboundAngleY(this, "e_fz.attack_contact");
+
+                        if (!defender.found) {
+                            mAtSph.ClrAtHit();
+                        } else {
+                            if (mAtSph.ChkAtShieldHit()) {
+                                f32 l_hio_28 = l_HIO.field_0x28;
+                                speedF = l_hio_28;
+                                field_0x6fc = l_hio_28;
+                                setActionMode(ACT_DAMAGE, 1);
+
+                            } else {
+                                if (mActionMode != ACT_DAMAGE) {
+                                    field_0x712 = 10;
+                                    setActionMode(ACT_DAMAGE, 3);
+                                }
+                            }
+                            mBoundSoundset();
+                            mAtSph.ClrAtHit();
+                        }
+#else
                         fopAc_ac_c* player = dComIfGp_getPlayer(0);
                         fopAc_ac_c* at_hit_actor = mAtSph.GetAtHitAc();
 
@@ -344,6 +442,7 @@ void daE_FZ_c::damage_check() {
                             mBoundSoundset();
                             mAtSph.ClrAtHit();
                         }
+#endif
                     }
                 }
             }
@@ -423,7 +522,20 @@ void daE_FZ_c::executeWait() {
         if (field_0x714 == 4) {
             field_0x710 = 10;
             speedF = 0.0f;
+#if TARGET_PC
+            s16 targetAngle = 0;
+            // Co-op: forced wake/chase angles follow whichever active player woke this Freezard.
+            if (coOpSelectCombatTargetState(this, "e_fz.wait_forced", false,
+                                            dusk::coop::EnemyTargetMode::ImmediateAcquire, NULL,
+                                            NULL, &targetAngle))
+            {
+                angle = targetAngle;
+            } else {
+                angle = fopAcM_searchPlayerAngleY(this);
+            }
+#else
             angle = fopAcM_searchPlayerAngleY(this);
+#endif
             mAngleFromPlayer = angle;
             current.angle.y = angle;
             tmp = l_HIO.field_0x18;
@@ -451,12 +563,29 @@ void daE_FZ_c::executeWait() {
 
     cLib_addCalcAngleS2(&shape_angle.y, mAngleFromPlayer, 8, 1280);
 
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    f32 targetDistance = 0.0f;
+    // Co-op: wait-state awareness can acquire any active player immediately and uses that same
+    // player for line of sight.
+    if (coOpSelectCombatTargetState(this, "e_fz.wait", false,
+                                    dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState,
+                                    &targetDistance, NULL) &&
+        targetDistance <= tmp && !way_gake_check())
+    {
+        if (!fopAcM_otherBgCheck(this, targetState.actor)) {
+            current.angle.y = shape_angle.y;
+            setActionMode(ACT_ATTACK, 0);
+        }
+    }
+#else
     if (fopAcM_searchPlayerDistance(this) <= tmp && !way_gake_check()) {
         if (!fopAcM_otherBgCheck(this, dComIfGp_getPlayer(0))) {
             current.angle.y = shape_angle.y;
             setActionMode(ACT_ATTACK, 0);
         }
     }
+#endif
 }
 
 void daE_FZ_c::executeMove() {
@@ -478,9 +607,21 @@ void daE_FZ_c::executeMove() {
         } else {
             shape_angle.y = current.angle.y;
 
+#if TARGET_PC
+            f32 targetDistance = 0.0f;
+            // Co-op: move-state attack range follows the retained combat target.
+            if (coOpSelectCombatTargetState(this, "e_fz.move", false,
+                                            dusk::coop::EnemyTargetMode::StickyCombat, NULL,
+                                            &targetDistance, NULL) &&
+                targetDistance <= l_HIO.field_0x14)
+            {
+                setActionMode(ACT_ATTACK, 0);
+            }
+#else
             if (fopAcM_searchPlayerDistance(this) <= l_HIO.field_0x14) {
                 setActionMode(ACT_ATTACK, 0);
             }
+#endif
         }
     }
 }
@@ -488,7 +629,21 @@ void daE_FZ_c::executeMove() {
 void daE_FZ_c::executeAttack() {
     switch (mActionPhase) {
     case 0:
+#if TARGET_PC
+        {
+            s16 targetAngle = 0;
+            // Co-op: attack steering follows the retained combat target through the charge.
+            if (!coOpSelectCombatTargetState(this, "e_fz.attack", true,
+                                             dusk::coop::EnemyTargetMode::StickyCombat, NULL, NULL,
+                                             &targetAngle))
+            {
+                targetAngle = fopAcM_searchPlayerAngleY(this);
+            }
+            cLib_addCalcAngleS2(&current.angle.y, targetAngle, 8, 0x300);
+        }
+#else
         cLib_addCalcAngleS2(&current.angle.y, fopAcM_searchPlayerAngleY(this), 8, 0x300);
+#endif
         if (way_gake_check() == 0) {
             cLib_addCalc2(&speedF, l_HIO.field_0x20, 0.7f, 1.0f);
         } else {
@@ -496,11 +651,28 @@ void daE_FZ_c::executeAttack() {
         }
     default:
         shape_angle.y = current.angle.y;
+#if TARGET_PC
+        {
+            dusk::coop::selected_target_state::SelectedTargetState targetState;
+            f32 targetDistance = 0.0f;
+            // Co-op: attack continuation tests LOS/range against the retained target actor.
+            if (coOpSelectCombatTargetState(this, "e_fz.attack", true,
+                                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
+                                            &targetDistance, NULL) &&
+                !(targetDistance >= l_HIO.field_0x10))
+            {
+                if (fopAcM_otherBgCheck(this, targetState.actor) == 0) {
+                    return;
+                }
+            }
+        }
+#else
         if (!(fopAcM_searchPlayerDistance(this) >= l_HIO.field_0x10)) {
             if (fopAcM_otherBgCheck(this, dComIfGp_getPlayer(0)) == 0) {
                 return;
             }
         }
+#endif
     }
 
     setActionMode(ACT_WAIT, 0);
@@ -680,6 +852,31 @@ void daE_FZ_c::action() {
         field_0x714 = 0;
     }
 
+#if TARGET_PC
+    {
+        dusk::coop::selected_target_state::SelectedTargetState targetState;
+        // Co-op: battle attention visibility should be based on the current co-op combat target's
+        // line of sight when one exists; otherwise vanilla P1 fallback keeps single-player behavior.
+        if (coOpSelectCombatTargetState(this, "e_fz.attention", false,
+                                        dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState,
+                                        NULL, NULL))
+        {
+            if (!fopAcM_otherBgCheck(this, targetState.actor)) {
+                fopAcM_OnStatus(this, 0);
+                attention_info.flags |= fopAc_AttnFlag_BATTLE_e;
+            } else {
+                fopAcM_OffStatus(this, 0);
+                attention_info.flags &= ~fopAc_AttnFlag_BATTLE_e;
+            }
+        } else if (!fopAcM_otherBgCheck(this, dComIfGp_getPlayer(0))) {
+            fopAcM_OnStatus(this, 0);
+            attention_info.flags |= fopAc_AttnFlag_BATTLE_e;
+        } else {
+            fopAcM_OffStatus(this, 0);
+            attention_info.flags &= ~fopAc_AttnFlag_BATTLE_e;
+        }
+    }
+#else
     if (!fopAcM_otherBgCheck(this, dComIfGp_getPlayer(0))) {
         fopAcM_OnStatus(this, 0);
         attention_info.flags |= fopAc_AttnFlag_BATTLE_e;
@@ -687,6 +884,7 @@ void daE_FZ_c::action() {
         fopAcM_OffStatus(this, 0);
         attention_info.flags &= ~fopAc_AttnFlag_BATTLE_e;
     }
+#endif
 
     linkSearch = false;
     damage_check();
@@ -899,6 +1097,11 @@ static int daE_FZ_IsDelete(daE_FZ_c* i_this) {
 }
 
 s32 daE_FZ_c::_delete() {
+#if TARGET_PC
+    // Co-op: clear retained target/overlay state when this actor leaves the room.
+    dusk::coop::clearAllEnemyTargets(this);
+#endif
+
     dComIfG_resDelete(&mPhaseReq, "E_FZ");
 
     if (field_0xc21 != 0) {
