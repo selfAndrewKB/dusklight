@@ -15,6 +15,7 @@
 #include <cstring>
 
 #if TARGET_PC
+#include "dusk/coop/enemy_targeting.h"
 #include "dusk/frame_interpolation.h"
 #endif
 
@@ -266,9 +267,26 @@ static void* s_s_sub(void* i_actor, void* i_data) {
     return NULL;
 }
 
+#if TARGET_PC
+// Co-op: declared before vanilla callsites; definition below centralizes Combat target policy.
+static bool coOpSelectCombatTarget(e_sm2_class* i_this, const char* label, bool committed,
+                                   dusk::coop::EnemyTargetMode mode, fopAc_ac_c** player,
+                                   f32* distance, s16* angle_y);
+#endif
+
 static BOOL pl_check(e_sm2_class* i_this, f32 i_range) {
     fopAc_ac_c* actor = &i_this->enemy;
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+
+#if TARGET_PC
+    // Co-op: Chuchu awareness checks line of sight against the active combat target, not P1.
+    if (!coOpSelectCombatTarget(i_this, "e_sm2.pl_check", i_this->action == ACTION_ATTACK,
+                                dusk::coop::EnemyTargetMode::ImmediateAcquire, &player,
+                                &i_this->dist_to_pl, &i_this->angle_to_pl))
+    {
+        return FALSE;
+    }
+#endif
 
     if (i_this->dist_to_pl < i_range + (100.0f * i_this->size) && !fopAcM_otherBgCheck(actor, player)) {
         return TRUE;
@@ -278,6 +296,38 @@ static BOOL pl_check(e_sm2_class* i_this, f32 i_range) {
 }
 
 static daE_SM2_HIO_c l_HIO;
+
+#if TARGET_PC
+// Co-op: Chuchu 2 has one combat target owner; labels identify vanilla callsites for diagnostics
+// and must not create independent retention state.
+static bool coOpSelectCombatTarget(e_sm2_class* i_this, const char* label, bool committed,
+                                   dusk::coop::EnemyTargetMode mode, fopAc_ac_c** player,
+                                   f32* distance, s16* angle_y) {
+    fopAc_ac_c* actor = &i_this->enemy;
+    dusk::coop::EnemyTargetContext context;
+    context.observer = actor;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    if (!target.found || target.localActor == NULL) {
+        return false;
+    }
+
+    if (player != NULL) {
+        *player = target.localActor;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    return true;
+}
+#endif
 
 static void normal_move(e_sm2_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
@@ -1034,8 +1084,18 @@ static void action(e_sm2_class* i_this) {
     cXyz work;
     cXyz offset;
 
+#if TARGET_PC
+    // Co-op: preserve vanilla cached angle/distance flow, but fill those facts from the selected
+    // active combat target instead of the primary player singleton.
+    coOpSelectCombatTarget(i_this, "e_sm2.action", i_this->action == ACTION_ATTACK,
+                           i_this->action == ACTION_NORMAL_MOVE
+                               ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                               : dusk::coop::EnemyTargetMode::StickyCombat,
+                           NULL, &i_this->dist_to_pl, &i_this->angle_to_pl);
+#else
     i_this->angle_to_pl = fopAcM_searchPlayerAngleY(actor);
     i_this->dist_to_pl = fopAcM_searchPlayerDistance(actor);
+#endif
 
     damage_check(i_this);
 
@@ -1469,6 +1529,10 @@ static int daE_SM2_IsDelete(e_sm2_class* i_this) {
 static int daE_SM2_Delete(e_sm2_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
     fopAcM_RegisterDeleteID(&i_this->enemy, "E_SM2");
+#if TARGET_PC
+    // Co-op: purge retained target/overlay state when this enemy leaves the actor system.
+    dusk::coop::clearAllEnemyTargets(actor);
+#endif
 
     #if DEBUG
     l_HIO.removeHIO(i_this->enemy);

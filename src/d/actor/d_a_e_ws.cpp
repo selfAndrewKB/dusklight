@@ -7,8 +7,14 @@
 
 #include "d/actor/d_a_e_ws.h"
 #include "d/actor/d_a_obj_carry.h"
+#include "d/actor/d_a_player.h"
 #include <cmath>
 #include "f_op/f_op_actor_enemy.h"
+
+#if TARGET_PC
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
 
 #define PLAYER_NOT_FOUND  0
 #define PLAYER_TARGET   1
@@ -173,6 +179,73 @@ static u8 hio_set;
 
 static daE_WS_HIO_c l_HIO;
 
+#if TARGET_PC
+// Co-op: Walltula has one combat target owner; labels identify vanilla callsites for diagnostics
+// and must not create independent retention state.
+static bool coOpSelectTargetState(daE_WS_c* i_this, const char* label,
+                                  dusk::coop::EnemyTargetMode mode,
+                                  dusk::coop::selected_target_state::SelectedTargetState* state) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = i_this->mAction == daE_WS_c::ACTION_ATTACK_e;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    return true;
+}
+
+static cXyz coOpWalltulaTargetPos(
+    const dusk::coop::selected_target_state::SelectedTargetState& state) {
+    cXyz player_pos = state.pos;
+    MtxP joint_mtx = state.player != NULL ? state.player->getModelJointMtx(0) : NULL;
+    if (joint_mtx != NULL) {
+        mDoMtx_stack_c::copy(joint_mtx);
+        mDoMtx_stack_c::multVecZero(&player_pos);
+    }
+    return player_pos;
+}
+
+static bool coOpWalltulaPlayerActive(
+    const dusk::coop::selected_target_state::SelectedTargetState& state, const cXyz& player_pos,
+    const cXyz& enemy_pos, f32 near_distance) {
+    if (state.player != NULL && state.player->checkClimbMove()) {
+        return true;
+    }
+
+    const int slot = static_cast<int>(state.slot);
+    return dComIfGp_checkPlayerStatus1(slot, 0x2000000) ||
+           dComIfGp_checkPlayerStatus1(slot, 0x10000) ||
+           enemy_pos.abs(player_pos) < near_distance;
+}
+
+static bool coOpWalltulaIsClimbOrStatusActive(
+    const dusk::coop::selected_target_state::SelectedTargetState& state) {
+    if (state.player != NULL && state.player->checkClimbMove()) {
+        return true;
+    }
+
+    const int slot = static_cast<int>(state.slot);
+    return dComIfGp_checkPlayerStatus1(slot, 0x2000000) ||
+           dComIfGp_checkPlayerStatus1(slot, 0x10000);
+}
+#endif
+
 bool daE_WS_c::checkInSearchRange(cXyz i_basePos, cXyz i_targetPos) {
     if (calcTargetDist(i_basePos, i_targetPos) < l_HIO.search_range && std::abs(i_basePos.y - i_targetPos.y) < l_HIO.search_y_range) {
         return true;
@@ -186,10 +259,27 @@ int daE_WS_c::checkPlayerPos() {
     mDoMtx_stack_c::copy(daPy_getLinkPlayerActorClass()->getModelJointMtx(0));
     mDoMtx_stack_c::multVecZero(&player_pos);
 
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: wake/search first prefers a player actively climbing or in the vanilla wall-status
+    // states, then falls back to the Combat target so close non-climbing players still work.
+    targetState = dusk::coop::selected_target_state::findNearestPlayerState(
+        this, "e_ws.check_player_pos.climb", coOpWalltulaIsClimbOrStatusActive);
+    if (!targetState.available &&
+        !coOpSelectTargetState(this, "e_ws.check_player_pos",
+                               dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState))
+    {
+        return PLAYER_NOT_FOUND;
+    }
+    player_pos = coOpWalltulaTargetPos(targetState);
+
+    if ((coOpWalltulaPlayerActive(targetState, player_pos, current.pos, 150.0f)) &&
+#else
     if ((daPy_getPlayerActorClass()->checkClimbMove() ||
         dComIfGp_checkPlayerStatus1(0, 0x2000000) ||
         dComIfGp_checkPlayerStatus1(0, 0x10000) ||
         calcTargetDist(current.pos, player_pos) < 150.0f) &&
+#endif
         checkInSearchRange(player_pos, mHomePos) && checkInSearchRange(current.pos, mHomePos))
     {
         dBgS_GndChk gndchk;
@@ -224,6 +314,20 @@ bool daE_WS_c::checkAttackEnd() {
     mDoMtx_stack_c::copy(daPy_getLinkPlayerActorClass()->getModelJointMtx(0));
     mDoMtx_stack_c::multVecZero(&player_pos);
 
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: attack continuation follows the retained combat target's climb/range facts.
+    if (!coOpSelectTargetState(this, "e_ws.attack_end",
+                               dusk::coop::EnemyTargetMode::StickyCombat, &targetState))
+    {
+        setActionMode(ACTION_WAIT_e);
+        speedF = 0.0f;
+        return true;
+    }
+    player_pos = coOpWalltulaTargetPos(targetState);
+
+    BOOL checkPlayerNear = coOpWalltulaPlayerActive(targetState, player_pos, current.pos, 200.0f);
+#else
     BOOL checkPlayerNear = FALSE;
     if (
         daPy_getPlayerActorClass()->checkClimbMove() ||
@@ -233,6 +337,7 @@ bool daE_WS_c::checkAttackEnd() {
     ) {
         checkPlayerNear = TRUE;
     }
+#endif
     if (!checkPlayerNear ||
         !checkInSearchRange(current.pos, mHomePos) ||
         checkBeforeBg(shape_angle.y)
@@ -334,6 +439,16 @@ void daE_WS_c::executeAttack() {
     cXyz player_pos;
     mDoMtx_stack_c::copy(daPy_getLinkPlayerActorClass()->getModelJointMtx(0));
     mDoMtx_stack_c::multVecZero(&player_pos);
+
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: attack facing uses the retained combat target selected above, not the P1 joint.
+    if (coOpSelectTargetState(this, "e_ws.attack",
+                              dusk::coop::EnemyTargetMode::StickyCombat, &targetState))
+    {
+        player_pos = coOpWalltulaTargetPos(targetState);
+    }
+#endif
 
     switch (mMode) {
     case 0:
@@ -889,6 +1004,10 @@ static int daE_WS_IsDelete(daE_WS_c* a_this) {
 
 int daE_WS_c::_delete() {
     dComIfG_resDelete(&mPhase, "E_WS");
+#if TARGET_PC
+    // Co-op: purge retained target/overlay state when this Walltula leaves the actor system.
+    dusk::coop::clearAllEnemyTargets(this);
+#endif
 
     if (mHioSet) {
         hio_set = FALSE;
