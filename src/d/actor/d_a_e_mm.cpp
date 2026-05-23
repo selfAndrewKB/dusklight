@@ -10,6 +10,12 @@
 
 #include "f_op/f_op_actor_enemy.h"
 
+#if TARGET_PC
+#include "dusk/coop/defender_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 enum daE_MM_ACTION {
     ACTION_NORMAL,
     ACTION_DASH,
@@ -77,8 +83,36 @@ static int daE_MM_Draw(e_mm_class* i_this) {
     return 1;
 }
 
+#if TARGET_PC
+// Co-op: declare the local target helper before the vanilla search helper that replaces P1 checks.
+static bool coOpSelectCombatTargetState(
+    e_mm_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance, s16* angle_y);
+#endif
+
 static BOOL pl_check(e_mm_class* i_this, f32 i_range, s16) {
     fopAc_ac_c* actor = &i_this->enemy;
+
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    f32 targetDistance = 0.0f;
+    // Co-op: search checks acquire any active player and test LOS/Y range against that same target.
+    // The player-status bit remains P1/global until its exact vanilla meaning is classified.
+    if (coOpSelectCombatTargetState(i_this, "e_mm.pl_check", false,
+                                    dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState,
+                                    &targetDistance, &i_this->angle_to_pl))
+    {
+        i_this->dist_to_pl = targetDistance;
+        if (targetDistance < i_range && !fopAcM_otherBgCheck(actor, targetState.actor) &&
+            !dComIfGp_checkPlayerStatus0(0, 0x100) &&
+            fopAcM_searchActorDistanceY(actor, targetState.actor) < 100.0f)
+        {
+            return 1;
+        }
+
+        return 0;
+    }
+#endif
 
     if (i_this->dist_to_pl < i_range && !fopAcM_otherBgCheck(actor, dComIfGp_getPlayer(0)) && !dComIfGp_checkPlayerStatus0(0, 0x100)) {
         return 1;
@@ -90,6 +124,45 @@ static BOOL pl_check(e_mm_class* i_this, f32 i_range, s16) {
 static u8 hio_set;
 
 static daE_MM_HIO_c l_HIO;
+
+#if TARGET_PC
+// Co-op: Donketsu uses one combat target for search/dash steering; labels are diagnostics only.
+static bool coOpSelectCombatTargetState(
+    e_mm_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance, s16* angle_y) {
+    fopAc_ac_c* actor = &i_this->enemy;
+    dusk::coop::EnemyTargetContext context;
+    context.observer = actor;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        actor, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+
+    return true;
+}
+#endif
 
 static void damage_checkMetOn(e_mm_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
@@ -173,6 +246,14 @@ static void damage_check(e_mm_class* i_this) {
             i_this->ccStts.Move();
 
             if (i_this->ccSph.ChkAtShieldHit()) {
+#if TARGET_PC
+                // Co-op: shield reflection is enemy attack contact; record the actual defender
+                // slot instead of treating this as damage ownership or target selection.
+                const dusk::coop::defender_owner::DefenderOwnerResult defender =
+                    dusk::coop::defender_owner::resolveDefenderOwner(actor, &i_this->ccSph);
+                dusk::coop::defender_owner::recordDefenderOwnerContact("e_mm.attack_shield", actor,
+                                                                        defender);
+#endif
                 actor->speedF = -20.0f + BREG_F(14);
                 if (actor->argument == 1) {
                     actor->speedF = -1.0f * l_HIO.donketsu_reflect_speed;
@@ -466,7 +547,11 @@ static void e_mm_normal(e_mm_class* i_this) {
         pl_search_range = 10.0f * i_this->field_0x5b4;
     }
 
-    if (pl_check(i_this, pl_search_range, 0x5000) && fopAcM_searchActorDistanceY(actor, dComIfGp_getPlayer(0)) < 100.0f) {
+    if (pl_check(i_this, pl_search_range, 0x5000)
+#if !TARGET_PC
+        && fopAcM_searchActorDistanceY(actor, dComIfGp_getPlayer(0)) < 100.0f
+#endif
+    ) {
         i_this->action = ACTION_DASH;
         i_this->mode = 0;
     }
@@ -784,8 +869,22 @@ static void action(e_mm_class* i_this) {
     cXyz sp40;
     cXyz sp34;
 
+#if TARGET_PC
+    // Co-op: cache the current combat target once per action tick so normal/dash/turn logic share
+    // one selected player instead of recomputing P1 metrics.
+    if (!coOpSelectCombatTargetState(
+            i_this, "e_mm.action", i_this->action == ACTION_DASH,
+            i_this->action == ACTION_NORMAL ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                                            : dusk::coop::EnemyTargetMode::StickyCombat,
+            NULL, &i_this->dist_to_pl, &i_this->angle_to_pl))
+    {
+        i_this->angle_to_pl = fopAcM_searchPlayerAngleY(actor);
+        i_this->dist_to_pl = fopAcM_searchPlayerDistance(actor);
+    }
+#else
     i_this->angle_to_pl = fopAcM_searchPlayerAngleY(actor);
     i_this->dist_to_pl = fopAcM_searchPlayerDistance(actor);
+#endif
 
     if (i_this->field_0x672 != 0) {
         damage_checkMetOn(i_this);
@@ -996,6 +1095,11 @@ static int daE_MM_Delete(e_mm_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
 
     fopAcM_GetID(actor);
+#if TARGET_PC
+    // Co-op: clear retained target/overlay state when this actor leaves the room.
+    dusk::coop::clearAllEnemyTargets(actor);
+#endif
+
     dComIfG_resDelete(&i_this->phase, "E_MM");
 
     if (i_this->field_0xc00) {
