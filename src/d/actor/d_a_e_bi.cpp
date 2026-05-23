@@ -13,6 +13,12 @@
 #include "f_op/f_op_actor_enemy.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 class daE_BI_HIO_c : public JORReflexible {
 public:
     daE_BI_HIO_c();
@@ -109,12 +115,68 @@ static int daE_BI_Draw(e_bi_class* i_this) {
     return 1;
 }
 
+#if TARGET_PC
+// Co-op: Bomb Bugs use one combat target for wake/tracking/attack range; labels are diagnostics
+// only and must not become independent target-retention owners.
+static bool coOpSelectCombatTargetState(
+    e_bi_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance, s16* angle_y) {
+    fopAc_ac_c* actor = &i_this->actor;
+    dusk::coop::EnemyTargetContext context;
+    context.observer = actor;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        actor, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+
+    return true;
+}
+#endif
+
 static BOOL pl_check(e_bi_class* i_this, f32 search_area) {
     fopAc_ac_c* actor = &i_this->actor;
 
     if (i_this->arg1 == 1) {
         return FALSE;
     }
+
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: wake/search checks should notice the nearest active player now, not stale P1.
+    if (coOpSelectCombatTargetState(i_this, "e_bi.pl_check", false,
+                                    dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState,
+                                    NULL, NULL))
+    {
+        i_this->dis = (actor->home.pos - targetState.pos).abs();
+        if (i_this->dis < search_area && !fopAcM_otherBgCheck(actor, targetState.actor)) {
+            return TRUE;
+        }
+
+        return FALSE;
+    }
+#endif
 
     fopAc_ac_c* pl = dComIfGp_getPlayer(0);
     if (i_this->dis < search_area && !fopAcM_otherBgCheck(actor, pl)) {
@@ -173,6 +235,17 @@ static void damage_check(e_bi_class* i_this) {
                 actor->speedF = 0.0f;
 
                 if (i_this->at_info.mHitType == HIT_TYPE_STUN) {
+#if TARGET_PC
+                    // Co-op: resolve the local actor cache from the damage owner before reading facing.
+                    dusk::coop::damage_owner::DamageOwnerResult owner =
+                        dusk::coop::damage_owner::resolveDamageOwner(actor, i_this->at_info.mpCollider);
+                    dusk::coop::damage_owner::recordDamageOwnerHit("e_bi.damage", actor, owner,
+                                                                   &i_this->at_info);
+                    if (owner.localPlayerActor != NULL) {
+                        player = owner.localPlayerActor;
+                    }
+#endif
+                    // Co-op: stun knockback follows the player who caused this hit, not global P1.
                     i_this->field_0x6a6 = player->shape_angle.y;
                 } else {
                     i_this->field_0x6a6 = i_this->target_angle + 0x8000;
@@ -292,13 +365,22 @@ static void e_bi_move(e_bi_class* i_this) {
             movement_spd = l_HIO.movement_spd;
             i_this->target = i_this->target_angle;
 
-            if (fopAcM_searchPlayerDistance(actor) < KREG_F(7) + 150.0f) {
-                i_this->mode = 2;
-                anm_init(i_this, BCK_BI_ATTACK, 3.0f, J3DFrameCtrl::EMode_NONE, 1.0f);
-                movement_spd = 0.0f;
-                actor->speedF = movement_spd;
-            } else if (!pl_check(i_this, l_HIO.track_range)) {
-                i_this->mode = 5;
+            {
+                f32 attack_distance = fopAcM_searchPlayerDistance(actor);
+#if TARGET_PC
+                // Co-op: close attack gate uses the retained combat target from the same scope.
+                coOpSelectCombatTargetState(i_this, "e_bi.move", false,
+                                            dusk::coop::EnemyTargetMode::StickyCombat, NULL,
+                                            &attack_distance, NULL);
+#endif
+                if (attack_distance < KREG_F(7) + 150.0f) {
+                    i_this->mode = 2;
+                    anm_init(i_this, BCK_BI_ATTACK, 3.0f, J3DFrameCtrl::EMode_NONE, 1.0f);
+                    movement_spd = 0.0f;
+                    actor->speedF = movement_spd;
+                } else if (!pl_check(i_this, l_HIO.track_range)) {
+                    i_this->mode = 5;
+                }
             }
             break;
 
@@ -510,8 +592,29 @@ static void action(e_bi_class* i_this) {
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
     cXyz mae, ato;
 
+#if TARGET_PC
+    {
+        dusk::coop::selected_target_state::SelectedTargetState targetState;
+        const dusk::coop::EnemyTargetMode targetMode =
+            (i_this->action == ACTION_WAIT || i_this->action == ACTION_UP)
+                ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                : dusk::coop::EnemyTargetMode::StickyCombat;
+        // Co-op: action-wide cached metrics keep Bomb Bug steering and home-distance checks on the
+        // selected active player while preserving the vanilla state machine.
+        if (coOpSelectCombatTargetState(i_this, "e_bi.action", i_this->action == ACTION_EX,
+                                        targetMode, &targetState, NULL,
+                                        &i_this->target_angle))
+        {
+            i_this->dis = (actor->home.pos - targetState.pos).abs();
+        } else {
+            i_this->target_angle = fopAcM_searchPlayerAngleY(actor);
+            i_this->dis = (actor->home.pos - player->current.pos).abs();
+        }
+    }
+#else
     i_this->target_angle = fopAcM_searchPlayerAngleY(actor);
     i_this->dis = (actor->home.pos - player->current.pos).abs();
+#endif
 
     damage_check(i_this);
 
@@ -838,6 +941,11 @@ static int daE_BI_IsDelete(e_bi_class* i_this) {
 
 static int daE_BI_Delete(e_bi_class* i_this) {
     fopAc_ac_c* actor = &i_this->actor;
+
+#if TARGET_PC
+    // Co-op: delete purges sidecar target/debug state for this actor.
+    dusk::coop::clearAllEnemyTargets(actor);
+#endif
 
     dComIfG_resDelete(&i_this->phase, "E_BI");
 

@@ -9,6 +9,11 @@
 #include "d/d_com_inf_game.h"
 #include "d/d_s_play.h"
 
+#if TARGET_PC
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 enum daE_IS_ACTION {
     ACTION_WAIT = 0,
     ACTION_MOVE = 1,
@@ -72,8 +77,75 @@ static int daE_IS_Draw(e_is_class* a_this) {
     return 1;
 }
 
+#if TARGET_PC
+// Co-op: Idelia Statue uses one combat target for wake/move/attack metrics; labels are diagnostics
+// only and must not become independent target-retention owners.
+static bool coOpSelectCombatTargetState(
+    e_is_class* a_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance, s16* angle_y) {
+    fopAc_ac_c* actor = &a_this->enemy;
+    dusk::coop::EnemyTargetContext context;
+    context.observer = actor;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        actor, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+
+    return true;
+}
+#endif
+
 static BOOL pl_check(e_is_class* a_this, f32 i_srchRange, s16 i_srchAngle) {
     fopAc_ac_c* actor = &a_this->enemy;
+
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    f32 targetDistance = 0.0f;
+    s16 targetAngle = 0;
+    const dusk::coop::EnemyTargetMode targetMode =
+        a_this->action == ACTION_WAIT ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                                      : dusk::coop::EnemyTargetMode::StickyCombat;
+    // Co-op: search/continuation checks test LOS and facing against the selected active player.
+    if (coOpSelectCombatTargetState(a_this, "e_is.pl_check", a_this->action == ACTION_ATTACK,
+                                    targetMode, &targetState, &targetDistance, &targetAngle))
+    {
+        a_this->player_distance = targetDistance;
+        a_this->angle_to_player = targetAngle;
+        if (targetDistance < i_srchRange) {
+            s16 temp_r0 = actor->shape_angle.y - targetAngle;
+            if (temp_r0 < i_srchAngle && temp_r0 > (s16)-i_srchAngle &&
+                !fopAcM_otherBgCheck(actor, targetState.actor))
+            {
+                return TRUE;
+            }
+        }
+
+        return FALSE;
+    }
+#endif
+
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
 
     if (a_this->player_distance < i_srchRange) {
@@ -425,8 +497,24 @@ static void action(e_is_class* a_this) {
 
     cXyz mae;
     cXyz ato;
+#if TARGET_PC
+    {
+        const dusk::coop::EnemyTargetMode targetMode =
+            a_this->action == ACTION_WAIT ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                                          : dusk::coop::EnemyTargetMode::StickyCombat;
+        // Co-op: action-wide target metrics keep movement and attack steering on one Combat owner.
+        if (!coOpSelectCombatTargetState(a_this, "e_is.action", a_this->action == ACTION_ATTACK,
+                                         targetMode, NULL, &a_this->player_distance,
+                                         &a_this->angle_to_player))
+        {
+            a_this->angle_to_player = fopAcM_searchPlayerAngleY(actor);
+            a_this->player_distance = fopAcM_searchPlayerDistance(actor);
+        }
+    }
+#else
     a_this->angle_to_player = fopAcM_searchPlayerAngleY(actor);
     a_this->player_distance = fopAcM_searchPlayerDistance(actor);
+#endif
     a_this->field_0x6ac = 1000.0f + TREG_F(0);
 
     s8 var_r29 = 1;
@@ -600,6 +688,11 @@ static int daE_IS_IsDelete(e_is_class* a_this) {
 
 static int daE_IS_Delete(e_is_class* a_this) {
     fopAc_ac_c* actor = &a_this->enemy;
+
+#if TARGET_PC
+    // Co-op: delete purges sidecar target/debug state for this actor.
+    dusk::coop::clearAllEnemyTargets(actor);
+#endif
 
     fopAcM_GetID(actor);
     dComIfG_resDelete(&a_this->phase, "E_IS");

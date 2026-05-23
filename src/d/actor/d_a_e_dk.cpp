@@ -11,6 +11,11 @@
 #include "d/d_s_play.h"
 #include <cmath>
 
+#if TARGET_PC
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 #define ACTION_MODE_WAIT 0
 #define ACTION_MODE_CHASE 1
 #define ACTION_MODE_ATTACK 2
@@ -224,10 +229,68 @@ static u8 data_806AD7F8;
 
 static daE_DK_HIO_c l_HIO;
 
+#if TARGET_PC
+// Co-op: Bari uses one combat target for search/chase/attack decisions; labels are diagnostics
+// only and must not become independent target-retention owners.
+static bool coOpSelectCombatTargetState(
+    daE_DK_c* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance, s16* angle_y) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+
+    return true;
+}
+#endif
+
 bool daE_DK_c::checkPlayerSearch() {
     if (current.pos.abs(home.pos) > field_0x6a8) {
         return 0;
     }
+
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: wake/search checks should notice the nearest active player around home, not stale P1.
+    if (coOpSelectCombatTargetState(this, "e_dk.search", false,
+                                    dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState,
+                                    NULL, NULL))
+    {
+        if (targetState.pos.abs(home.pos) > l_HIO.player_detection_range) {
+            return 0;
+        }
+
+        if (fopAcM_otherBgCheck(this, targetState.actor) != 0) {
+            return 0;
+        }
+
+        return 1;
+    }
+#endif
 
     if (daPy_getPlayerActorClass()->current.pos.abs(home.pos) > l_HIO.player_detection_range) {
         return 0;
@@ -243,6 +306,11 @@ bool daE_DK_c::checkPlayerSearch() {
 int daE_DK_c::checkPlayerAttack(f32 param_0) {
     if (field_0x69c == 0) {
         f32 dist = fopAcM_searchPlayerDistance(this);
+#if TARGET_PC
+        // Co-op: attack gates use the retained combat target selected by search/chase.
+        coOpSelectCombatTargetState(this, "e_dk.attack_gate", false,
+                                    dusk::coop::EnemyTargetMode::StickyCombat, NULL, &dist, NULL);
+#endif
         if (field_0x690 == 0 && dist < l_HIO.first_attack_range) {
             if (dist > 8.0f) {
                 setActionMode(2, 0);
@@ -467,7 +535,22 @@ void daE_DK_c::executeChase() {
         }
         f32 fVar4 = mpMorfSO->getFrame();
         if (mpMorfSO->checkFrame(70.0f) != 0 || mpMorfSO->checkFrame(150.0f) != 0) {
-            dirFromHome = current.pos - daPy_getPlayerActorClass()->current.pos;
+#if TARGET_PC
+            dusk::coop::selected_target_state::SelectedTargetState targetState;
+            s16 targetAngle = fopAcM_searchPlayerAngleY(this);
+            // Co-op: chase hop direction and facing follow the retained Combat target.
+            if (coOpSelectCombatTargetState(this, "e_dk.chase", false,
+                                            dusk::coop::EnemyTargetMode::StickyCombat,
+                                            &targetState, NULL, &targetAngle))
+            {
+                dirFromHome = current.pos - targetState.pos;
+                current.angle.y = targetAngle;
+            } else
+#endif
+            {
+                dirFromHome = current.pos - daPy_getPlayerActorClass()->current.pos;
+                current.angle.y = fopAcM_searchActorAngleY(this, daPy_getPlayerActorClass());
+            }
             if (std::abs(dirFromHome.y) < 50.0f) {
                 field_0x6ac = 5.0f;
             } else {
@@ -482,8 +565,6 @@ void daE_DK_c::executeChase() {
             } else {
                 field_0x6b0 = 3.0f + nREG_F(3);
             }
-
-            current.angle.y = fopAcM_searchActorAngleY(this, daPy_getPlayerActorClass());
         }
         if (fVar4 >= 80.0f) {
             fVar4 -= 80.0f;
@@ -551,16 +632,27 @@ void daE_DK_c::executeAttack() {
         setElectricEffect();
         field_0x6a3 = 1;
         fopAcM_OffStatus(this, fopAcStts_UNK_0x80000_e);
+#if TARGET_PC
+        dusk::coop::selected_target_state::SelectedTargetState targetState;
+        // Co-op: electric contact state is a selected-target fact, not a P1 singleton fact.
+        const bool hasCoOpTarget = coOpSelectCombatTargetState(
+            this, "e_dk.attack", true, dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
+            NULL, NULL);
+        daPy_py_c* electricPlayer =
+            hasCoOpTarget && targetState.player != NULL ? targetState.player : daPy_getPlayerActorClass();
+#else
+        daPy_py_c* electricPlayer = daPy_getPlayerActorClass();
+#endif
         if (mMoveMode == 2) {
             if (field_0x698 == 0) {
                 field_0x69c = 150;
                 setActionMode(1, 0);
             }
-            if (daPy_getPlayerActorClass()->checkElecDamage() != 0) {
+            if (electricPlayer->checkElecDamage() != 0) {
                 mMoveMode = 3;
             }
         } else {
-            if (daPy_getPlayerActorClass()->checkElecDamage() == 0) {
+            if (electricPlayer->checkElecDamage() == 0) {
                 field_0x69c = 150;
                 setActionMode(1, 0);
             }
@@ -766,7 +858,16 @@ void daE_DK_c::action() {
 
     fopAcM_OnStatus(this, fopAcStts_UNK_0x80000_e);
 
-    if (fopAcM_searchPlayerDistance(this) > l_HIO.first_attack_range) {
+    f32 firstAttackDistance = fopAcM_searchPlayerDistance(this);
+#if TARGET_PC
+    // Co-op: the first-attack cooldown reset follows the active Combat target's distance.
+    coOpSelectCombatTargetState(this, "e_dk.action", mActionMode == ACTION_MODE_ATTACK,
+                                mActionMode == ACTION_MODE_WAIT
+                                    ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                                    : dusk::coop::EnemyTargetMode::StickyCombat,
+                                NULL, &firstAttackDistance, NULL);
+#endif
+    if (firstAttackDistance > l_HIO.first_attack_range) {
         field_0x690 = 0x0;
     }
 
@@ -917,6 +1018,11 @@ static int daE_DK_IsDelete(daE_DK_c* i_this) {
 }
 
 int daE_DK_c::_delete() {
+#if TARGET_PC
+    // Co-op: delete purges sidecar target/debug state for this actor.
+    dusk::coop::clearAllEnemyTargets(this);
+#endif
+
     dComIfG_resDelete(&mPhaseReq, "E_DK");
 
     if (mHIOInit != 0) {

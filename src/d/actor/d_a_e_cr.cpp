@@ -9,6 +9,11 @@
 #include "d/d_cc_d.h"
 #include "f_op/f_op_actor_enemy.h"
 
+#if TARGET_PC
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 class daE_CR_HIO_c : public JORReflexible {
 public:
     daE_CR_HIO_c();
@@ -70,6 +75,46 @@ static int daE_CR_Draw(e_cr_class* a_this) {
     return 1;
 }
 
+#if TARGET_PC
+// Co-op: Bombskit/Crazy Runner uses one combat target for proximity awareness and chase angles;
+// callsite labels are diagnostics only.
+static bool coOpSelectCombatTargetState(
+    e_cr_class* a_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance, s16* angle_y) {
+    fopAc_ac_c* actor = &a_this->enemy;
+    dusk::coop::EnemyTargetContext context;
+    context.observer = actor;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        actor, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+
+    return true;
+}
+#endif
+
 static BOOL other_bg_check(e_cr_class* a_this, fopAc_ac_c* i_other) {
     fopAc_ac_c* actor = &a_this->enemy;
     dBgS_LinChk linchk;
@@ -92,6 +137,31 @@ static BOOL other_bg_check(e_cr_class* a_this, fopAc_ac_c* i_other) {
 
 static BOOL pl_check(e_cr_class* a_this, f32 i_range, s16 i_angle) {
     fopAc_ac_c* actor = &a_this->enemy;
+
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    f32 targetDistance = 0.0f;
+    s16 targetAngle = 0;
+    // Co-op: proximity awareness tests the nearest active player against the same cone/LOS rules.
+    if (coOpSelectCombatTargetState(a_this, "e_cr.pl_check", false,
+                                    dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState,
+                                    &targetDistance, &targetAngle))
+    {
+        a_this->dist_to_pl = targetDistance;
+        a_this->angle_to_pl = targetAngle;
+        if (targetDistance < i_range) {
+            s16 angle_diff = actor->shape_angle.y - targetAngle;
+            if (angle_diff < i_angle && angle_diff > (s16)-i_angle &&
+                !other_bg_check(a_this, targetState.actor))
+            {
+                return TRUE;
+            }
+        }
+
+        return FALSE;
+    }
+#endif
+
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
     
     if (a_this->dist_to_pl < i_range) {
@@ -215,11 +285,24 @@ static void e_cr_move(e_cr_class* a_this) {
         }
 
         if (a_this->timers[1] == 0) {
+#if TARGET_PC
+            s16 targetAngle = fopAcM_searchPlayerAngleY(actor);
+            // Co-op: evasive chase angles orbit around the selected active player, not P1.
+            coOpSelectCombatTargetState(a_this, "e_cr.chase_angle", false,
+                                        dusk::coop::EnemyTargetMode::StickyCombat, NULL,
+                                        NULL, &targetAngle);
+            if (way_bg_check(a_this, 200.0f)) {
+                a_this->angle_target = targetAngle + (s16)cM_rndFX(15000.0f);
+            } else {
+                a_this->angle_target = (targetAngle + 0x10000 + (s16)cM_rndFX(15000.0f)) - 0x8000;
+            }
+#else
             if (way_bg_check(a_this, 200.0f)) {
                 a_this->angle_target = fopAcM_searchPlayerAngleY(actor) + (s16)cM_rndFX(15000.0f);
             } else {
                 a_this->angle_target = (fopAcM_searchPlayerAngleY(actor) + 0x10000 + (s16)cM_rndFX(15000.0f)) - 0x8000;
             }
+#endif
 
             a_this->timers[1] = 10.0f + cM_rndF(5.0f);
         }
@@ -324,8 +407,19 @@ static void action(e_cr_class* a_this) {
     cXyz mae;
     cXyz ato;
 
+#if TARGET_PC
+    // Co-op: action-wide metrics keep movement awareness on the selected active player.
+    if (!coOpSelectCombatTargetState(a_this, "e_cr.action", false,
+                                     dusk::coop::EnemyTargetMode::StickyCombat, NULL,
+                                     &a_this->dist_to_pl, &a_this->angle_to_pl))
+    {
+        a_this->angle_to_pl = fopAcM_searchPlayerAngleY(actor);
+        a_this->dist_to_pl = fopAcM_searchPlayerDistance(actor);
+    }
+#else
     a_this->angle_to_pl = fopAcM_searchPlayerAngleY(actor);
     a_this->dist_to_pl = fopAcM_searchPlayerDistance(actor);
+#endif
 
     damage_check(a_this);
 
@@ -444,6 +538,10 @@ static int daE_CR_IsDelete(e_cr_class* a_this) {
 static int daE_CR_Delete(e_cr_class* a_this) {
     fopEn_enemy_c* actor = &a_this->enemy;
     fopAcM_RegisterDeleteID(a_this, "E_CR");
+#if TARGET_PC
+    // Co-op: delete purges sidecar target/debug state for this actor.
+    dusk::coop::clearAllEnemyTargets(actor);
+#endif
     dComIfG_resDelete(&a_this->phase, "E_CR");
 
     if (a_this->HIOInit) {
