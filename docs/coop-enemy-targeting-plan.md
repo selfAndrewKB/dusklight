@@ -236,6 +236,10 @@ The first small policy-backed wave is:
 - Tektite as the first compact non-Bokoblin ground enemy,
 - one accessible compact ground melee backup (`E_BS`, `E_SH`, or another audited compact enemy),
 - target-state-sensitive enemies (`E_WW`, `E_GI`, `E_KK`) only after selected-target state helpers exist.
+- White Wolfos (`E_WW`) is the current target-state-sensitive first pass: combat movement uses one
+  Combat owner plus selected-target state. Its master spawn staging now uses nearest active-player
+  awareness, child facing follows the encounter anchor, and presentation angles use the target
+  slot's local camera when available.
 
 This prevents designing the policy exclusively around Bokoblin while still keeping the code surface small. Continue the broader audit as more enemies are encountered, but do not block the V1 policy spine on every remaining enemy file.
 
@@ -268,6 +272,7 @@ This prevents designing the policy exclusively around Bokoblin while still keepi
 - [x] Convert Tektite in a separate follow-up patch after Bokoblin validates.
 - [x] Add `selected_target_state` V1 and route Tektite ordinary combat target facts, Tektite first-attack prediction, and Bokoblin sword-sound awareness through it.
 - [x] Add `defender_owner` V1 and route Bokoblin guard collision through the actual hit defender.
+- [x] Add a White Wolfos first pass over combat targeting and selected-target state.
 - [x] Validate Tektite in game and inspect `enemy.targeting` labels `e_tt.search`, `e_tt.chase`, `e_tt.attack`, and `e_tt.out_range`.
 - [x] First-pass validate Stalhound `E_SH` as the next compact ground-melee breadth proof.
 - [x] Validate Baby Stalfos `E_BS` as the first swarm-style ground-melee proof.

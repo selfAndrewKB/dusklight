@@ -9,6 +9,11 @@
 #include "f_op/f_op_camera_mng.h"
 #include "d/d_debug_viewer.h"
 #include "d/d_cc_uty.h"
+#include "dusk/coop/camera.h"
+#include "dusk/coop/defender_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/player_query.h"
+#include "dusk/coop/selected_target_state.h"
 #include "f_op/f_op_actor_enemy.h"
 #include "Z2AudioLib/Z2Instances.h"
 #include <cstring>
@@ -150,6 +155,144 @@ static daE_WW_HIO_c l_HIO;
 
 static u8 lbl_237_bss_30; // What name for this variable ?
 
+// Co-op: White Wolfos uses one retained combat target for chase/attack/walk decisions; labels
+// identify vanilla callsites for diagnostics and must not become independent target owners.
+static bool coOpSelectTargetState(daE_WW_c* i_this, const char* label, bool committed,
+                                  dusk::coop::EnemyTargetMode mode,
+                                  dusk::coop::selected_target_state::SelectedTargetState* state,
+                                  f32* distance, s16* angle_y) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+
+    if (!target.found || !targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+
+    return true;
+}
+
+static bool coOpSelectTargetStateOrPrimary(
+    daE_WW_c* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance, s16* angle_y) {
+    if (coOpSelectTargetState(i_this, label, committed, mode, state, distance, angle_y)) {
+        return true;
+    }
+
+    daPy_py_c* player_p = daPy_getPlayerActorClass();
+    if (player_p == NULL) {
+        return false;
+    }
+
+    if (state != NULL) {
+        state->actor = player_p;
+        state->player = player_p;
+        state->pos = player_p->current.pos;
+        state->shapeAngleY = player_p->shape_angle.y;
+        state->speedF = player_p->speedF;
+        state->available = true;
+    }
+
+    if (distance != NULL) {
+        *distance = fopAcM_searchActorDistance(i_this, player_p);
+    }
+
+    if (angle_y != NULL) {
+        *angle_y = fopAcM_searchActorAngleY(i_this, player_p);
+    }
+
+    return true;
+}
+
+static s16 coOpTargetAngleY(daE_WW_c* i_this, const char* label, bool committed,
+                            dusk::coop::EnemyTargetMode mode) {
+    s16 angle_y = fopAcM_searchPlayerAngleY(i_this);
+    coOpSelectTargetStateOrPrimary(i_this, label, committed, mode, NULL, NULL, &angle_y);
+    return angle_y;
+}
+
+static bool coOpTargetState(daE_WW_c* i_this, const char* label, bool committed,
+                            dusk::coop::EnemyTargetMode mode,
+                            dusk::coop::selected_target_state::SelectedTargetState* state) {
+    return coOpSelectTargetStateOrPrimary(i_this, label, committed, mode, state, NULL, NULL);
+}
+
+static bool coOpIsTargetWolf(
+    const dusk::coop::selected_target_state::SelectedTargetState& state) {
+    return state.player != NULL && state.player->checkWolf() != 0;
+}
+
+// Co-op: camera-relative staging should use the selected slot's local presentation camera when
+// one exists. If a slot has no split-screen camera yet, target facing is a better fallback than
+// silently borrowing P1's camera for P2-driven staging.
+static s16 coOpPresentationAngleY(
+    const dusk::coop::selected_target_state::SelectedTargetState& state) {
+    if (state.slot == dusk::coop::PlayerSlot::Slot1 &&
+        dusk::coop::camera::isSplitScreenEnabled() &&
+        dusk::coop::camera::isSecondaryCameraReady())
+    {
+        camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(1));
+        if (camera != NULL) {
+            return fopCamM_GetAngleY(camera);
+        }
+    }
+
+    if (state.slot == dusk::coop::PlayerSlot::Primary) {
+        camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
+        if (camera != NULL) {
+            return fopCamM_GetAngleY(camera);
+        }
+    }
+
+    camera_process_class* camera = dComIfGp_getCamera(0);
+    return state.available ? state.shapeAngleY : (camera != NULL ? fopCamM_GetAngleY(camera) : 0);
+}
+
+// Co-op: hookshot avoidance is a live tool-awareness read. Any active player's hookshot top can
+// force White Wolfos to side-step; this is not current combat target or P1-only state.
+static cXyz* coOpFindNearestHookshotTopPos(daE_WW_c* i_this) {
+    cXyz* best_pos = NULL;
+    f32 best_dist = 500.0f;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+        daPy_py_c* player_p = static_cast<daPy_py_c*>(actor);
+        cXyz* hookshot_pos = player_p != NULL ? player_p->getHookshotTopPos() : NULL;
+        if (hookshot_pos == NULL) {
+            return;
+        }
+
+        f32 dist = hookshot_pos->absXZ(i_this->current.pos);
+        if (dist < best_dist) {
+            best_dist = dist;
+            best_pos = hookshot_pos;
+        }
+    });
+    return best_pos;
+}
+
 daE_WW_HIO_c::daE_WW_HIO_c() {
     field_0x04 = -1;
     model_size = 1.0f;
@@ -208,7 +351,11 @@ int daE_WW_c::JointCallBack(J3DJoint* i_joint, int param_2) {
 }
 
 void daE_WW_c::setHeadAngle() {
-    cXyz player_eye_pos = daPy_getPlayerActorClass()->eyePos;
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpTargetState(this, "e_ww.look", false, dusk::coop::EnemyTargetMode::StickyCombat,
+                    &targetState);
+    cXyz player_eye_pos = targetState.available ? targetState.player->eyePos
+                                                 : daPy_getPlayerActorClass()->eyePos;
     cXyz temp_r1; // Zero position ? effpos effective pos ?
     if (mAction != ACTION_MASTER) {
         if (field_0x75a != 0) {
@@ -302,7 +449,12 @@ void daE_WW_c::damage_check() {
         mCcStts.Move();
         if (mSph1[1].ChkAtShieldHit() != 0) {
             mSph1[1].OffAtShieldHit();
-            if (daPy_getPlayerActorClass()->checkPlayerGuard()) {
+            // Co-op: attack contact asks which player defended the hit, not whether P1 guards.
+            const dusk::coop::defender_owner::DefenderOwnerResult defender =
+                dusk::coop::defender_owner::resolveDefenderOwner(this, &mSph1[1]);
+            dusk::coop::defender_owner::recordDefenderOwnerContact("e_ww.attack_guard", this,
+                                                                    defender);
+            if (defender.guarded) {
                 setActionMode(ACTION_DAMAGE, ACTION_MODE_0);
                 return;
             }
@@ -386,7 +538,8 @@ void daE_WW_c::setRandamNumber() {
 }
 
 s16 daE_WW_c::getNearPlayerAngle() {
-    s16 player_angle = fopAcM_searchPlayerAngleY(this);
+    s16 player_angle =
+        coOpTargetAngleY(this, "e_ww.near_angle", false, dusk::coop::EnemyTargetMode::StickyCombat);
     s16 angle_y = player_angle - shape_angle.y;
     if (abs(angle_y) >= 0x1800) {
         if (angle_y < 0) {
@@ -467,7 +620,13 @@ f32 daE_WW_c::checkCreateBg(cXyz i_vector) {
         }
 
         if (dComIfG_Bgsp().GetSpecialCode(gnd_chk) == 5 || dComIfG_Bgsp().GetPolyAtt0(gnd_chk) == 0xD) {
-            cXyz temp_r1 = daPy_getPlayerActorClass()->current.pos;
+            dusk::coop::selected_target_state::SelectedTargetState targetState;
+            // Co-op: terrain creation/visibility probes that are part of combat repositioning use
+            // the selected target's position after identity is known.
+            coOpTargetState(this, "e_ww.create_bg", false,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState);
+            cXyz temp_r1 =
+                targetState.available ? targetState.pos : daPy_getPlayerActorClass()->current.pos;
             temp_r1.y += 100.0f;
             sp14 = i_vector;
             sp14.y = 100.0f + temp_f1;
@@ -489,7 +648,11 @@ f32 daE_WW_c::checkCreateBg(cXyz i_vector) {
 bool daE_WW_c::checkAttackWall() {
     cXyz curr_pos = current.pos;
     curr_pos.y += 100.0f;
-    cXyz player_eye_pos = daPy_getPlayerActorClass()->eyePos;
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpTargetState(this, "e_ww.attack_wall", false, dusk::coop::EnemyTargetMode::StickyCombat,
+                    &targetState);
+    cXyz player_eye_pos = targetState.available ? targetState.player->eyePos
+                                                : daPy_getPlayerActorClass()->eyePos;
     dBgS_LinChk line_chk;
     line_chk.Set(&curr_pos, &player_eye_pos, NULL);
     if (dComIfG_Bgsp().LineCross(&line_chk)) {
@@ -575,17 +738,17 @@ static void* s_obj_sub(void* i_proc, void* i_data) {
 bool daE_WW_c::checkSideStep() {
     cXyz* temp_r3;
 
-    if (dComIfGp_checkPlayerStatus0(0, 0x4000) != 0) {
-        temp_r3 = daPy_getPlayerActorClass()->getHookshotTopPos();
-        if (temp_r3 != NULL && temp_r3->absXZ(current.pos) < 500.0f) {
-            if ((s16)(cLib_targetAngleY(&current.pos, temp_r3) - shape_angle.y) < 0) {
-                field_0x6c0 = 0;
-            } else {
-                field_0x6c0 = 1;
-            }
-
-            return true;
+    // Co-op: side-step hookshot awareness should respond to any active player's hookshot tip,
+    // not the primary player's status bit and actor state only.
+    temp_r3 = coOpFindNearestHookshotTopPos(this);
+    if (temp_r3 != NULL) {
+        if ((s16)(cLib_targetAngleY(&current.pos, temp_r3) - shape_angle.y) < 0) {
+            field_0x6c0 = 0;
+        } else {
+            field_0x6c0 = 1;
         }
+
+        return true;
     }
 
     fopAc_ac_c* temp_r3_2 = (fopAc_ac_c*) fpcM_Search(s_obj_sub, this);
@@ -610,13 +773,14 @@ static void* s_attack_ww(void* i_actor, void* i_data) {
     return NULL;
 }
 
-void daE_WW_c::createWolf(cXyz param_0, u8 param_1) {
+void daE_WW_c::createWolf(cXyz param_0, u8 param_1, const cXyz& target_pos) {
     fpc_ProcID var_r30;
     u8 var_r29;
     u8 var_r28;
 
-    cXyz sp1C = daPy_getPlayerActorClass()->current.pos;
-    csXyz sp14(0, cLib_targetAngleY(&param_0, &sp1C) + cM_rndFX(4096.0f), 0);
+    // Co-op: spawned child Wolfos should face the player slot that triggered/staged the pack,
+    // not always P1.
+    csXyz sp14(0, cLib_targetAngleY(&param_0, &target_pos) + cM_rndFX(4096.0f), 0);
     u8 temp_r27 = field_0x6a8 / 100.0f;
     if (param_1 == 0) {
         var_r30 = fopAcM_GetLinkId(this);
@@ -650,8 +814,19 @@ static cXyz create_pos[15] = {
 };
 
 void daE_WW_c::executeMaster() {
-    camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
-    cXyz sp48 = daPy_getPlayerActorClass()->current.pos;
+    // Co-op: master mode stages the pack encounter around the nearest active player in range.
+    // This is awareness/staging, not sticky combat targeting, so P2 can wake the spawner without
+    // depending on P1 entering the arena first.
+    dusk::coop::selected_target_state::SelectedTargetState encounterState =
+        dusk::coop::selected_target_state::findNearestPlayerState(this, "e_ww.master_spawn", NULL,
+                                                                  field_0x6a8);
+    if (!encounterState.available) {
+        encounterState = dusk::coop::selected_target_state::stateForSlot(
+            dusk::coop::PlayerSlot::Primary, daPy_getPlayerActorClass());
+    }
+
+    cXyz sp48 = encounterState.available ? encounterState.pos : daPy_getPlayerActorClass()->current.pos;
+    s16 presentation_angle = coOpPresentationAngleY(encounterState);
     f32 temp_f30 = sp48.absXZ(current.pos);
     cXyz sp3C;
     cXyz sp30;
@@ -666,7 +841,7 @@ void daE_WW_c::executeMaster() {
                 sp30.set(0.0f, 0.0f, 3000.0f);
             }
 
-            cLib_offsetPos(&sp3C, &sp48, fopCamM_GetAngleY(camera), &sp30);
+            cLib_offsetPos(&sp3C, &sp48, presentation_angle, &sp30);
             if (current.pos.abs(sp3C) < field_0x6a8) {
                 f32 temp_f31 = checkCreateBg(sp3C);
                 if (-G_CM3D_F_INF != temp_f31) {
@@ -709,7 +884,7 @@ void daE_WW_c::executeMaster() {
 
             sp30 = create_pos[var_r30_2];
             sp30.x += cM_rndFX(200.0f);
-            cLib_offsetPos(&sp3C, &field_0x65c, (s16)fopCamM_GetAngleY(camera), &sp30);
+            cLib_offsetPos(&sp3C, &field_0x65c, presentation_angle, &sp30);
             f32 temp_f31_2 = checkCreateBg(sp3C);
             if (-G_CM3D_F_INF != temp_f31_2) {
                 sp3C.y = temp_f31_2;
@@ -717,7 +892,7 @@ void daE_WW_c::executeMaster() {
                 sp3C = field_0x65c;
             }
 
-            createWolf(sp3C, 1);
+            createWolf(sp3C, 1, sp48);
             field_0x6c8++;
             field_0x6c0++;
             if (field_0x6c0 >= field_0x6b7) {
@@ -821,7 +996,14 @@ void daE_WW_c::executeWait() {
                 var_r28 = FALSE;
             }
         } else if (field_0x6b4 == 0) {
-            if (std::abs(current.pos.y - daPy_getPlayerActorClass()->current.pos.y) > 500.0f) {
+            dusk::coop::selected_target_state::SelectedTargetState targetState;
+            // Co-op: wait-to-attack height checks compare against the visible target that woke
+            // this Wolfos, not always the primary player.
+            coOpTargetState(this, "e_ww.wait_attack", false,
+                            dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState);
+            const cXyz& target_pos =
+                targetState.available ? targetState.pos : daPy_getPlayerActorClass()->current.pos;
+            if (std::abs(current.pos.y - target_pos.y) > 500.0f) {
                 var_r28 = FALSE;
             }
         }
@@ -870,7 +1052,13 @@ int daE_WW_c::calcJumpSpeed() {
 }
 
 void daE_WW_c::executeAttack() {
-    daPy_py_c* player_p = daPy_getPlayerActorClass();
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: attack startup, pursuit, prediction, and follow-through share the retained combat
+    // target so White Wolfos does not steer at P1 while committing to P2.
+    coOpTargetState(this, "e_ww.attack", true, dusk::coop::EnemyTargetMode::StickyCombat,
+                    &targetState);
+    daPy_py_c* player_p =
+        targetState.player != NULL ? targetState.player : daPy_getPlayerActorClass();
 
     switch (mActionMode) {
     case ACTION_MODE_0:
@@ -882,7 +1070,10 @@ void daE_WW_c::executeAttack() {
         /* fallthrough */
     case ACTION_MODE_1:
         field_0x75a = 1;
-        cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 4, 0x800, 0x100);
+        cLib_addCalcAngleS(&shape_angle.y,
+                           coOpTargetAngleY(this, "e_ww.attack_run", true,
+                                            dusk::coop::EnemyTargetMode::StickyCombat),
+                           4, 0x800, 0x100);
         current.angle.y = shape_angle.y;
         if (checkAttackWall() == 0) {
             setActionMode(ACTION_CHASE, ACTION_MODE_2);
@@ -893,7 +1084,11 @@ void daE_WW_c::executeAttack() {
                 return;
             }
 
-            if (fopAcM_searchPlayerDistance(this) < (800.0f + nREG_F(18) + mDistCheckModifier)) {
+            f32 target_dist = fopAcM_searchPlayerDistance(this);
+            coOpSelectTargetStateOrPrimary(this, "e_ww.attack_range", true,
+                                           dusk::coop::EnemyTargetMode::StickyCombat, NULL,
+                                           &target_dist, NULL);
+            if (target_dist < (800.0f + nREG_F(18) + mDistCheckModifier)) {
                 mActionMode = ACTION_MODE_20;
                 setBck(BCK_WW_JUMPATTACKA, J3DFrameCtrl::EMode_NONE, 3.0f, 1.0f);
                 mSound.startCreatureVoice(Z2SE_EN_WW_V_ATTACK, -1);
@@ -908,14 +1103,15 @@ void daE_WW_c::executeAttack() {
             speedF = 0.0f;
         }
 
-        if (field_0x72c == 0 && fopAcM_otherBgCheck(this, daPy_getPlayerActorClass()) != 0) {
+        if (field_0x72c == 0 && fopAcM_otherBgCheck(this, player_p) != 0) {
             setActionMode(ACTION_CHASE, ACTION_MODE_2);
             return;
         }
         break;
 
     case ACTION_MODE_10:
-        field_0x6cc = fopAcM_searchPlayerAngleY(this);
+        field_0x6cc = coOpTargetAngleY(this, "e_ww.attack_sidestep", true,
+                                       dusk::coop::EnemyTargetMode::StickyCombat);
         shape_angle.y = field_0x6cc;
         if (field_0x6c0 == 0) {
             setBck(BCK_WW_SIDESTEPL, J3DFrameCtrl::EMode_NONE, 3.0f, 1.0f);
@@ -939,7 +1135,10 @@ void daE_WW_c::executeAttack() {
 
     case ACTION_MODE_12:
         field_0x75a = 1;
-        cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 4, 0x800, 0x100);
+        cLib_addCalcAngleS(&shape_angle.y,
+                           coOpTargetAngleY(this, "e_ww.attack_air", true,
+                                            dusk::coop::EnemyTargetMode::StickyCombat),
+                           4, 0x800, 0x100);
         if (mObjAcch.ChkGroundHit() != 0) {
             speedF = 0.0f;
             if (mpModelMorf->isStop() != 0) {
@@ -952,7 +1151,11 @@ void daE_WW_c::executeAttack() {
                     var_f31 = 1000.0f + nREG_F(18) + mDistCheckModifier;
                 }
 
-                if (fopAcM_searchPlayerDistance(this) < var_f31 && checkAttackWall() != 0) {
+                f32 target_dist = fopAcM_searchPlayerDistance(this);
+                coOpSelectTargetStateOrPrimary(this, "e_ww.attack_land_range", true,
+                                               dusk::coop::EnemyTargetMode::StickyCombat, NULL,
+                                               &target_dist, NULL);
+                if (target_dist < var_f31 && checkAttackWall() != 0) {
                     mActionMode = ACTION_MODE_20;
                     setBck(BCK_WW_JUMPATTACKA, J3DFrameCtrl::EMode_NONE, 3.0f, 1.0f); // Change to ANM_JUMP ?
                     mSound.startCreatureVoice(Z2SE_EN_WW_V_ATTACK, -1);
@@ -1055,9 +1258,15 @@ void daE_WW_c::executeAttack() {
 
 bool daE_WW_c::checkAttackStart() {
     if (field_0x734 == 0) {
-        camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
-        s16 temp_r28 = (fopCamM_GetAngleY(camera) + 0x8000) - fopAcM_searchPlayerAngleY(this);
-        cXyz sp14 = daPy_getPlayerActorClass()->current.pos;
+        dusk::coop::selected_target_state::SelectedTargetState targetState;
+        // Co-op: attack-start gates use the selected combat target's position and that slot's
+        // presentation angle so P2-triggered attacks are not gated by P1's camera.
+        coOpTargetState(this, "e_ww.attack_start_state", false,
+                        dusk::coop::EnemyTargetMode::StickyCombat, &targetState);
+        s16 target_angle = coOpTargetAngleY(this, "e_ww.attack_start", false,
+                                            dusk::coop::EnemyTargetMode::StickyCombat);
+        s16 temp_r28 = (coOpPresentationAngleY(targetState) + 0x8000) - target_angle;
+        cXyz sp14 = targetState.available ? targetState.pos : daPy_getPlayerActorClass()->current.pos;
 
         if (field_0x6b4 != 1) {
             if (fpcM_Search(s_attack_ww, this) != NULL) {
@@ -1088,7 +1297,12 @@ bool daE_WW_c::checkAttackStart() {
 
 void daE_WW_c::executeChase() {
     s16 sp8;
-    cXyz sp28 = daPy_getPlayerActorClass()->current.pos;
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: chase is selected-target state. Wolfos speed/form/distance choices should describe
+    // the retained combat target rather than fresh P1 globals.
+    coOpTargetState(this, "e_ww.chase", false, dusk::coop::EnemyTargetMode::StickyCombat,
+                    &targetState);
+    cXyz sp28 = targetState.available ? targetState.pos : daPy_getPlayerActorClass()->current.pos;
     f32 temp_f31 = sp28.absXZ(current.pos);
 
     switch (mActionMode) {
@@ -1107,7 +1321,8 @@ void daE_WW_c::executeChase() {
         field_0x728 = 150;
         // fallthrough
     case ACTION_MODE_1: {
-        if (calcMoveDir(&sp8, fopAcM_searchPlayerAngleY(this) - 0x8000) != 0) {
+        if (calcMoveDir(&sp8, coOpTargetAngleY(this, "e_ww.chase_run", false,
+                                               dusk::coop::EnemyTargetMode::StickyCombat) - 0x8000) != 0) {
             cLib_addCalcAngleS(&shape_angle.y, sp8, 4, 0x800, 0x100);
         } else {
             cLib_addCalcAngleS(&shape_angle.y, sp8, 8, 0x200, 0x80);
@@ -1120,7 +1335,7 @@ void daE_WW_c::executeChase() {
         }
 
         if (field_0x6b4 == 0 && field_0x728 == 0) {
-            f32 fVar7 = daPy_getPlayerActorClass()->speedF;
+            f32 fVar7 = targetState.available ? targetState.speedF : daPy_getPlayerActorClass()->speedF;
             f32 fVar8 = 0.0f;
             if (fVar7 == fVar8) {
                 var_r29 = TRUE;
@@ -1140,7 +1355,8 @@ void daE_WW_c::executeChase() {
         cLib_addCalcAngleS(&shape_angle.y, getNearPlayerAngle(), 8, 0x800, 0x100);
         cLib_chaseF(&speedF, 0.0f, 1.5f);
         f32 fVar1 = 0.0f;
-        if (speedF == fVar1 && abs((s16)(shape_angle.y - fopAcM_searchPlayerAngleY(this))) < 0x2000) {
+        if (speedF == fVar1 && abs((s16)(shape_angle.y - coOpTargetAngleY(this, "e_ww.chase_turn",
+                                                                            false, dusk::coop::EnemyTargetMode::StickyCombat))) < 0x2000) {
             mActionMode = ACTION_MODE_10;
             setBck(BCK_WW_WAIT, J3DFrameCtrl::EMode_LOOP, 3.0f, 1.0f);
         }
@@ -1154,7 +1370,8 @@ void daE_WW_c::executeChase() {
 
         f32 fVar2 = 0.0f;
         if (speedF == fVar2) {
-            if (abs((s16)(shape_angle.y - fopAcM_searchPlayerAngleY(this))) < 0x2000) {
+            if (abs((s16)(shape_angle.y - coOpTargetAngleY(this, "e_ww.chase_moveout_turn",
+                                                           false, dusk::coop::EnemyTargetMode::StickyCombat))) < 0x2000) {
                 speedF = 0.0f;
                 setActionMode(ACTION_MOVE_OUT, ACTION_MODE_10);
                 setBck(BCK_WW_WAIT, J3DFrameCtrl::EMode_LOOP, 3.0f, 1.0f);
@@ -1172,7 +1389,7 @@ void daE_WW_c::executeChase() {
         cLib_addCalcAngleS(&shape_angle.y, getNearPlayerAngle(), 4, 0x800, 0x100);
         current.angle.y = shape_angle.y;
 
-        f32 fVar5 = daPy_getPlayerActorClass()->speedF;
+        f32 fVar5 = targetState.available ? targetState.speedF : daPy_getPlayerActorClass()->speedF;
         f32 fVar6 = 0.0f;
         if (fVar5 != fVar6) {
             if (temp_f31 < 1400.0f + nREG_F(18) + mDistCheckModifier) {
@@ -1220,13 +1437,14 @@ void daE_WW_c::executeChase() {
         mActionMode = ACTION_MODE_13;
         // fallthrough
     case 13:
-        if (daPy_getPlayerActorClass()->checkNowWolf() != 0) {
+        if (coOpIsTargetWolf(targetState)) {
             speedF = l_HIO.wolf_escape_speed;
         } else {
             speedF = l_HIO.link_escape_speed;
         }
 
-        if (calcMoveDir(&sp8, fopAcM_searchPlayerAngleY(this) - 0x8000) != 0) {
+        if (calcMoveDir(&sp8, coOpTargetAngleY(this, "e_ww.chase_escape", false,
+                                               dusk::coop::EnemyTargetMode::StickyCombat) - 0x8000) != 0) {
             cLib_addCalcAngleS(&shape_angle.y, sp8, 4, 0x800, 0x200);
         } else {
             cLib_addCalcAngleS(&shape_angle.y, sp8, 8, 0x200, 0x80);
@@ -1240,13 +1458,14 @@ void daE_WW_c::executeChase() {
         break;
 
     case ACTION_MODE_14: {
-        if (daPy_getPlayerActorClass()->checkNowWolf() != 0) {
+        if (coOpIsTargetWolf(targetState)) {
             cLib_chaseF(&speedF, l_HIO.wolf_escape_speed, 1.0f);
         } else {
             cLib_chaseF(&speedF, l_HIO.link_escape_speed, 1.0f);
         }
 
-        if (calcMoveDir(&sp8, (fopAcM_searchPlayerAngleY(this) - 0x8000)) != 0) {
+        if (calcMoveDir(&sp8, (coOpTargetAngleY(this, "e_ww.chase_escape_hold", false,
+                                                dusk::coop::EnemyTargetMode::StickyCombat) - 0x8000)) != 0) {
             cLib_addCalcAngleS(&shape_angle.y, sp8, 4, 0x800, 0x200);
         } else {
             cLib_addCalcAngleS(&shape_angle.y, sp8, 8, 0x200, 0x80);
@@ -1267,7 +1486,7 @@ void daE_WW_c::executeChase() {
         }
 
         if (field_0x6b4 == 0 && field_0x728 == 0) {
-            f32 fVar3 = daPy_getPlayerActorClass()->speedF;
+            f32 fVar3 = targetState.available ? targetState.speedF : daPy_getPlayerActorClass()->speedF;
             f32 fVar4 = 0.0f;
             if (fVar3 == fVar4) {
                 var_r29_2 = TRUE;
@@ -1285,7 +1504,10 @@ void daE_WW_c::executeChase() {
     case ACTION_MODE_15:
         field_0x75a = 1;
         if (!mObjAcch.ChkGroundHit()) {
-            cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 4, 0x800, 0x100);
+            cLib_addCalcAngleS(&shape_angle.y,
+                               coOpTargetAngleY(this, "e_ww.chase_backstep", false,
+                                                dusk::coop::EnemyTargetMode::StickyCombat),
+                               4, 0x800, 0x100);
             current.angle.y = shape_angle.y;
         } else {
             speedF = 0.0f;
@@ -1301,7 +1523,10 @@ void daE_WW_c::executeChase() {
         // fallthrough
     case ACTION_MODE_21:
         field_0x75a = 1;
-        cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 4, 0x800, 0x100);
+        cLib_addCalcAngleS(&shape_angle.y,
+                           coOpTargetAngleY(this, "e_ww.chase_far", false,
+                                            dusk::coop::EnemyTargetMode::StickyCombat),
+                           4, 0x800, 0x100);
         current.angle.y = shape_angle.y;
         if (temp_f31 < 1600.0f + nREG_F(18) + mDistCheckModifier) {
             setBck(BCK_WW_WAIT, J3DFrameCtrl::EMode_LOOP, 3.0f, 1.0f);
@@ -1323,7 +1548,8 @@ void daE_WW_c::executeChase() {
         break;
 
     case ACTION_MODE_25:
-        field_0x6cc = fopAcM_searchPlayerAngleY(this);
+        field_0x6cc = coOpTargetAngleY(this, "e_ww.chase_sidestep", false,
+                                       dusk::coop::EnemyTargetMode::StickyCombat);
         shape_angle.y = field_0x6cc;
         if (field_0x6c0 == 0) {
             setBck(BCK_WW_SIDESTEPL, J3DFrameCtrl::EMode_NONE, 3.0f, 1.0f);
@@ -1348,7 +1574,10 @@ void daE_WW_c::executeChase() {
 
     case ACTION_MODE_28:
         field_0x75a = 1;
-        cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 4, 0x800, 0x100);
+        cLib_addCalcAngleS(&shape_angle.y,
+                           coOpTargetAngleY(this, "e_ww.chase_sidestep_air", false,
+                                            dusk::coop::EnemyTargetMode::StickyCombat),
+                           4, 0x800, 0x100);
         if (mObjAcch.ChkGroundHit() != 0) {
             speedF = 0.0f;
             if (mpModelMorf->isStop() != 0) {
@@ -1457,7 +1686,12 @@ bool daE_WW_c::checkMoveOut() {
 }
 
 void daE_WW_c::executeMoveOut() {
-    cXyz sp3c = daPy_getPlayerActorClass()->current.pos;
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: move-out home-range checks and re-engage steering compare against the retained
+    // combat target, not the primary player singleton.
+    coOpTargetState(this, "e_ww.move_out", false, dusk::coop::EnemyTargetMode::StickyCombat,
+                    &targetState);
+    cXyz sp3c = targetState.available ? targetState.pos : daPy_getPlayerActorClass()->current.pos;
 
     switch (mActionMode) {
         case ACTION_MODE_0:
@@ -1539,7 +1773,9 @@ void daE_WW_c::executeMoveOut() {
             mActionMode = ACTION_MODE_16;
             field_0x728 = 60;
 
-            if ((s16)(cLib_targetAngleY(&current.pos, &field_0x668) - fopAcM_searchPlayerAngleY(this)) < 0) {
+            if ((s16)(cLib_targetAngleY(&current.pos, &field_0x668) -
+                      coOpTargetAngleY(this, "e_ww.move_out_side", false,
+                                       dusk::coop::EnemyTargetMode::StickyCombat)) < 0) {
                 field_0x6cc = 0x2000;
             } else {
                 field_0x6cc = -0x2000;
@@ -1558,7 +1794,8 @@ void daE_WW_c::executeMoveOut() {
             break;
 
         case ACTION_MODE_25:
-            field_0x6cc = fopAcM_searchPlayerAngleY(this);
+            field_0x6cc = coOpTargetAngleY(this, "e_ww.move_out_sidestep", false,
+                                           dusk::coop::EnemyTargetMode::StickyCombat);
             shape_angle.y = field_0x6cc;
 
             if (field_0x6c0 == 0) {
@@ -1585,7 +1822,10 @@ void daE_WW_c::executeMoveOut() {
 
         case ACTION_MODE_28:
             field_0x75a = 1;
-            cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 4, 0x800, 0x100);
+            cLib_addCalcAngleS(&shape_angle.y,
+                               coOpTargetAngleY(this, "e_ww.move_out_air", false,
+                                                dusk::coop::EnemyTargetMode::StickyCombat),
+                               4, 0x800, 0x100);
 
             if (mObjAcch.ChkGroundHit()) {
                 speedF = 0.0f;
@@ -1605,13 +1845,19 @@ bool daE_WW_c::checkWalkStart() {
         return false;
     }
 
-    s16 angleY = fopCamM_GetAngleY(dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0)));
     cXyz spd0, spdc;
-    cXyz spe8 = daPy_getPlayerActorClass()->current.pos;
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: walk-start orbit points are built around the selected combat target; the camera
+    // angle follows that target's local presentation view when split-screen has one.
+    coOpTargetState(this, "e_ww.walk_start", false, dusk::coop::EnemyTargetMode::StickyCombat,
+                    &targetState);
+    s16 angleY = coOpPresentationAngleY(targetState);
+    cXyz spe8 = targetState.available ? targetState.pos : daPy_getPlayerActorClass()->current.pos;
 
     if (field_0x740 == 0) {
         field_0x740 = 30;
-        s16 sVar3 = fopAcM_searchPlayerAngleY(this) - 0x8000;
+        s16 sVar3 = coOpTargetAngleY(this, "e_ww.walk_start_angle", false,
+                                     dusk::coop::EnemyTargetMode::StickyCombat) - 0x8000;
         s16 sVar2 = angleY - sVar3;
         if (abs(sVar2) < 0x3000) {
             if (cM_rnd() < nREG_F(20) + 0.6f) {
@@ -1684,7 +1930,7 @@ bool daE_WW_c::checkWalkStart() {
                 spd0 = sp100;
             }
 
-            createWolf(spd0, 0);
+            createWolf(spd0, 0, spe8);
             fopAcM_delete(this);
 
             return true;
@@ -1695,7 +1941,14 @@ bool daE_WW_c::checkWalkStart() {
 }
 
 void daE_WW_c::executeWalk() {
-    f32 fVar1 = daPy_getPlayerActorClass()->current.pos.absXZ(current.pos);
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: walking/repositioning is still combat behavior; distance, facing, and wolf-form
+    // reads use the selected target state rather than P1.
+    coOpTargetState(this, "e_ww.walk", false, dusk::coop::EnemyTargetMode::StickyCombat,
+                    &targetState);
+    cXyz target_pos =
+        targetState.available ? targetState.pos : daPy_getPlayerActorClass()->current.pos;
+    f32 fVar1 = target_pos.absXZ(current.pos);
 
     switch (mActionMode) {
         case ACTION_MODE_0:
@@ -1711,7 +1964,8 @@ void daE_WW_c::executeWalk() {
             field_0x75a = 1;
             s16 sVar1 = cLib_targetAngleY(&current.pos, &field_0x65c);
             cLib_addCalcAngleS(&current.angle.y, sVar1, 8, 0x400, 0x100);
-            s16 sVar2 = fopAcM_searchPlayerAngleY(this);
+            s16 sVar2 = coOpTargetAngleY(this, "e_ww.walk_angle", false,
+                                         dusk::coop::EnemyTargetMode::StickyCombat);
 
             if ((s16)(sVar1 - sVar2) > 0x4000) {
                 sVar1 = sVar2 + 0x4000;
@@ -1763,7 +2017,7 @@ void daE_WW_c::executeWalk() {
             field_0x728 = 150;
             // fallthrough
         case ACTION_MODE_11:
-            if (daPy_getPlayerActorClass()->checkNowWolf()) {
+            if (coOpIsTargetWolf(targetState)) {
                 speedF = l_HIO.wolf_escape_speed;
             } else {
                 speedF = l_HIO.link_escape_speed;
@@ -2009,6 +2263,8 @@ bool daE_WW_c::calcMoveDir(s16* param_1, s16 param_2) {
     cXyz spc0, spcc;
     cXyz spd8(0.0f, 0.0f, 500.0f);
     spcc.set(current.pos.x, current.pos.y + 100.0f, current.pos.z);
+    // Co-op: obstacle-avoidance fallbacks compare candidate movement against the retained
+    // combat target angle so pathing does not bias back to P1.
 
     for (int i = 0; i < 3; i++) {
         fVar1[i] = 1000.0f;
@@ -2073,7 +2329,8 @@ bool daE_WW_c::calcMoveDir(s16* param_1, s16 param_2) {
         }
 
         if (field_0x738 == 0) {
-            if (abs((s16)(fopAcM_searchPlayerAngleY(this) - sVar4)) < 0x4000) {
+            if (abs((s16)(coOpTargetAngleY(this, "e_ww.move_dir", false,
+                                           dusk::coop::EnemyTargetMode::StickyCombat) - sVar4)) < 0x4000) {
                 sVar4 = param_2;
             }
         }
@@ -2085,7 +2342,8 @@ bool daE_WW_c::calcMoveDir(s16* param_1, s16 param_2) {
         }
 
         if (field_0x738 == 0) {
-            if (abs((s16)(fopAcM_searchPlayerAngleY(this) - sVar4)) < 0x2000) {
+            if (abs((s16)(coOpTargetAngleY(this, "e_ww.move_dir_left", false,
+                                           dusk::coop::EnemyTargetMode::StickyCombat) - sVar4)) < 0x2000) {
                 sVar4 = sVar3[1];
             }
         }
@@ -2101,7 +2359,8 @@ bool daE_WW_c::calcMoveDir(s16* param_1, s16 param_2) {
         }
 
         if (field_0x738 == 0) {
-            if (abs((s16)(fopAcM_searchPlayerAngleY(this) - sVar4)) < 0x2000) {
+            if (abs((s16)(coOpTargetAngleY(this, "e_ww.move_dir_right", false,
+                                           dusk::coop::EnemyTargetMode::StickyCombat) - sVar4)) < 0x2000) {
                 sVar4 = sVar3[2];
             }
         }
@@ -2130,6 +2389,8 @@ static int daE_WW_IsDelete(daE_WW_c* i_this) {
 
 int daE_WW_c::_delete() {
     dComIfG_resDelete(&mPhase, "E_WW");
+    // Co-op: target/debug sidecar state is actor-lifetime data and must not outlive deletion.
+    dusk::coop::clearAllEnemyTargets(this);
     if (field_0xec4 != 0) {
         hio_set = false;
         mDoHIO_DELETE_CHILD(l_HIO.field_0x04);

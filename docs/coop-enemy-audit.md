@@ -257,7 +257,7 @@ The table below is machine-assisted from `src/d/actor/d_a_e_*.cpp` and profile s
 | High risk | `d_a_e_rd.cpp` | `E_RD` | 56 | ranged/mounted/complex humanoid | Many weapon, boar, horn, and demo paths; good later family, not next. |
 | High risk | `d_a_e_vt.cpp` | `E_VT` | 50 | miniboss/special enemy | Confirmed: Death Sword (Arbiter's Grounds mini-boss). Many combat states and demo/camera calls; defer. |
 | Defer | `d_a_e_st.cpp` | `E_ST` | 48 | protagonist-locked — grab/catch | HIO label `スタルチュラ`; `getStCaught()` grab-state is protagonist-specific; cannot redirect targeting callsites without a co-op caught-state ownership model. |
-| Candidate | `d_a_e_ww.cpp` | `E_WW` | 45 | regular melee candidate | Confirmed: ホワイトウルフォス (White Wolfos). chase/attack/damage state shape similar to E_OC; good second-wave candidate. |
+| Current proof | `d_a_e_ww.cpp` | `E_WW` | 45 | regular melee candidate | Confirmed: ホワイトウルフォス (White Wolfos). Combat chase/attack/walk/move-out paths route through one Combat owner and selected-target state; master spawn staging can wake on P2, uses target-slot presentation angle, and hookshot side-step awareness scans active players. |
 | Candidate | `d_a_e_ymb.cpp` | `E_YMB` | 42 | boss/miniboss likely | High density and many camera/player-state calls; defer. |
 | Candidate | `d_a_e_fm.cpp` | `E_FM` | 41 | special/grab/chain likely | Has demo/grab-heavy paths; defer until targeting policy exists. |
 | Candidate | `d_a_e_rdy.cpp` | `E_RDY` | 36 | related humanoid | Likely related to `E_RD`; audit with that family. |
@@ -298,11 +298,12 @@ Bokoblin now has the reusable policy spine plus damage-owner, selected-target-st
 defender-owner proof surfaces. Tektite has been ported and validated as the first compact
 non-Bokoblin specimen.
 
-After Bokoblin, Tektite, Stalhound, Stalchild, Gibdo, and Young Gohma, the next choices are:
+After Bokoblin, Tektite, Stalhound, Stalchild, Gibdo, Young Gohma, and the current White Wolfos first pass, the next choices are:
 
-1. **Next target-state-sensitive enemy (`E_WW`, `E_KK`, or `E_BA`)** - now reasonable because `selected_target_state` exists, but classify form/guard/damage reads before patching.
-2. **A future caught/grab-owner proof enemy** - needed for wolf-bite hang ownership and similar retained physical interactions; Gibdo's wolf-bite path is explicitly deferred.
-3. **Avoid grab-heavy or setpiece enemies** until caught/grab-owner and event/camera policies exist.
+1. **Finish validating White Wolfos (`E_WW`)** - confirm P2 chase/attack, selected target speed/form behavior, and guard contact before broadening the pattern.
+2. **Next target-state-sensitive enemy (`E_KK` or `E_BA`)** - now reasonable because `selected_target_state` exists, but classify form/guard/damage reads before patching.
+3. **A future caught/grab-owner proof enemy** - needed for wolf-bite hang ownership and similar retained physical interactions; Gibdo's wolf-bite path is explicitly deferred.
+4. **Avoid grab-heavy or setpiece enemies** until caught/grab-owner and event/camera policies exist.
 
 This sequence keeps the manual work small: build one policy API, convert one already validated actor, then port the same shape to one compact enemy before touching target-state-sensitive families.
 

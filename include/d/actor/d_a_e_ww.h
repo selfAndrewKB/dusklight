@@ -33,7 +33,7 @@ public:
     void setBlurEffect();
     void setAppearEffect();
     bool checkSideStep();
-    void createWolf(cXyz, u8);
+    void createWolf(cXyz, u8, const cXyz&);
     void executeMaster();
     void executeWait();
     int calcJumpSpeed();
