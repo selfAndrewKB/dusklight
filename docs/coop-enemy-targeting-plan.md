@@ -234,7 +234,7 @@ The first small policy-backed wave is:
 
 - Bokoblin as the already validated specimen,
 - Tektite as the first compact non-Bokoblin ground enemy,
-- one accessible compact ground melee backup (`E_KG`, `E_BS`, or `E_SH`),
+- one accessible compact ground melee backup (`E_BS`, `E_SH`, or another audited compact enemy),
 - target-state-sensitive enemies (`E_WW`, `E_GI`, `E_KK`) only after selected-target state helpers exist.
 
 This prevents designing the policy exclusively around Bokoblin while still keeping the code surface small. Continue the broader audit as more enemies are encountered, but do not block the V1 policy spine on every remaining enemy file.

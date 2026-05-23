@@ -16,6 +16,7 @@
 #include "dusk/coop/player_query.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/coop/selected_target_state.h"
+#include "dusk/coop/young_gohma_state_probe.h"
 #include "dusk/dusk.h"
 #include "dusk/game_clock.h"
 #include "dusk/io.hpp"
@@ -742,6 +743,35 @@ void emitGibdoStateProbeEvents(const Provider& provider, const json& data) {
         };
         const std::string stateKey = fmt::format(
             FMT_STRING("gibdo.state:{}"), static_cast<unsigned long long>(eventId));
+        if (provider.emitOnChange && !shouldEmitProviderEvent(stateKey, eventKey)) {
+            continue;
+        }
+
+        const json eventData = {
+            {"schema_version", data.value("schema_version", 1)},
+            {"probe", probe},
+        };
+        emitProviderEvent(provider, probe.value("loop_suspect", false) ? "loop_suspect" : "state",
+                          eventData);
+    }
+}
+
+void emitYoungGohmaStateProbeEvents(const Provider& provider, const json& data) {
+    if (!data.contains("probes") || !data["probes"].is_array()) {
+        return;
+    }
+
+    for (const json& probe : data["probes"]) {
+        const u64 eventId = probe.value("event_id", 0ull);
+        if (eventId == 0) {
+            continue;
+        }
+
+        const json eventKey = {
+            {"event_id", eventId},
+        };
+        const std::string stateKey = fmt::format(
+            FMT_STRING("young_gohma.state:{}"), static_cast<unsigned long long>(eventId));
         if (provider.emitOnChange && !shouldEmitProviderEvent(stateKey, eventKey)) {
             continue;
         }
@@ -1812,6 +1842,56 @@ json collectGibdoStateProbe() {
     };
 }
 
+json youngGohmaStateProbeSummary(
+    const coop::young_gohma_state_probe::YoungGohmaStateProbe& probe) {
+    return {
+        {"event_id", static_cast<unsigned long long>(probe.eventId)},
+        {"sim_frame", static_cast<unsigned int>(probe.simFrame)},
+        {"actor", ptrString(probe.actor)},
+        {"actor_id", probe.actorId},
+        {"label", probe.label != nullptr ? probe.label : ""},
+        {"action", probe.action},
+        {"sub_action", probe.subAction},
+        {"bck", probe.bck},
+        {"anim_frame", probe.animFrame},
+        {"play_speed", probe.playSpeed},
+        {"speed_f", probe.speedF},
+        {"target_slot", probe.targetSlot != coop::PlayerSlot::Invalid
+                            ? static_cast<int>(probe.targetSlot)
+                            : -1},
+        {"target_found", probe.targetFound},
+        {"target_distance", probe.targetDistance},
+        {"target_angle_y", static_cast<int>(probe.targetAngleY)},
+        {"angle_diff", static_cast<int>(probe.angleDiff)},
+        {"check_range", probe.checkRange},
+        {"check_angle", static_cast<int>(probe.checkAngle)},
+        {"range_gate", probe.rangeGate},
+        {"angle_gate", probe.angleGate},
+        {"los_clear", probe.losClear},
+        {"pl_check", probe.plCheck},
+        {"attack_collider_active", probe.attackColliderActive},
+        {"state_run_frames", static_cast<unsigned int>(probe.stateRunFrames)},
+        {"loop_suspect", probe.loopSuspect},
+    };
+}
+
+json collectYoungGohmaStateProbe() {
+    const coop::young_gohma_state_probe::YoungGohmaStateProbeDebugState& state =
+        coop::young_gohma_state_probe::getYoungGohmaStateProbeDebugState();
+    json probes = json::array();
+    for (int i = 0; i < state.probeCount; i++) {
+        if (state.probes[i].eventId == 0) {
+            continue;
+        }
+        probes.push_back(youngGohmaStateProbeSummary(state.probes[i]));
+    }
+
+    return {
+        {"schema_version", 1},
+        {"probes", probes},
+    };
+}
+
 json inputForSlot(coop::PlayerSlot slot) {
     const coop::PlayerInputState input = coop::readLocalInput(slot);
     return {
@@ -1945,6 +2025,7 @@ Provider s_providers[] = {
     {"caught_stun.owner", 1, "cheap", 1, true, 240, 8192, collectCaughtStunOwner},
     {"bokoblin.attack", 1, "cheap", 1, true, 240, 8192, collectBokoblinAttackProbe},
     {"gibdo.state", 1, "cheap", 1, true, 240, 8192, collectGibdoStateProbe},
+    {"young_gohma.state", 1, "cheap", 1, true, 240, 8192, collectYoungGohmaStateProbe},
     {"coop.probes", 1, "cheap", 30, true, 20, 4096, collectCoopProbes},
     {"alink.secondary", 4, "cheap", 1, true, 120, 8192, collectAlinkSecondary},
 };
@@ -2116,6 +2197,10 @@ void tick(u32 frame) {
         }
         if (std::string(provider.name) == "gibdo.state") {
             emitGibdoStateProbeEvents(provider, data);
+            continue;
+        }
+        if (std::string(provider.name) == "young_gohma.state") {
+            emitYoungGohmaStateProbeEvents(provider, data);
             continue;
         }
 

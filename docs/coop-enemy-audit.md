@@ -59,6 +59,7 @@ For each enemy family, classify and test these layers separately:
 | Stalhound | Stalhound | `src/d/actor/d_a_e_sh.cpp` | `E_SH` | policy-backed targeting, first-pass validated | Central target metrics, movement speed, attack commitment, head tracking, and damage knockback angle route through the co-op API families. No P1 guard-state read was found; attack shield response currently uses the collision `ChkAtShieldHit()` flag. First surface test looked good. |
 | Stalchild | Stalchild | `src/d/actor/d_a_e_bs.cpp` | `E_BS` | policy-backed targeting, first-pass validated | Swarm-style ground melee proof. Recognition, chase/attack target metrics, attack-facing checks, head tracking, and attack guard response route through the co-op API families. |
 | Gibdo | Gibdo | `src/d/actor/d_a_e_gi.cpp` | `E_GI` | policy-backed targeting, owner APIs validated | Sleep/wait/chase/attack/damage recovery and head tracking route through `enemy_targeting` plus `selected_target_state`; the close-range attack/scream gate uses immediate acquisition so stale chase retention cannot suppress an in-range player; ordinary sword cut reactions use `damage_owner`; scream stun uses `caught_stun_owner` so the retained slot owns release input and best-effort camera lock while nearby affected slots share the scream animation timer with an expanded co-op AoE. Wolf-bite ownership remains intentionally deferred to a later caught/grab-owner proof enemy. `gibdo.state` remains available for follow-up debugging and records native range/angle/LOS/delay/scream-owner gates. Some placed Gibdos use `mSwbit2` switch gating before sight checks, so apparent P1-only activation may also involve room script state. Simultaneous per-player scream ownership is documented as deferred because vanilla `m_cry_gi` also coordinates follow-up attacks. |
+| Young Gohma | Young Gohma | `src/d/actor/d_a_e_kg.cpp` | `E_KG` | policy-backed targeting, first-pass validated | Central action target metrics route through `enemy_targeting` plus `selected_target_state`; move/search and attack gates share the selected target's distance, angle, and line-of-sight actor. Roof/drop front-roll awareness uses the selected player's state instead of P1. Damage remains routed through the shared `cc_at_check()` owner path. `young_gohma.state` records range/cone/LOS and `pl_check` gate facts. The post-attack wander gap was confirmed to match vanilla Young Gohma behavior rather than co-op target loss. |
 
 ## Reviewed Evidence
 
@@ -104,7 +105,7 @@ These rows are from a second source pass. They are mostly classification gates: 
 | `d_a_e_hp.cpp` | `E_HP` | wait/move/retreat/attack/down/dead actions | ghost enemy candidate | Good later policy test once target retention exists, but wolf/pull-out/down states need damage ownership audit. |
 | `d_a_e_hz.cpp` | `E_HZ` | hide/attack/away/wind/chance/water-death actions | complex regular/special enemy | Rich action table; defer until first-wave policy and damage ownership are stable. |
 | `d_a_e_is.cpp` | `E_IS` | wait/move/attack/trap/poweroff/break/damage actions | regular/proximity candidate | Compact and promising for first-wave consideration if location/name are confirmed. |
-| `d_a_e_kg.cpp` | `E_KG` | move/attack/small-damage/damage actions; central `pl_check` gates | regular melee candidate | Looks small and policy-friendly; good first-wave candidate after identity/location are confirmed. |
+| `d_a_e_kg.cpp` | `E_KG` | file header `Young Gohma`; move/attack/small-damage/damage actions; central `pl_check` gates | regular melee candidate | Young Gohma. Compact policy-friendly actor; first pass routes central targeting, LOS, and roof front-roll awareness through the co-op API families. |
 | `d_a_e_kr.cpp` | `E_KR` | path/auto/attack/horse/wait/su-wait actions; coach and bomb references | mounted/path special enemy | Vehicle/path/coach coupling makes it a later category. |
 | `d_a_e_mb.cpp` | `E_MB` | parent boss lookup and first-demo actions | boss helper | Defer with boss/miniboss work. |
 | `d_a_e_md.cpp` | `E_MD` | dummy/real action split, half-break/break/vibration, spear models | destructible/decoy special | More object-like than AI target selection; not part of first enemy policy wave. |
@@ -198,7 +199,7 @@ Do not leave these permanently primary-player-only just because V1 is cautious. 
 | File | Profile | Name | Targeting | Non-target state | Ambiguous | First-wave verdict |
 | --- | --- | --- | ---: | ---: | ---: | --- |
 | `d_a_e_tt.cpp` | `E_TT` | Tektite | 8 | 5 | 1 | **Safe** — chase/attack calls isolated in `executeChase`/`executeAttack`; state calls are cut-type and culling distance |
-| `d_a_e_kg.cpp` | `E_KG` | (unknown) | 3 | 2 | 0 | **Safe** — all distance/angle in `action()` helper; damage-check pointer fetch is a stub |
+| `d_a_e_kg.cpp` | `E_KG` | Young Gohma | 3 | 2 | 0 | **Safe** — all distance/angle in `action()` helper; roof front-roll read is selected-target state; damage-check pointer fetch is a stub |
 | `d_a_e_bs.cpp` | `E_BS` | Baby Stal | 5 | 3 | 0 | **Safe** — distance/angle clearly targeting; player cast in damage path is type-context only |
 | `d_a_e_sh.cpp` | `E_SH` | Stalhound | 4 | 3 | 0 | **Safe** — targeting in move/attack; local P1 pointer reads at move/attack entry are target-position candidates, not story/demo state |
 | `d_a_e_ai.cpp` | `E_AI` | Amos | 4 | 2 | 0 | **Safe** — angle/distance in `executeSearch`; directional check in `player_way_check` is primary-state |
@@ -297,12 +298,11 @@ Bokoblin now has the reusable policy spine plus damage-owner, selected-target-st
 defender-owner proof surfaces. Tektite has been ported and validated as the first compact
 non-Bokoblin specimen.
 
-After Bokoblin, Tektite, Stalhound, Stalchild, and Gibdo, the next choices are:
+After Bokoblin, Tektite, Stalhound, Stalchild, Gibdo, and Young Gohma, the next choices are:
 
-1. **Next non-flying ground melee backup (`E_KG`)** - choose based on accessible test location.
-2. **Next target-state-sensitive enemy (`E_WW`, `E_KK`, or `E_BA`)** - now reasonable because `selected_target_state` exists, but classify form/guard/damage reads before patching.
-3. **A future caught/grab-owner proof enemy** - needed for wolf-bite hang ownership and similar retained physical interactions; Gibdo's wolf-bite path is explicitly deferred.
-4. **Avoid grab-heavy or setpiece enemies** until caught/grab-owner and event/camera policies exist.
+1. **Next target-state-sensitive enemy (`E_WW`, `E_KK`, or `E_BA`)** - now reasonable because `selected_target_state` exists, but classify form/guard/damage reads before patching.
+2. **A future caught/grab-owner proof enemy** - needed for wolf-bite hang ownership and similar retained physical interactions; Gibdo's wolf-bite path is explicitly deferred.
+3. **Avoid grab-heavy or setpiece enemies** until caught/grab-owner and event/camera policies exist.
 
 This sequence keeps the manual work small: build one policy API, convert one already validated actor, then port the same shape to one compact enemy before touching target-state-sensitive families.
 
@@ -429,7 +429,7 @@ This inventory is generated from `src/d/actor/d_a_e_*.cpp` file names and `g_pro
 
 ## Next Steps
 
-1. Choose the next regular enemy from an accessible test location, preferably `E_KG` or another compact non-flying ground enemy.
+1. Choose the next regular enemy from an accessible test location, preferably a target-state-sensitive second-wave enemy (`E_WW`, `E_KK`, or `E_BA`) or another compact non-flying ground enemy.
 2. Before patching, classify its singleton reads into targeting, selected-target state, damage-owner, defender/collision-owner, caught/grab-owner, primary/global, and render/culling.
 3. Convert only the smallest coherent behavior slice, using actor-local helpers over the API families proven by Bokoblin and Tektite.
 4. Continue classifying/test-locating target-state-sensitive second-wave enemies (`E_WW`, `E_KK`, `E_BA`) in parallel.

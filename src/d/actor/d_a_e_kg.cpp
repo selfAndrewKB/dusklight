@@ -9,6 +9,12 @@
 #include "d/d_cc_d.h"
 #include "f_op/f_op_actor_enemy.h"
 
+#if TARGET_PC
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#include "dusk/coop/young_gohma_state_probe.h"
+#endif
+
 class daE_KG_HIO_c {
 public:
     daE_KG_HIO_c();
@@ -32,6 +38,87 @@ static void anm_init(e_kg_class* i_this, int i_index, f32 i_morf, u8 i_attr, f32
     i_this->mpMorf->setAnm(anm, i_attr, i_morf, i_rate, 0.0f, -1.0f);
     i_this->mResIndex = i_index;
 }
+
+#if TARGET_PC
+struct CoOpKgGateProbe {
+    const char* label = NULL;
+    dusk::coop::PlayerSlot targetSlot = dusk::coop::PlayerSlot::Invalid;
+    bool targetFound = false;
+    f32 targetDistance = 0.0f;
+    s16 targetAngleY = 0;
+    s16 angleDiff = 0;
+    f32 checkRange = 0.0f;
+    s16 checkAngle = 0;
+    bool rangeGate = false;
+    bool angleGate = false;
+    bool losClear = false;
+    bool plCheck = false;
+};
+
+// Co-op: Young Gohma keeps one combat target owner; labels describe vanilla callsites for
+// diagnostics, while mode controls whether this read is awareness or committed combat.
+static bool coOpSelectTargetState(e_kg_class* i_this, const char* label, bool committed,
+                                  dusk::coop::EnemyTargetMode mode,
+                                  dusk::coop::selected_target_state::SelectedTargetState* state,
+                                  f32* distance, s16* angle_y) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+
+    return target.found && targetState.available;
+}
+
+static void coOpRecordKgStateProbe(e_kg_class* i_this, const CoOpKgGateProbe& gate,
+                                   bool attackColliderActive) {
+    dusk::coop::young_gohma_state_probe::YoungGohmaStateProbe probe;
+    probe.actor = reinterpret_cast<uintptr_t>(i_this);
+    probe.actorId = fopAcM_GetID(i_this);
+    probe.action = i_this->mAction;
+    probe.subAction = i_this->field_0x678;
+    probe.bck = i_this->mResIndex;
+    probe.animFrame = i_this->mpMorf != NULL ? i_this->mpMorf->getFrame() : 0.0f;
+    probe.playSpeed = i_this->mpMorf != NULL ? i_this->mpMorf->getPlaySpeed() : 0.0f;
+    probe.speedF = i_this->speedF;
+    probe.targetSlot = gate.targetSlot;
+    probe.targetFound = gate.targetFound;
+    probe.targetDistance = gate.targetDistance;
+    probe.targetAngleY = gate.targetAngleY;
+    probe.angleDiff = gate.angleDiff;
+    probe.checkRange = gate.checkRange;
+    probe.checkAngle = gate.checkAngle;
+    probe.rangeGate = gate.rangeGate;
+    probe.angleGate = gate.angleGate;
+    probe.losClear = gate.losClear;
+    probe.plCheck = gate.plCheck;
+    probe.attackColliderActive = attackColliderActive;
+    probe.label = gate.label;
+    dusk::coop::young_gohma_state_probe::recordYoungGohmaStateProbe(probe);
+}
+#endif
 
 static int daE_KG_Draw(e_kg_class* i_this) {
     J3DModel* model = i_this->mpMorf->getModel();
@@ -70,12 +157,35 @@ static int other_bg_check(e_kg_class* i_this, fopAc_ac_c* i_player) {
     }
 }
 
-static int pl_check(e_kg_class* i_this, f32 i_check_range, s16 i_s16) {
-    fopAc_ac_c* i_player = dComIfGp_getPlayer(0);
+static int pl_check(e_kg_class* i_this, f32 i_check_range, s16 i_s16, fopAc_ac_c* i_player
+#if TARGET_PC
+                    , CoOpKgGateProbe* gate
+#endif
+                    ) {
+    s16 diff = i_this->shape_angle.y - i_this->mPlayerAngle;
+#if TARGET_PC
+    if (gate != NULL) {
+        gate->targetDistance = i_this->mPlayerDist;
+        gate->targetAngleY = i_this->mPlayerAngle;
+        gate->angleDiff = diff;
+        gate->checkRange = i_check_range;
+        gate->checkAngle = i_s16;
+        gate->rangeGate = i_this->mPlayerDist < i_check_range;
+        gate->angleGate = diff < i_s16 && diff > (s16)(-i_s16);
+        gate->losClear = false;
+        gate->plCheck = false;
+    }
+#endif
     if (i_this->mPlayerDist < i_check_range) {
-        s16 diff = i_this->shape_angle.y - i_this->mPlayerAngle;
         if (diff < i_s16 && diff > (s16)(-i_s16)) {
-            if (other_bg_check(i_this, i_player) == 0) {
+            const bool los_clear = i_player != NULL && other_bg_check(i_this, i_player) == 0;
+#if TARGET_PC
+            if (gate != NULL) {
+                gate->losClear = los_clear;
+                gate->plCheck = los_clear;
+            }
+#endif
+            if (los_clear) {
                 return 1;
             }
         }
@@ -149,7 +259,11 @@ static u8 lbl_204_bss_8;
 
 static daE_KG_HIO_c l_HIO;
 
-static void e_kg_move(e_kg_class* i_this) {
+static void e_kg_move(e_kg_class* i_this, fopAc_ac_c* i_player
+#if TARGET_PC
+                      , CoOpKgGateProbe* gate
+#endif
+                      ) {
     int frame = i_this->mpMorf->getFrame();
     f32 tgt_val = 0.0f;
     cXyz my_vec_0;
@@ -205,13 +319,21 @@ static void e_kg_move(e_kg_class* i_this) {
     }
 
     cLib_addCalc2(&i_this->speedF, tgt_val, 1.0f, l_HIO.field_0xc * 0.5f);
-    if (pl_check(i_this, l_HIO.mCheckRange, 0x6000)) {
+    if (pl_check(i_this, l_HIO.mCheckRange, 0x6000, i_player
+#if TARGET_PC
+                 , gate
+#endif
+                 )) {
         i_this->mAction = 1;
         i_this->field_0x678 = 0;
     }
 }
 
-static int e_kg_attack(e_kg_class* i_this) {
+static int e_kg_attack(e_kg_class* i_this, fopAc_ac_c* i_player
+#if TARGET_PC
+                       , CoOpKgGateProbe* gate
+#endif
+                       ) {
     int frame = i_this->mpMorf->getFrame();
     f32 next_speed = 0.0f;
     s16 angle_add = 0;
@@ -233,7 +355,11 @@ static int e_kg_attack(e_kg_class* i_this) {
             }
 
             i_this->speedF = next_speed;
-            if (pl_check(i_this, l_HIO.mCheckRange + 100.0f, 0x7000) == 0) {
+            if (pl_check(i_this, l_HIO.mCheckRange + 100.0f, 0x7000, i_player
+#if TARGET_PC
+                         , gate
+#endif
+                         ) == 0) {
                 i_this->mAction = 0;
                 i_this->field_0x678 = 0;
                 i_this->field_0x694[0] = 0;
@@ -430,7 +556,7 @@ static void e_kg_damage(e_kg_class* i_this) {
     }
 }
 
-static void e_kg_roof(e_kg_class* i_this) {
+static void e_kg_roof(e_kg_class* i_this, daPy_py_c* i_player) {
     if ((i_this->field_0x674 & 0xF) == 0 && cM_rndF(1.0f) < 0.5f) {
         i_this->mSound.startCreatureVoice(Z2SE_EN_KG_V_WAIT, -1);
     }
@@ -444,7 +570,7 @@ static void e_kg_roof(e_kg_class* i_this) {
         }
         // fallthrough intentional
         case 1: {
-            if (daPy_getPlayerActorClass()->checkFrontRollCrash()) {
+            if (i_player != NULL && i_player->checkFrontRollCrash()) {
                 i_this->field_0x678 = 2;
             }
 
@@ -478,10 +604,47 @@ static void e_kg_roof(e_kg_class* i_this) {
 
 static void action(e_kg_class* i_this) {
     fopAc_ac_c* actor_this = i_this;
+#if TARGET_PC
+    fopAc_ac_c* target_actor = NULL;
+    daPy_py_c* target_player = NULL;
+#else
+    fopAc_ac_c* target_actor = dComIfGp_getPlayer(0);
+    daPy_py_c* target_player = daPy_getPlayerActorClass();
+#endif
     cXyz my_vec_0;
     cXyz my_vec_1;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    CoOpKgGateProbe gateProbe;
+    const bool attack_committed = i_this->mAction == 1 && i_this->field_0x678 >= 2;
+    const dusk::coop::EnemyTargetMode targetMode =
+        (i_this->mAction == 0 || i_this->mAction == 5)
+            ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+            : dusk::coop::EnemyTargetMode::StickyCombat;
+    const char* targetLabel = "e_kg.action";
+    if (i_this->mAction == 0) {
+        targetLabel = "e_kg.move";
+    } else if (i_this->mAction == 1) {
+        targetLabel = "e_kg.attack";
+    } else if (i_this->mAction == 5) {
+        targetLabel = "e_kg.roof";
+    }
+    // Co-op: cache the current behavior target once so Young Gohma's distance, angle, LOS,
+    // roof-roll, and attack gates all ask about the same player.
+    if (coOpSelectTargetState(i_this, targetLabel, attack_committed, targetMode, &targetState,
+                              &i_this->mPlayerDist, &i_this->mPlayerAngle)) {
+        target_actor = targetState.actor;
+        target_player = targetState.player;
+    }
+    gateProbe.label = targetLabel;
+    gateProbe.targetSlot = targetState.slot;
+    gateProbe.targetFound = targetState.available;
+    gateProbe.targetDistance = i_this->mPlayerDist;
+    gateProbe.targetAngleY = i_this->mPlayerAngle;
+#else
     i_this->mPlayerAngle = fopAcM_searchPlayerAngleY(actor_this);
     i_this->mPlayerDist = fopAcM_searchPlayerDistance(actor_this);
+#endif
     damage_check(i_this);
     i_this->mSph.OffAtVsPlayerBit();
     s16 max_step = 0;
@@ -489,13 +652,21 @@ static void action(e_kg_class* i_this) {
     i_this->mSph.OnCoSetBit();
     switch (i_this->mAction) {
         case 0: {
-            e_kg_move(i_this);
+            e_kg_move(i_this, target_actor
+#if TARGET_PC
+                      , &gateProbe
+#endif
+                      );
             max_step = 0x2000;
             break;
         }
 
         case 1: {
-            if (e_kg_attack(i_this)) {
+            if (e_kg_attack(i_this, target_actor
+#if TARGET_PC
+                            , &gateProbe
+#endif
+                            )) {
                 i_this->mSph.OnAtVsPlayerBit();
             }
             max_step = 0x2000;
@@ -503,7 +674,7 @@ static void action(e_kg_class* i_this) {
         }
 
         case 5: {
-            e_kg_roof(i_this);
+            e_kg_roof(i_this, target_player);
             max_step = 0x2000;
             break;
         }
@@ -533,6 +704,12 @@ static void action(e_kg_class* i_this) {
             break;
         }
     }
+
+#if TARGET_PC
+    // Co-op: diagnostics only. Target retention can be stable while Young Gohma's native gate
+    // rejects the player; record the exact range/cone/LOS facts without changing behavior.
+    coOpRecordKgStateProbe(i_this, gateProbe, i_this->mAction == 1 && i_this->field_0x678 == 3);
+#endif
 
     cMtx_YrotS(*calc_mtx, actor_this->current.angle.y);
     my_vec_0.x = 0.0;
@@ -643,6 +820,11 @@ static int daE_KG_IsDelete(e_kg_class* i_this) {
 
 static int daE_KG_Delete(e_kg_class* i_this) {
     dComIfG_resDelete(&i_this->mPhase, "E_kg");
+#if TARGET_PC
+    // Co-op: Young Gohma target sidecar state is actor-lifetime data and must not outlive delete.
+    dusk::coop::clearAllEnemyTargets(i_this);
+    dusk::coop::young_gohma_state_probe::clearYoungGohmaStateProbe(i_this);
+#endif
     if (i_this->field_0xa70) {
         lbl_204_bss_8 = 0;
     }
