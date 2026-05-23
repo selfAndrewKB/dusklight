@@ -47,7 +47,15 @@ For each enemy family, classify and test these layers separately:
 | Follow-through | Attack animation/facing after startup | P1-only / raw-query / policy-backed / validated |
 | Damage/guard/cut | Hit reactions, shield checks, cut-type checks, special player states | P1-only / owner-aware / global-by-design / needs audit |
 | Projectile/grab/spawn | Spawned enemy weapons, grabs, catches, thrown objects | P1-only / owner-aware / host-owned / needs audit |
+| Item awareness | Hookshot, boomerang, bomb, bait, tool, or owned-item reactions | P1-only / active-player scan / owner-aware / deferred |
+| Spawn/presentation | Master/child spawning, child facing, intro/fanfare angles, camera-facing presentation | P1-only / target-slot-aware / global-by-design / deferred |
 | Demo/event/camera | Special cameras, scripted scenes, boss/event behavior | global-by-design / deferred / needs audit |
+
+Before moving from one enemy to the next, update that enemy's row with every left-out or deferred API
+hook discovered during implementation. Do not rely on memory or on "mostly works in-game." Name the
+missing family explicitly: damage-owner, defender-owner, selected-target state, item awareness,
+master/child ownership, presentation/camera ownership, caught/grab/swallow/hang ownership, broader
+collision-owner, render/visibility culling, or story/demo/global state.
 
 ## Current Proofs
 
@@ -60,6 +68,7 @@ For each enemy family, classify and test these layers separately:
 | Stalchild | Stalchild | `src/d/actor/d_a_e_bs.cpp` | `E_BS` | policy-backed targeting, first-pass validated | Swarm-style ground melee proof. Recognition, chase/attack target metrics, attack-facing checks, head tracking, and attack guard response route through the co-op API families. |
 | Gibdo | Gibdo | `src/d/actor/d_a_e_gi.cpp` | `E_GI` | policy-backed targeting, owner APIs validated | Sleep/wait/chase/attack/damage recovery and head tracking route through `enemy_targeting` plus `selected_target_state`; the close-range attack/scream gate uses immediate acquisition so stale chase retention cannot suppress an in-range player; ordinary sword cut reactions use `damage_owner`; scream stun uses `caught_stun_owner` so the retained slot owns release input and best-effort camera lock while nearby affected slots share the scream animation timer with an expanded co-op AoE. Wolf-bite ownership remains intentionally deferred to a later caught/grab-owner proof enemy. `gibdo.state` remains available for follow-up debugging and records native range/angle/LOS/delay/scream-owner gates. Some placed Gibdos use `mSwbit2` switch gating before sight checks, so apparent P1-only activation may also involve room script state. Simultaneous per-player scream ownership is documented as deferred because vanilla `m_cry_gi` also coordinates follow-up attacks. |
 | Young Gohma | Young Gohma | `src/d/actor/d_a_e_kg.cpp` | `E_KG` | policy-backed targeting, first-pass validated | Central action target metrics route through `enemy_targeting` plus `selected_target_state`; move/search and attack gates share the selected target's distance, angle, and line-of-sight actor. Roof/drop front-roll awareness uses the selected player's state instead of P1. Damage remains routed through the shared `cc_at_check()` owner path. `young_gohma.state` records range/cone/LOS and `pl_check` gate facts. The post-attack wander gap was confirmed to match vanilla Young Gohma behavior rather than co-op target loss. |
+| White Wolfos | White Wolfos | `src/d/actor/d_a_e_ww.cpp` | `E_WW` | policy-backed targeting, first-pass validated | Combat chase/attack/walk/move-out paths use one Combat owner plus `selected_target_state`; guard contact uses `defender_owner`; hookshot side-step awareness scans active players for live hookshot top positions instead of asking P1; master spawn staging can wake on P2; child facing follows the encounter anchor; presentation angles use the selected slot's camera when available. Remaining special/demo presentation and any broader spawn ownership should be documented as presentation/camera or master/child ownership if encountered in later passes. |
 
 ## Reviewed Evidence
 

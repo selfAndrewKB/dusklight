@@ -57,6 +57,21 @@ single owned scream instead of allowing simultaneous per-player screams. A futur
 policy may allow one active scream per player slot, but that must explicitly preserve or replace
 the native group choreography.
 
+White Wolfos added two adjacent ownership lessons that should be remembered during batch enemy
+work. First, master/child or spawned-enemy logic is not automatically P1-owned: the parent/master
+may need active-player awareness to decide when to spawn or wake children, and child presentation
+may need to face an encounter anchor or selected target rather than P1. Second, camera presentation
+reads are not combat targeting reads. If an enemy chooses an angle for a spawn intro, flourish, or
+camera-facing presentation, route it through a presentation-aware helper that can use the selected
+slot's camera when available, and leave a documented deferred hook when the proper presentation API
+does not exist yet.
+
+Hookshot, boomerang, bomb, bait, and similar item-awareness checks are also their own question:
+"which active player or owned item should this enemy react to?" White Wolfos side-step awareness
+proved that these can be active-player scans without changing combat target ownership. Do not answer
+item-awareness with P1 globals by habit, but also do not force it through sticky combat targeting if
+the vanilla behavior is an immediate reaction to an item/tool state.
+
 ## Routing Table
 
 | Question the callsite is asking | Use | Current status |
@@ -69,6 +84,8 @@ the native group choreography.
 | "Who did this enemy attack touch, and was that player guarding/blocking?" | `dusk::coop::defender_owner` | Initial direct-player implementation for Bokoblin guard collision |
 | "Which player collided, rode, pushed, stood on, or picked this up?" | broader collision-owner helpers | Not implemented yet |
 | "Which player is caught, stunned, grabbed, carried, swallowed, or retained by this actor?" | `dusk::coop::caught_stun_owner` / future caught-grab helpers | Initial implementation for Gibdo scream stun |
+| "Which active player or owned item should this enemy notice immediately?" | item/awareness helpers over player slots and owner keeps | Initial hookshot-awareness proof in White Wolfos |
+| "Which player/camera owns this spawn intro, child facing, or presentation angle?" | future presentation/camera-owner helpers | White Wolfos uses a narrow helper; broader API deferred |
 | "Which player owns this item/tool instance?" | item-owner helpers / owner keeps | Partially implemented by item ownership patches |
 | "Which player owns camera/HUD/message/story/save state?" | camera/HUD/story-specific APIs | Partially implemented for split-screen camera only |
 
@@ -96,6 +113,20 @@ the native group choreography.
   wolf-bite ownership remains deferred caught/grab work.
 - **Primary/global state:** story protagonist, demo/cutscene, save/restart, HUD, message, or
   single-camera state. Keep P1/global until a dedicated milestone proves otherwise.
+
+## Audit Breadcrumb Rule
+
+When an enemy conversion intentionally leaves a player-singleton read unconverted, record that fact
+in `docs/coop-enemy-audit.md` before moving to the next enemy. The audit row should name the
+deferred API family, not just say "left vanilla." This is especially important for:
+
+- camera/presentation ownership;
+- master/child spawning or inherited target ownership;
+- hookshot/item awareness;
+- caught/grab/swallow/hang ownership;
+- broader collision-owner contact such as push, ride, stand-on, pickup, and trigger ownership;
+- render/visibility or split-screen culling;
+- story/demo/HUD/save reads that remain deliberately primary/global.
 
 ## Enemy Conversion Rule
 

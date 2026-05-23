@@ -117,6 +117,8 @@ Retention is expressed as simulation seconds, not frame counts. V1 uses `retainS
 - `dusk::coop::caught_stun_owner` for retained stun effects such as Gibdo scream, where the enemy must keep using the same owner slot for release input and camera ownership until the effect ends, while optional affected slots can share the same effect timer;
 - future caught/grab-owner helpers for a player currently captured, carried, eaten, hung from, or otherwise physically retained by an enemy;
 - broader collision-owner helpers for contact-driven actors with no explicit search/chase targeting surface;
+- item-awareness helpers for immediate reactions to active player-owned tools, such as White Wolfos hookshot side-step checks, where the enemy should scan active players/items without making that item state the sticky combat target;
+- presentation/camera-owner helpers for spawn intros, master/child facing, or flourish angles, such as White Wolfos master/child spawning and target-slot camera presentation;
 - render/visibility or split-screen culling helpers for distance checks that only gate model calculation or presentation work.
 
 Leaving such reads conservative during an enemy-targeting patch is intentional when the owning API does not exist yet. Add them to the appropriate future pass instead of faking them with nearest-player guesses.
@@ -227,6 +229,16 @@ These are intentionally deferred, but the sidecar state and diagnostics should l
 - host-authored target replication for online play.
 
 Add these only when a tested enemy family needs them.
+
+## Batch Conversion Guardrail
+
+When converting enemies in batches, do not let the speed of repeated API use erase the audit trail.
+For every enemy touched, update `docs/coop-enemy-audit.md` with both the converted surfaces and the
+deferred surfaces. The row should explicitly name any left-out API hook, such as "wolf-bite
+caught/grab deferred," "bomb-search item-awareness deferred," "spawn child ownership deferred,"
+"camera presentation deferred," or "culling remains render/visibility work." This keeps later
+passes from rediscovering the same P1/global reads after the behavior already looked mostly good in
+game.
 
 ## Audit Gate
 
