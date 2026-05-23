@@ -9,6 +9,12 @@
 
 #include "f_op/f_op_actor_enemy.h"
 
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 class daE_AI_HIO_c : public JORReflexible {
 public:
     daE_AI_HIO_c();
@@ -34,6 +40,45 @@ daE_AI_HIO_c::daE_AI_HIO_c() {
     attack_range_2 = 190.0f;
     home_distance = 0.0f;
 }
+
+#if TARGET_PC
+// Co-op: Amos uses one combat target for wake/move/attack metrics; callsite labels are diagnostics
+// only and must not become independent target-retention owners.
+static bool coOpSelectCombatTargetState(
+    e_ai_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance, s16* angle_y) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+
+    return true;
+}
+#endif
 
 void e_ai_class::initCcCylinder() {
     m_ccAtStts.Init(250, 0, this);
@@ -134,6 +179,26 @@ int e_ai_class::Draw() {
 }
 
 BOOL e_ai_class::player_way_check() {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: the shield-facing rule is about the player Amos is fighting, not always P1.
+    if (coOpSelectCombatTargetState(this, "e_ai.player_way", false,
+                                    dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL,
+                                    NULL))
+    {
+        s16 angle_diff = shape_angle.y - targetState.shapeAngleY;
+        if (angle_diff < 0) {
+            angle_diff = -angle_diff;
+        }
+
+        if ((u16)angle_diff < 0x4000) {
+            return FALSE;
+        }
+
+        return TRUE;
+    }
+#endif
+
     s16 angle_diff = shape_angle.y - dComIfGp_getPlayer(0)->shape_angle.y;
     if (angle_diff < 0) {
         angle_diff = -angle_diff;
@@ -167,6 +232,30 @@ BOOL e_ai_class::other_bg_check(fopAc_ac_c* i_other) {
 }
 
 BOOL e_ai_class::pl_check(f32 i_range, s16 i_angle) {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: Amos sight/attack gates must test line of sight to the same selected target whose
+    // distance and angle were cached for this action tick.
+    const char* label = m_action == ACTION_WAIT ? "e_ai.wait" : "e_ai.pl_check";
+    dusk::coop::EnemyTargetMode mode = m_action == ACTION_WAIT
+                                           ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                                           : dusk::coop::EnemyTargetMode::StickyCombat;
+    if (coOpSelectCombatTargetState(this, label, m_action == ACTION_ATTACK, mode, &targetState,
+                                    &m_playerDist, &m_angleToPlayer))
+    {
+        if (m_playerDist < i_range) {
+            s16 angle_diff = shape_angle.y - m_angleToPlayer;
+            if (angle_diff < i_angle && angle_diff > (s16)-i_angle &&
+                !other_bg_check(targetState.actor))
+            {
+                return TRUE;
+            }
+        }
+
+        return FALSE;
+    }
+#endif
+
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
     
     if (m_playerDist < i_range) {
@@ -235,7 +324,17 @@ void e_ai_class::damage_check() {
         }
 
         if (set_hitmark) {
+#if TARGET_PC
+            // Co-op: cut reactions follow the player/weapon that actually hit Amos.
+            dusk::coop::damage_owner::DamageOwnerResult damage_owner =
+                dusk::coop::damage_owner::resolveDamageOwner(this, tg_hit_obj);
+            daPy_py_c* owner_player =
+                dusk::coop::damage_owner::resolveDamageOwnerPlayer(damage_owner);
+            u32 cut_type =
+                owner_player != NULL ? owner_player->getCutType() : daPy_getPlayerActorClass()->getCutType();
+#else
             u32 cut_type = daPy_getPlayerActorClass()->getCutType();
+#endif
             if ((cut_type == daPy_py_c::CUT_TYPE_LARGE_TURN_LEFT ||
                  cut_type == daPy_py_c::CUT_TYPE_LARGE_TURN_RIGHT ||
                  cut_type == daPy_py_c::CUT_TYPE_LARGE_JUMP_INIT ||
@@ -663,8 +762,22 @@ void e_ai_class::action() {
     cXyz sp14;
     cXyz sp8;
 
+#if TARGET_PC
+    // Co-op: cache the current combat target once per action tick so Amos movement, wake, and
+    // attack gates agree on the same selected player instead of recomputing P1 metrics.
+    if (!coOpSelectCombatTargetState(this, "e_ai.action", m_action == ACTION_ATTACK,
+                                     m_action == ACTION_WAIT
+                                         ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                                         : dusk::coop::EnemyTargetMode::StickyCombat,
+                                     NULL, &m_playerDist, &m_angleToPlayer))
+    {
+        m_angleToPlayer = fopAcM_searchPlayerAngleY(this);
+        m_playerDist = fopAcM_searchPlayerDistance(this);
+    }
+#else
     m_angleToPlayer = fopAcM_searchPlayerAngleY(this);
     m_playerDist = fopAcM_searchPlayerDistance(this);
+#endif
 
     if (m_hitCount < 3) {
         damage_check();
@@ -827,6 +940,10 @@ void e_ai_class::setBaseMtx() {
 }
 
 int e_ai_class::Delete() {
+#if TARGET_PC
+    dusk::coop::clearAllEnemyTargets(this);
+#endif
+
     dComIfG_resDelete(&m_phase, "E_AI");
 
     if (m_HIOInit) {
