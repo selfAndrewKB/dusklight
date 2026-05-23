@@ -16,6 +16,7 @@
 #include "JSystem/JKernel/JKRExpHeap.h"
 #include "JSystem/JKernel/JKRSolidHeap.h"
 #include "JSystem/J3DGraphAnimator/J3DMaterialAnm.h"
+#include "dusk/coop/render_visibility.h"
 #include <cstring>
 
 const char* daBg_c::setArcName() {
@@ -296,6 +297,10 @@ int daBg_c::draw() {
 
     dComIfGd_setListBG();
     mDoLib_clipper::changeFar(1000000.0f);
+    // Co-op: these room/background shapes are clipped against the current global view matrix.
+    // During native split-screen, bypass that one-camera hide/show decision so P2's view does
+    // not lose world detail just because P1's camera turned away.
+    bool bypass_draw_culling = dusk::coop::render_visibility::shouldBypassDrawCulling();
 
     J3DModelData* modelData;
     for (int i = 0; i < 6; i++) {
@@ -325,7 +330,8 @@ int daBg_c::draw() {
             for (u16 j = 0; j < modelData->getShapeNum(); j++) {
                 J3DShape* shape = modelData->getShapeNodePointer(j);
 
-                if (mDoLib_clipper::clip(j3dSys.getViewMtx(), (Vec*)shape->getMin(),
+                if (!bypass_draw_culling &&
+                    mDoLib_clipper::clip(j3dSys.getViewMtx(), (Vec*)shape->getMin(),
                                          (Vec*)shape->getMax())) {
                     shape->hide();
                 } else {

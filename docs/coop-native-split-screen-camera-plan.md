@@ -2,6 +2,10 @@
 
 This is the active co-op milestone after the first secondary ALINK item ownership pass.
 
+The reopened ownership audit for this milestone lives in
+`docs/coop-split-screen-api-audit.md`. Use that audit when deciding whether an old split-screen
+containment hook should remain as-is, move behind a Dusk-owned API family, or be replaced.
+
 ## Purpose
 
 Give local co-op a real second camera and a real second render viewport so P2 can be tested and played without being tethered to P1's view.
@@ -174,6 +178,7 @@ Fix only the sites needed for the current split-screen validation scenario.
 - [x] Scoped camera room/default-camera selection to each camera's owning player actor on PC. This keeps camera 1 from using the global stay room when P2 eventually crosses room boundaries independently.
 - [x] Found that P2's `FieldWide` behavior came from camera tags being evaluated only against `dComIfGp_getLinkPlayer()` and applied only through `dCam_getBody()` camera 0. Added a PC split-screen path that evaluates the same native tag volume against P2 and applies it to camera 1.
 - [ ] Design proper per-player/per-viewport environment-light ownership so split-screen lighting can be correct for all local players and future online peers.
+- [x] Added `render_visibility` and bypassed actor/world/background draw-time culling during native PC split screen.
 - [ ] Validate P1/P2 independent camera follow in a simple field/test room.
 - [ ] Decide and implement real per-player camera status storage/routing for P2-specific item, lock-on, and special camera modes.
 - [ ] Classify first batch of camera 0 call sites encountered during validation.
@@ -194,6 +199,7 @@ Fix only the sites needed for the current split-screen validation scenario.
 - On PC, camera room/default-camera selection now uses the camera owner's actor room when an owner exists. Vanilla single-player still resolves to the same room, while camera 1 can choose room camera data from P2's room instead of `dComIfGp_roomControl_getStayNo()`.
 - Native camera tags are actor-driven globals in vanilla: `daTag_Cam_c` checks Link's position and writes camera data via `dCam_getBody()`. Split-screen V1 now keeps that original camera 0 path and, when camera 1 is ready, evaluates the same tag volume against P2's actor position and applies the tag to camera 1. This is intentionally local to camera tags; it does not make every camera event or cutscene multiplayer-safe yet.
 - Camera 1 currently still relies on several global camera/render objects. After camera 1's draw method runs, camera 0's view matrix is restored as the authoritative global J3D view so follow-up global lighting/debug code does not accidentally inherit P2's camera. The user confirmed this changed lighting influence from P2 back to P1, proving the symptom is controlled by global camera/render state. That is a containment step, not the final design: correct split screen needs per-viewport environment/light setup so each local player, and eventually each online peer view, renders from its own camera without stealing global lighting from another view.
+- Actor, world, and background draw-time culling were vanilla one-camera paths. PC split-screen now routes the known draw visibility paths through `dusk::coop::render_visibility::shouldBypassDrawCulling()` and bypasses those P1-camera clipper decisions while native split screen is active. This does not change actor execution, lifecycle, room loading, event approval, or explicit `NODRAW` behavior.
 - `Ctrl+F12` now enables diagnostics, enables the native split-screen prototype, resets co-op probes, and spawns P2. The Actor Spawner also exposes `Native split screen` and `Ensure P2 camera` controls.
 - V1 keeps HUD/2D/fades P1-owned. Only the normal 3D window pass loops over active render windows.
 - `latest.json` may include exact camera eye/center/aspect/viewport state, camera type name, camera distance, trim, style timer, and window dimensions. `events.jsonl` event keys are semantic and should not churn from camera coordinates, distance, or timers alone.

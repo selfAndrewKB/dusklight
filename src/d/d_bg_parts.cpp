@@ -3,6 +3,7 @@
 #include "d/d_bg_parts.h"
 #include "d/d_s_play.h"
 #include "d/d_camera.h"
+#include "dusk/coop/render_visibility.h"
 #include "f_op/f_op_camera_mng.h"
 #include "JSystem/JKernel/JKRExpHeap.h"
 #include "JSystem/JKernel/JKRSolidHeap.h"
@@ -681,6 +682,9 @@ void dBgp_c::draw(fopAc_ac_c* i_actor) {
     camera_process_class* sp30 = dComIfGp_getCamera(0);
     dCamera_c* camera = &sp30->mCamera;
     JUT_ASSERT(1287, camera != NULL)
+    // Co-op: background-part visibility is keyed to camera 0. Native split-screen needs these
+    // parts kept drawable so P2 does not see world pieces pop from P1's camera direction.
+    bool bypass_draw_culling = dusk::coop::render_visibility::shouldBypassDrawCulling();
 
     static u16 l_dispBitTable[] = {
         0x4000,
@@ -694,7 +698,7 @@ void dBgp_c::draw(fopAc_ac_c* i_actor) {
     };
 
     u16 spE = 0;
-    if (camera->HideBGPartsOk()) {
+    if (!bypass_draw_culling && camera->HideBGPartsOk()) {
         u16 spC = dCam_getAngleY(sp30) + 0x1000;
         spE = l_dispBitTable[spC >> 13];
     }
@@ -721,7 +725,8 @@ void dBgp_c::draw(fopAc_ac_c* i_actor) {
                             Mtx m;
                             cMtx_concat(j3dSys.getViewMtx(), model->getBaseTRMtx(), m);
 
-                            if (!mDoLib_clipper::clip(m, joint->getMax(), joint->getMin())) {
+                            if (bypass_draw_culling ||
+                                !mDoLib_clipper::clip(m, joint->getMax(), joint->getMin())) {
                                 entryModel(model);
                             }
                         }

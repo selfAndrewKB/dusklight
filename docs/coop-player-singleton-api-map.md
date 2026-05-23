@@ -57,6 +57,12 @@ single owned scream instead of allowing simultaneous per-player screams. A futur
 policy may allow one active scream per player slot, but that must explicitly preserve or replace
 the native group choreography.
 
+Split-screen follows the same classification rule outside enemy code. Camera, viewport, HUD,
+lighting, audio, and render-culling questions should not be patched as generic "P2 fixes." Route
+them through the split-screen ownership families recorded in
+`docs/coop-split-screen-api-audit.md`. In particular, draw frustum culling is a
+`render_visibility` question, not a combat, selected-target, or player-query question.
+
 ## Routing Table
 
 | Question the callsite is asking | Use | Current status |
@@ -71,6 +77,7 @@ the native group choreography.
 | "Which player is caught, stunned, grabbed, carried, swallowed, or retained by this actor?" | `dusk::coop::caught_stun_owner` / future caught-grab helpers | Initial implementation for Gibdo scream stun |
 | "Which player owns this item/tool instance?" | item-owner helpers / owner keeps | Partially implemented by item ownership patches |
 | "Which player owns camera/HUD/message/story/save state?" | camera/HUD/story-specific APIs | Partially implemented for split-screen camera only |
+| "Which viewport owns this render pass, post effect, lighting, fog, or culling decision?" | split-screen viewport/render ownership APIs | Initial audit in `coop-split-screen-api-audit.md`; `render_visibility` implemented for known draw-culling paths |
 
 ## Classification Rules
 
@@ -94,6 +101,10 @@ the native group choreography.
   must not retarget to the nearest player while the grab/stun is active, and it must not borrow P1
   camera/body/controller state for P2. Gibdo scream stun now uses `caught_stun_owner`; Gibdo
   wolf-bite ownership remains deferred caught/grab work.
+- **Viewport/render ownership:** split-screen render passes, post effects, lighting, fog, HUD
+  projection, and draw-time visibility culling should be owned by viewport/render policy. Do not
+  scatter actor-specific culling fixes when a central PC split-screen visibility policy can answer
+  actor, world, foliage/detail, and background-part popping in one family.
 - **Primary/global state:** story protagonist, demo/cutscene, save/restart, HUD, message, or
   single-camera state. Keep P1/global until a dedicated milestone proves otherwise.
 

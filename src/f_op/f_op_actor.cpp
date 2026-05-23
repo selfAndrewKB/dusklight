@@ -17,6 +17,7 @@
 #include "f_pc/f_pc_manager.h"
 #include "f_pc/f_pc_debug_sv.h"
 #include "c/c_dylink.h"
+#include "dusk/coop/render_visibility.h"
 #include "m_Do/m_Do_printf.h"
 
 #if DEBUG
@@ -243,8 +244,12 @@ static int fopAc_Draw(void* i_this) {
 
     if (!dComIfGp_isPauseFlag()) {
         int var_r28 = dComIfGp_event_moveApproval(actor);
+        // Co-op: native split-screen has multiple active cameras, so P1 camera culling can hide
+        // actors that are visible to P2. Preserve explicit NODRAW/status gates below.
+        bool bypass_draw_culling = dusk::coop::render_visibility::shouldBypassDrawCulling();
         if ((var_r28 == 2 || (!fopAcM_CheckStatus(actor, fopAc_ac_c::getStopStatus()) &&
-            (!fopAcM_CheckStatus(actor, fopAcStts_CULL_e) || !fopAcM_cullingCheck(actor)))) &&
+            (!fopAcM_CheckStatus(actor, fopAcStts_CULL_e) || bypass_draw_culling ||
+             !fopAcM_cullingCheck(actor)))) &&
             !fopAcM_CheckStatus(actor, fopAcStts_UNK_0x20000000_e | fopAcStts_NODRAW_e))
         {
             fopAcM_OffCondition(actor, fopAcCnd_NODRAW_e);
