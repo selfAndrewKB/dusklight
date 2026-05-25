@@ -17,7 +17,7 @@ families, and which systems are intentionally deferred.
 | Which viewport is being rendered right now? | `viewport_owner` / render-window context | Partially implemented in the painter loop |
 | Which player-status bits should a camera or camera tag read? | `player_camera_status` | Not implemented; camera 1 currently borrows/clamps unsafe vanilla status reads |
 | Which render state must be installed per viewport? | `viewport_render_state` | Not implemented; lighting/global J3D state is currently contained, not truly per-viewport |
-| Which fullscreen effect owns this viewport/framebuffer? | `viewport_effect_owner` | Not implemented; fullscreen post-effect tail is disabled during split-screen V1 |
+| Which fullscreen effect owns this viewport/framebuffer? | `viewport_effect_owner` | Partially implemented through `dusk::coop::render_effects` policy helpers and the central per-window painter replay |
 | Which player owns HUD, reticles, prompts, and message UI? | `hud_owner` / `ui_owner` | Not implemented; HUD is constrained to P1's viewport |
 | Which player activated an NPC/object/event trigger? | `interaction_owner` / `event_trigger_owner` | Not implemented |
 | Which camera or player should audio listener state follow? | `audio_listener_owner` | Not implemented; audio listener stays camera 0/P1-owned |
@@ -70,14 +70,21 @@ Current behavior:
 
 - Normal 3D draw loops active render windows.
 - HUD/2D remains P1-constrained.
-- The fullscreen post-effect tail is skipped during split-screen V1.
+- The late world/effect draw-list tail now runs per active render window after that window's
+  view/viewport/render state is installed. Fullscreen framebuffer captures/filters inside that
+  tail remain gated during split-screen until they have explicit viewport framebuffer ownership.
 
 Audit decision:
 
 - Keep the central painter loop. Do not add per-actor or per-enemy draw hooks for split screen.
 - Reframe the loop as the first `viewport_owner` implementation.
-- Reintroduce fullscreen effects one system at a time only after each effect has explicit
-  viewport/framebuffer ownership.
+- Late world/effect surfaces such as invisible lists, projection particles, Z-xlu, filter lists,
+  screen particles, and 3D-last packets should stay in this centralized per-window replay path.
+  Fullscreen effects such as motion blur, depth-of-field capture, indirect screen draw, bloom,
+  trimming, fade, and 2D-screen overlays need explicit viewport/framebuffer ownership before being
+  enabled in split-screen. If an individual fullscreen framebuffer effect misbehaves, fix or
+  classify that effect's ownership in `dusk::coop::render_effects` instead of disabling the whole
+  tail again.
 
 ### Camera 1 audio listener containment
 

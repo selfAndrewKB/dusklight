@@ -39,6 +39,7 @@
 #include "tracy/Tracy.hpp"
 
 #if TARGET_PC
+#include "dusk/coop/render_effects.h"
 #include "dusk/coop/render_materials.h"
 #endif
 
@@ -2398,13 +2399,23 @@ int mDoGph_Painter() {
             }
 #endif
 
-            // Co-op: the post-effect tail owns fullscreen framebuffer captures; keep it out of split-screen V1.
-            if (!dComIfGp_isPauseFlag() && !split_screen_active) {
+            // Co-op: the post-effect tail also owns late world/effect surfaces such as
+            // invisible lists, projection particles, Z-xlu, filter lists, and 3D-last packets.
+            // Replay those per viewport, but keep framebuffer-wide captures/filters disabled
+            // until they have explicit split viewport ownership; running them here can overwrite
+            // the native split render target and black out the scene.
+            const bool replay_late_world_effects =
+                dusk::coop::render_effects::shouldReplayLateWorldEffectTail();
+            const bool run_fullscreen_effects =
+                dusk::coop::render_effects::shouldRunFullscreenFramebufferEffects();
+            if (!dComIfGp_isPauseFlag() && replay_late_world_effects) {
                 #if DEBUG
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                GX_DEBUG_GROUP(motionBlure, &camera_p->view);
+                if (run_fullscreen_effects) {
+                    GX_DEBUG_GROUP(motionBlure, &camera_p->view);
+                }
 
                 #if DEBUG
                 // "blur filter (Rendering)"
@@ -2413,9 +2424,12 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                GX_DEBUG_GROUP(drawDepth2, &camera_p->view, view_port, dComIfGp_getCameraZoomForcus(camera_id));
-                GXInvalidateTexAll();
-                GXSetClipMode(GX_CLIP_ENABLE);
+                if (run_fullscreen_effects) {
+                    GX_DEBUG_GROUP(drawDepth2, &camera_p->view, view_port,
+                                   dComIfGp_getCameraZoomForcus(camera_id));
+                    GXInvalidateTexAll();
+                    GXSetClipMode(GX_CLIP_ENABLE);
+                }
 
                 #if DEBUG
                 // "depth of field (Rendering)"
@@ -2497,7 +2511,10 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                retry_captue_frame(&camera_p->view, view_port, dComIfGp_getCameraZoomForcus(camera_id));
+                if (run_fullscreen_effects) {
+                    retry_captue_frame(&camera_p->view, view_port,
+                                       dComIfGp_getCameraZoomForcus(camera_id));
+                }
 
                 #if DEBUG
                 // "Frame Buffer capture 2nd time (Rendering)"
@@ -2529,9 +2546,12 @@ int mDoGph_Painter() {
 
                 GXSetClipMode(GX_CLIP_ENABLE);
 
-                GX_DEBUG_GROUP(dComIfGd_drawIndScreen);
+                if (run_fullscreen_effects) {
+                    GX_DEBUG_GROUP(dComIfGd_drawIndScreen);
+                }
 
-                if (strcmp(dComIfGp_getStartStageName(), "F_SP124") == 0) {
+                if (run_fullscreen_effects &&
+                    strcmp(dComIfGp_getStartStageName(), "F_SP124") == 0) {
                     retry_captue_frame(&camera_p->view, view_port,
                                        dComIfGp_getCameraZoomForcus(camera_id));
                 }
@@ -2554,7 +2574,9 @@ int mDoGph_Painter() {
 
                 cMtx_lookAt(m2, &sp38c, &cXyz::Zero, &sp398, 0);
                 j3dSys.setViewMtx(m2);
-                GX_DEBUG_GROUP(dComIfGd_drawXluList2DScreen);
+                if (run_fullscreen_effects) {
+                    GX_DEBUG_GROUP(dComIfGd_drawXluList2DScreen);
+                }
 
                 j3dSys.setViewMtx(camera_p->view.viewMtx);
                 GXSetProjection(camera_p->view.projMtx, GX_PERSPECTIVE);
@@ -2568,7 +2590,8 @@ int mDoGph_Painter() {
 
                 j3dSys.reinitGX();
 
-                if ((g_env_light.camera_water_in_status || !strcmp(dComIfGp_getStartStageName(), "D_MN08")))
+                if (run_fullscreen_effects &&
+                    (g_env_light.camera_water_in_status || !strcmp(dComIfGp_getStartStageName(), "D_MN08")))
                 {
                     u8 enable = mDoGph_gInf_c::getBloom()->getEnable();
                     GXColor color = *mDoGph_gInf_c::getBloom()->getMonoColor();
@@ -2585,11 +2608,14 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                GX_DEBUG_GROUP(mDoGph_gInf_c::getBloom()->draw);
-                // Co-op: bloom helpers can restore fullscreen GX state; return to this window before tail overlays.
-                set_window_viewport();
-                j3dSys.setViewMtx(camera_p->view.viewMtx);
-                GXSetProjection(camera_p->view.projMtx, GX_PERSPECTIVE);
+                if (run_fullscreen_effects) {
+                    GX_DEBUG_GROUP(mDoGph_gInf_c::getBloom()->draw);
+                    // Co-op: bloom helpers can restore fullscreen GX state; return to this
+                    // window before tail overlays.
+                    set_window_viewport();
+                    j3dSys.setViewMtx(camera_p->view.viewMtx);
+                    GXSetProjection(camera_p->view.projMtx, GX_PERSPECTIVE);
+                }
 
                 #if DEBUG
                 if (g_kankyoHIO.navy.field_0x30d != 0 && dKy_darkworld_check() == TRUE) {
@@ -2612,7 +2638,7 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                if (fapGmHIO_getParticle()) {
+                if (run_fullscreen_effects && fapGmHIO_getParticle()) {
                     #if WIDESCREEN_SUPPORT
                     if (mDoGph_gInf_c::isWideZoom()) {
                         ortho.setOrtho(0.0f, 0.0f, FB_WIDTH_BASE, FB_HEIGHT_BASE, 100000.0f, -100000.0f);
@@ -2631,9 +2657,12 @@ int mDoGph_Painter() {
                     dComIfGp_particle_draw2Dgame(&draw_info2);
                 }
 
-                trimming(&camera_p->view, view_port);
+                if (run_fullscreen_effects) {
+                    trimming(&camera_p->view, view_port);
+                }
 
-                if (strcmp(dComIfGp_getStartStageName(), "F_SP127") != 0 &&
+                if (run_fullscreen_effects &&
+                    strcmp(dComIfGp_getStartStageName(), "F_SP127") != 0 &&
                     (mDoGph_gInf_c::isFade() & 0x80) == 0)
                 {
                     mDoGph_gInf_c::calcFade();
