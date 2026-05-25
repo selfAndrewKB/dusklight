@@ -2471,6 +2471,14 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
+                if (dusk::coop::render_effects::shouldRefreshProjectionParticleFramebuffer()) {
+                    // Co-op: heat-haze projection particles bind the particle resource "dummy"
+                    // texture, which points at the framebuffer. Refresh it from this viewport
+                    // before projection particles sample it.
+                    retry_captue_frame(&camera_p->view, view_port,
+                                       dComIfGp_getCameraZoomForcus(camera_id));
+                }
+
                 if (fapGmHIO_getParticle()) {
                     GX_DEBUG_GROUP(dComIfGp_particle_drawFogPri4, &draw_info);
                     GX_DEBUG_GROUP(dComIfGp_particle_drawProjection, &draw_info);

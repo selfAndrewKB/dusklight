@@ -16,4 +16,12 @@ bool shouldRunFullscreenFramebufferEffects() {
 #endif
 }
 
+bool shouldRefreshProjectionParticleFramebuffer() {
+#if TARGET_PC
+    return dusk::coop::camera::isSplitScreenEnabled();
+#else
+    return false;
+#endif
+}
+
 }  // namespace dusk::coop::render_effects

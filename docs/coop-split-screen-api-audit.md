@@ -86,6 +86,10 @@ Audit decision:
   enabled in split-screen. If an individual fullscreen framebuffer effect misbehaves, fix or
   classify that effect's ownership in `dusk::coop::render_effects` instead of disabling the whole
   tail again.
+- Heat-haze projection particles bind the particle resource `dummy` texture, which is backed by the
+  framebuffer. Split-screen refreshes that framebuffer texture from the active viewport immediately
+  before projection particles draw; this is separate from the later indirect-screen draw list, which
+  remains disabled in split-screen because it contains mixed fullscreen weather/effect packets.
 
 ### Real-shadow ownership
 
