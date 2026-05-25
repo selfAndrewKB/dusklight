@@ -1924,7 +1924,6 @@ json collectCoopProbes() {
         {"restore_primary_model_data_owner", coop::hasSecondaryAlinkProbeFlag(coop::SecondaryAlinkProbe_RestorePrimaryModelDataOwner)},
         {"scoped_draw_model_data_owner", coop::hasSecondaryAlinkProbeFlag(coop::SecondaryAlinkProbe_ScopedDrawModelDataOwner)},
         {"scoped_execute_model_data_owner", coop::hasSecondaryAlinkProbeFlag(coop::SecondaryAlinkProbe_ScopedExecuteModelDataOwner)},
-        {"ignore_shared_attention_lock", coop::hasSecondaryAlinkProbeFlag(coop::SecondaryAlinkProbe_IgnoreSharedAttentionLock)},
     };
 }
 

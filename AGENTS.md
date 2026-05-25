@@ -12,7 +12,7 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
 - Match local C++ style exactly. In early file-scope helpers, qualify class enum members such as `daAlink_c::BTN_R`; do not assume unqualified member names are visible outside member-function scope.
 - When logging through `aurora::Module` / fmt on MSVC, cast small integer, enum, `BOOL`, and bool-ish expressions to ordinary `int` / `unsigned int` as needed. Avoid clever format arguments that trip fmt compile-time checks.
 - For secondary ALINK shield/attention bugs, do not treat clean P2 input as proof that state is decoupled. Current evidence points at shared attention/player-status state, so capture status facts before adding behavior fixes.
-- `checkAttentionLock()` is the first confirmed singleton hazard: P2 stopped mirroring P1's shield/target pose once secondary ALINK ignored the shared `dAttention_c::Lockon()` result. Future fixes should turn that into per-player attention semantics, not remove global attention from P1 camera/HUD/story uses.
+- `checkAttentionLock()` is the first confirmed singleton hazard: route ALINK gameplay through `dusk::coop::player_attention` so additional players get slot-local `dAttention_c` state while P1/global attention can still drive camera/HUD/story uses.
 - Diagnostics must keep `latest.json` rich and `events.jsonl` semantic. Continuous values may appear in latest snapshots or emitted payload context, but they should not drive JSONL events unless the profile is explicitly testing frame-level churn.
 - In-game co-op debug overlays are for fast visual inspection only. Keep durable evidence in structured diagnostics and avoid making overlays mutate gameplay, diagnostics, or target policy.
 - Runtime co-op identity should come from the player-slot registry (`getSlotForActor`, `isPlayerInSlot`, `isAdditionalPlayer`). ALINK negative actor arguments are only spawn-time bootstraps before extra-slot registration exists.
@@ -43,12 +43,13 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
 - `docs/coop-secondary-alink-item-ownership-plan.md`: completed item/action ownership pass: boomerang, fishing rod, Dominion Rod, bow/arrow, Spinner, bombs, slingshot, and Iron Boots owner-routing findings.
 - `docs/coop-native-split-screen-camera-plan.md`: completed split-screen camera prototype milestone and known V1 render/HUD limitations.
 - `docs/coop-split-screen-api-audit.md`: reopened split-screen ownership audit for camera, viewport, render-state, culling, HUD, audio, and interaction API families.
+- `docs/coop-p2-independent-control-plan.md`: active control-ownership plan for replacing the secondary ALINK shared-attention probe with slot-local attention, button status, item aiming, interactions, and Hidden Skill training ownership.
 - `docs/coop-network-multiplayer-readiness.md`: host-authoritative multiplayer readiness notes, especially player-slot identity, enemy-target replication seams, and pointer-vs-slot rules.
 - `docs/coop-player-singleton-api-map.md`: central routing guide for `daPy_getPlayerActorClass()`, `dComIfGp_getPlayer(0)`, and which co-op API family should answer each player-identity question.
 - `docs/coop-world-acknowledgement-plan.md`: completed world-acknowledgement proof: player-query helpers, diagnostics, Hanging Helmasaur proof, and Bokoblin raw-query evidence.
 - `docs/coop-player-owner-lookup-audit.md`: reusable audit table for item/weapon actors that still ask global P1 when they should ask the owning ALINK slot.
 - `docs/coop-enemy-audit.md`: enemy/world acknowledgement map, actor triage table, and the target-policy layering for `actor patches -> enemy_targeting -> player_query`.
-- `docs/coop-enemy-targeting-plan.md`: current active co-op plan: policy-backed enemy targeting over `player_query`; V1 validated Bokoblin and Tektite, with damage-owner now split into its own API.
+- `docs/coop-enemy-targeting-plan.md`: completed enemy-targeting architecture plan: policy-backed enemy targeting over `player_query`, with validated owner API families and enemy audit follow-up in `docs/coop-enemy-audit.md`.
 - `.codex/config.toml`: Codex hook wiring. Keep hook behavior narrow and documented in `docs/codex-hooks.md`.
 - `files.cmake`: explicit source-file list. Update it when adding C++ source/header files that must be built.
 

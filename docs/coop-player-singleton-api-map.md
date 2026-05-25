@@ -63,6 +63,12 @@ them through the split-screen ownership families recorded in
 `docs/coop-split-screen-api-audit.md`. In particular, draw frustum culling is a
 `render_visibility` question, not a combat, selected-target, or player-query question.
 
+P2 control independence follows the same rule inside ALINK. The old secondary-only
+`Ignore shared attention lock` probe was a containment flag, not the final design. Player lock-on,
+guard/block availability, first-person item camera modes, prompts, and Hidden Skill training need
+slot-local ownership APIs so P2 can answer "what am I targeting or doing?" without consuming P1's
+global attention/status state. See `docs/coop-p2-independent-control-plan.md`.
+
 ## Routing Table
 
 | Question the callsite is asking | Use | Current status |
@@ -76,6 +82,11 @@ them through the split-screen ownership families recorded in
 | "Which player collided, rode, pushed, stood on, or picked this up?" | broader collision-owner helpers | Not implemented yet |
 | "Which player is caught, stunned, grabbed, carried, swallowed, or retained by this actor?" | `dusk::coop::caught_stun_owner` / future caught-grab helpers | Initial implementation for Gibdo scream stun |
 | "Which player owns this item/tool instance?" | item-owner helpers / owner keeps | Partially implemented by item ownership patches |
+| "What is this player slot locked onto or allowed to target?" | `dusk::coop::player_attention` | V1 gives additional ALINK actors their own `dAttention_c`; P1 remains on global attention for camera/HUD compatibility |
+| "What Do/R/Z/R action status should this ALINK consume?" | future `player_button_status` | Planned; global meter status remains P1-owned for now |
+| "Which player owns first-person/item camera status?" | future `player_camera_status` over `dusk::coop::camera` | Planned; bow/slingshot projectile ownership is fixed, camera/status ownership is not |
+| "Which player owns this prompt/object interaction?" | future `interaction_owner` | Planned for talk/check/pickup/howl prompts |
+| "Which player is retained by this training sequence?" | future `training_owner` | Planned for Hidden Skills / `NPC_KN` |
 | "Which player owns camera/HUD/message/story/save state?" | camera/HUD/story-specific APIs | Partially implemented for split-screen camera only |
 | "Which viewport owns this render pass, post effect, lighting, fog, or culling decision?" | split-screen viewport/render ownership APIs | Initial audit in `coop-split-screen-api-audit.md`; `render_visibility` implemented for known draw-culling paths |
 
@@ -101,6 +112,17 @@ them through the split-screen ownership families recorded in
   must not retarget to the nearest player while the grab/stun is active, and it must not borrow P1
   camera/body/controller state for P2. Gibdo scream stun now uses `caught_stun_owner`; Gibdo
   wolf-bite ownership remains deferred caught/grab work.
+- **Player attention:** ALINK lock-on, target actor, attention truth/release, and slot-local prompt
+  candidates. Do not let P2 consume P1's `dAttention_c::Lockon()` as its own gameplay lock state.
+- **Player button status:** Do/R/Z/R action availability consumed by ALINK gameplay. Global meter
+  status may stay P1-owned until HUD work expands, but P2 action checks need a slot-local answer.
+- **Player camera status:** first-person and item-aiming states such as bow, slingshot, Hawkeye,
+  hookshot, and iron ball subject mode. Route through slot camera ownership rather than global
+  player-status bits.
+- **Interaction owner:** prompt-driven actions such as talk, check, pickup, howl, and object use.
+  Keep it separate from enemy targeting and item owner lookup.
+- **Training owner:** retained instructional/event combat sequences such as Hidden Skills. Once a
+  trainer binds to a slot, required move checks and forced placement should follow that slot.
 - **Viewport/render ownership:** split-screen render passes, post effects, lighting, fog, HUD
   projection, draw-time visibility culling, and shadows should be owned by viewport/render policy.
   Use `render_visibility` for shared draw-culling decisions, `render_materials` for viewport-owned

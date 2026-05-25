@@ -1424,6 +1424,7 @@ set(DUSK_FILES
         include/dusk/coop/enemy_targeting.h
         include/dusk/coop/gibdo_state_probe.h
         include/dusk/coop/input.h
+        include/dusk/coop/player_attention.h
         include/dusk/coop/player_query.h
         include/dusk/coop/player_slots.h
         include/dusk/coop/render_effects.h
@@ -1453,6 +1454,7 @@ set(DUSK_FILES
         src/dusk/coop/selected_target_state.cpp
         src/dusk/coop/young_gohma_state_probe.cpp
         src/dusk/coop/input.cpp
+        src/dusk/coop/player_attention.cpp
         src/dusk/diagnostics.cpp
         src/dusk/dvd_asset.cpp
         src/d/actor/d_a_alink_dusk.cpp

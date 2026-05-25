@@ -57,6 +57,7 @@
 #include "dusk/coop/alink_probes.h"
 #include "dusk/coop/camera.h"
 #include "dusk/coop/input.h"
+#include "dusk/coop/player_attention.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/diagnostics.h"
 #include "dusk/logging.h"
@@ -301,14 +302,7 @@ void coopLogSecondaryActionMirrorState(const char* phase, daAlink_c* player) {
 }
 
 BOOL checkCoopAttentionLock(daAlink_c* player) {
-    // Co-op: extra player Links must not mirror P1's shared attention lock.
-    if (dusk::coop::isAdditionalPlayer(player) &&
-        dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_IgnoreSharedAttentionLock))
-    {
-        return FALSE;
-    }
-
-    return player->mAttention->Lockon();
+    return dusk::coop::player_attention::isLockOn(player);
 }
 
 void coopInstallModelDataOwner(daAlink_c* player) {
@@ -10180,6 +10174,12 @@ void daAlink_c::setStickData() {
 }
 
 void daAlink_c::setAtnList() {
+#if TARGET_PC
+    // Co-op: derive target/guard state from this player's attention owner, not P1's global lock.
+    dusk::coop::player_attention::updateForPlayer(this);
+    mAttention = dusk::coop::player_attention::attentionForPlayer(this);
+#endif
+
     mAttList = NULL;
     mAttList2 = NULL;
     mTargetedActor = NULL;

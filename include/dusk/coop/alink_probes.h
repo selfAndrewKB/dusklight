@@ -17,14 +17,12 @@ enum SecondaryAlinkProbeFlag : unsigned int {
     SecondaryAlinkProbe_RestorePrimaryModelDataOwner = 1u << 10,
     SecondaryAlinkProbe_ScopedDrawModelDataOwner = 1u << 11,
     SecondaryAlinkProbe_ScopedExecuteModelDataOwner = 1u << 12,
-    SecondaryAlinkProbe_IgnoreSharedAttentionLock = 1u << 13,
 };
 
 constexpr unsigned int kDefaultSecondaryAlinkProbeFlags =
     SecondaryAlinkProbe_RestorePrimaryModelDataOwner |
     SecondaryAlinkProbe_ScopedDrawModelDataOwner |
-    SecondaryAlinkProbe_ScopedExecuteModelDataOwner |
-    SecondaryAlinkProbe_IgnoreSharedAttentionLock;
+    SecondaryAlinkProbe_ScopedExecuteModelDataOwner;
 
 unsigned int getSecondaryAlinkProbeFlags();
 void setSecondaryAlinkProbeFlags(unsigned int flags);
