@@ -5,6 +5,8 @@
 namespace dusk::coop::render_effects {
 
 bool shouldReplayLateWorldEffectTail() {
+    // Co-op: late world effects replay per viewport; fullscreen framebuffer effects are gated
+    // inside that tail because they are still single-EFB ownership.
     return true;
 }
 

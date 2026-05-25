@@ -7,6 +7,7 @@
 #include "d/d_kankyo.h"
 #include "dusk/coop/camera.h"
 
+#include <algorithm>
 #include <vector>
 
 namespace dusk::coop::render_materials {
@@ -57,6 +58,28 @@ bool isCurrentRefreshFrame(unsigned int entryFrame, unsigned int frame) {
     // actor/background submission that registered kankyo material state. Treat the newest
     // current-or-previous-frame entry as live instead of requiring exact counter equality.
     return entryFrame == frame || entryFrame + 1 == frame;
+}
+
+bool isStaleRefreshEntry(unsigned int entryFrame, unsigned int frame) {
+    return frame >= entryFrame && frame - entryFrame > 2;
+}
+
+template <typename Entry>
+void sweepStaleEntries(std::vector<Entry>& entries, unsigned int frame) {
+    entries.erase(std::remove_if(entries.begin(), entries.end(),
+                                 [frame](const Entry& entry) {
+                                     return isStaleRefreshEntry(entry.lastSeenFrame, frame);
+                                 }),
+                  entries.end());
+}
+
+void sweepStaleRegistrations(unsigned int frame) {
+    // Co-op: these registries are pointer-keyed from transient actor/model submissions.
+    // Drop entries after the replay window so freed pointers cannot accumulate or be reused
+    // under a stale kankyo role during long sessions.
+    sweepStaleEntries(s_materials, frame);
+    sweepStaleEntries(s_models, frame);
+    sweepStaleEntries(s_tevstrs, frame);
 }
 
 bool refreshTevstrForCurrentView(dKy_tevstr_c* tevstr) {
@@ -165,8 +188,10 @@ void refreshKankyoMaterialsForCurrentView() {
     // Co-op: actor/background draw submission patches shared J3D material state once before
     // split-screen replay. Refresh those same patches after each viewport camera is active so
     // P2 does not inherit camera-0 TEV/light material state.
-    s_refreshing = true;
     const unsigned int frame = currentFrame();
+    sweepStaleRegistrations(frame);
+
+    s_refreshing = true;
     for (KankyoMaterialEntry& entry : s_materials) {
         if (isCurrentRefreshFrame(entry.lastSeenFrame, frame) && entry.modelData != nullptr &&
             entry.tevstr != nullptr)

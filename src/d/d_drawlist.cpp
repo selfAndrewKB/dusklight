@@ -1072,12 +1072,11 @@ void dDlst_shadowReal_c::reset() {
 
 #if TARGET_PC
 static cXyz coOpResolveRealShadowLight(dKy_tevstr_c* tevstr) {
-    dScnKy_env_light_c* env_light = dKy_getEnvlight();
-
     if (tevstr != NULL) {
         return tevstr->mLightPosWorld;
     }
 
+    dScnKy_env_light_c* env_light = dKy_getEnvlight();
     cXyz light_pos = dKy_plight_near_pos();
     if (!(env_light->shadow_mode & 4) &&
         ((env_light->shadow_mode & 1) || (env_light->shadow_mode & 2)))

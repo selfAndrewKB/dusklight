@@ -298,7 +298,7 @@ private:
     dKy_tevstr_c* mpShadowTevstr;
     bool mHasShadowSetup;
 #endif
-};  // Size: 0x2554
+};  // Size: 0x2554 non-PC; PC adds co-op shadow refresh fields.
 
 class dDlst_shadowControl_c {
 public:

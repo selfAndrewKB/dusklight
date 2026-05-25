@@ -2171,6 +2171,7 @@ int mDoGph_Painter() {
         if (camera_p != NULL) {
 #if TARGET_PC
             const bool split_screen_active = dusk::coop::camera::isSplitScreenEnabled();
+            bool refreshed_kankyo_materials = false;
             // Co-op: real-shadow texture generation happens before the main viewport replay,
             // but its matrices depend on active camera/light state. Prime the render globals for
             // this window before the shadow draw list refreshes its baked projection matrices.
@@ -2186,6 +2187,7 @@ int mDoGph_Painter() {
                 dKy_setLight();
                 dKy_setLight_again();
                 dusk::coop::render_materials::refreshKankyoMaterialsForCurrentView();
+                refreshed_kankyo_materials = true;
             }
 #endif
             #if DEBUG
@@ -2303,7 +2305,9 @@ int mDoGph_Painter() {
             }
             // Co-op: draw submission patches kankyo material state once before split-screen.
             // Re-patch after this viewport's camera matrix is active so P2 gets its own lighting.
-            dusk::coop::render_materials::refreshKankyoMaterialsForCurrentView();
+            if (!refreshed_kankyo_materials) {
+                dusk::coop::render_materials::refreshKankyoMaterialsForCurrentView();
+            }
 #endif
             GX_DEBUG_GROUP(dComIfGd_drawOpaListSky);
             GX_DEBUG_GROUP(dComIfGd_drawXluListSky);
