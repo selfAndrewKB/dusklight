@@ -38,6 +38,10 @@
 #include "m_Do/m_Do_main.h"
 #include "tracy/Tracy.hpp"
 
+#if TARGET_PC
+#include "dusk/coop/render_materials.h"
+#endif
+
 #if PLATFORM_WII || PLATFORM_SHIELD
 #include <revolution/sc.h>
 #endif
@@ -2163,6 +2167,9 @@ int mDoGph_Painter() {
         camera_process_class* camera_p = dComIfGp_getCamera(camera_id);
 
         if (camera_p != NULL) {
+#if TARGET_PC
+            const bool split_screen_active = dusk::coop::camera::isSplitScreenEnabled();
+#endif
             #if DEBUG
             fapGm_HIO_c::startCpuTimer();
             #endif
@@ -2201,9 +2208,7 @@ int mDoGph_Painter() {
                 GXSetScissor(view_port->x_orig, view_port->y_orig, view_port->width,
                              view_port->height);
             };
-#if TARGET_PC
-            const bool split_screen_active = dusk::coop::camera::isSplitScreenEnabled();
-#else
+#ifndef TARGET_PC
             const bool split_screen_active = false;
 #endif
 
@@ -2250,6 +2255,11 @@ int mDoGph_Painter() {
             dComIfGp_setCurrentWindow(window_p);
             dComIfGp_setCurrentView(&camera_p->view);
             dComIfGp_setCurrentViewport(view_port);
+            // Co-op: render helpers query the draw-list current view, not only the play
+            // current view. Keep both in sync when replaying shared lists per split viewport.
+            dComIfGd_setWindow(window_p);
+            dComIfGd_setView(&camera_p->view);
+            dComIfGd_setViewport(view_port);
             GXSetProjection(camera_p->view.projMtx, GX_PERSPECTIVE);
 
             #if DEBUG
@@ -2268,9 +2278,14 @@ int mDoGph_Painter() {
 #endif
             dKy_setLight();
 #if TARGET_PC
-            if (dusk::frame_interp::is_enabled()) {
+            if (split_screen_active || dusk::frame_interp::is_enabled()) {
+                // Co-op: dKy_setLight() updates environment state, but dKy_setLight_again()
+                // reloads the GX light objects. Split-screen needs that reload per viewport.
                 dKy_setLight_again();
             }
+            // Co-op: draw submission patches kankyo material state once before split-screen.
+            // Re-patch after this viewport's camera matrix is active so P2 gets its own lighting.
+            dusk::coop::render_materials::refreshKankyoMaterialsForCurrentView();
 #endif
             GX_DEBUG_GROUP(dComIfGd_drawOpaListSky);
             GX_DEBUG_GROUP(dComIfGd_drawXluListSky);

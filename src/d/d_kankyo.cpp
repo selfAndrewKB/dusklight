@@ -37,11 +37,126 @@
 #include "dusk/settings.h"
 #include "dusk/frame_interpolation.h"
 #include "dusk/game_clock.h"
+#include "dusk/coop/camera.h"
+#include "dusk/coop/player_slots.h"
+#include "dusk/coop/render_materials.h"
 #endif
 
 static void GxXFog_set();
 
 struct sub_kankyo__class : public kankyo_class {};
+
+#if TARGET_PC
+static view_class* dKy_getActiveDrawView() {
+    // Co-op: environment lighting can be recomputed while split-screen is replaying a
+    // shared draw list. Use the active draw view so camera-relative room lights are not
+    // permanently tied to camera 0.
+    view_class* view_p = dComIfGd_getView();
+    if (view_p != NULL) {
+        return view_p;
+    }
+
+    dDlst_window_c* window = dComIfGp_getWindow(0);
+    camera_class* camera_p = (camera_class*)dComIfGp_getCamera(window->getCameraID());
+    return &camera_p->view;
+}
+
+static int dKy_getActiveDrawCameraId() {
+    view_class* view_p = dComIfGd_getView();
+    if (view_p == NULL) {
+        return -1;
+    }
+
+    for (int i = 0; i < dComIfGp_getWindowNum(); i++) {
+        dDlst_window_c* window_p = dComIfGp_getWindow(i);
+        if (window_p == NULL) {
+            continue;
+        }
+
+        const int camera_id = window_p->getCameraID();
+        camera_class* camera_p = (camera_class*)dComIfGp_getCamera(camera_id);
+        if (camera_p != NULL && &camera_p->view == view_p) {
+            return camera_id;
+        }
+    }
+
+    return -1;
+}
+
+static daPy_py_c* dKy_getTevStructPlayer(cXyz* pos_p) {
+    // Co-op: player tevStr setup is called once per player actor, but the original helper
+    // reads the singleton P1. Resolve the owner from the position pointer the caller supplied
+    // so P2's model and nearby actor lighting can use P2's player state.
+    if (pos_p != NULL) {
+        for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+            fopAc_ac_c* player_p = dusk::coop::getPlayer(static_cast<dusk::coop::PlayerSlot>(i));
+            if (player_p != NULL && &player_p->current.pos == pos_p) {
+                return static_cast<daPy_py_c*>(player_p);
+            }
+        }
+
+        fopAc_ac_c* nearest_player = NULL;
+        f32 nearest_dist = 1000000000.0f;
+        for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+            fopAc_ac_c* player_p = dusk::coop::getPlayer(static_cast<dusk::coop::PlayerSlot>(i));
+            if (player_p == NULL) {
+                continue;
+            }
+
+            const f32 dist = player_p->current.pos.abs(*pos_p);
+            if (dist < nearest_dist) {
+                nearest_dist = dist;
+                nearest_player = player_p;
+            }
+        }
+
+        if (nearest_player != NULL && nearest_dist < 1.0f) {
+            return static_cast<daPy_py_c*>(nearest_player);
+        }
+    }
+
+    return daPy_getPlayerActorClass();
+}
+
+static cXyz* dKy_getActiveDrawPlayerFlamePos(const cXyz& camera_eye) {
+    // Co-op: the lantern/flame light is a retained player-owned effect, but vanilla samples
+    // only P1 once in exeKankyo(). During split-screen light submission, prefer the player
+    // attached to the active camera, then fall back to the nearest active flame to this eye.
+    const int camera_id = dKy_getActiveDrawCameraId();
+    if (camera_id >= 0 && camera_id < dusk::coop::kPlayerSlotCount) {
+        fopAc_ac_c* camera_player =
+            dusk::coop::getPlayer(static_cast<dusk::coop::PlayerSlot>(camera_id));
+        if (camera_player != NULL) {
+            cXyz* flame_pos = static_cast<daPy_py_c*>(camera_player)->getKandelaarFlamePos();
+            if (flame_pos != NULL) {
+                return flame_pos;
+            }
+        }
+    }
+
+    cXyz* nearest_flame = NULL;
+    f32 nearest_dist = 1000000000.0f;
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        fopAc_ac_c* player_p = dusk::coop::getPlayer(static_cast<dusk::coop::PlayerSlot>(i));
+        if (player_p == NULL) {
+            continue;
+        }
+
+        cXyz* flame_pos = static_cast<daPy_py_c*>(player_p)->getKandelaarFlamePos();
+        if (flame_pos == NULL) {
+            continue;
+        }
+
+        const f32 dist = flame_pos->abs(camera_eye);
+        if (dist < nearest_dist) {
+            nearest_dist = dist;
+            nearest_flame = flame_pos;
+        }
+    }
+
+    return nearest_flame;
+}
+#endif
 
 static LightStatus lightStatusBase = {
     {-36384.5f, 29096.699f, 17422.199f},
@@ -3234,7 +3349,11 @@ void dScnKy_env_light_c::settingTevStruct_plightcol_plus(cXyz* pos_p, dKy_tevstr
     int light_inf_id;
     u8 sp9 = 0;
     f32 sp34 = 1.0f;
+#if TARGET_PC
+    daPy_py_c* player = dKy_getTevStructPlayer(pos_p);
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
 
     if (pos_p != NULL) {
         J3DLightInfo* light_info = tevstr_p->mLightObj.getLightInfo();
@@ -3285,11 +3404,18 @@ void dScnKy_env_light_c::settingTevStruct_plightcol_plus(cXyz* pos_p, dKy_tevstr
                  strcmp(dComIfGp_getStartStageName(), "D_MN09A") == 0))
             {
                 cXyz camfwd;
+#if TARGET_PC
+                view_class* view_p = dKy_getActiveDrawView();
+#else
                 camera_class* camera = (camera_class*)dComIfGp_getCamera(0);
+                view_class* view_p = &camera->view;
+#endif
                 J3DLightInfo* light0_info = tevstr_p->mLights[0].getLightInfo();
                 sp9 = 1;
 
-                dKyr_get_vectle_calc(&camera->view.lookat.center, &camera->view.lookat.eye, &camfwd);
+                // Co-op: fallback player lighting is camera-relative and can run from
+                // background draw replay. Read the active split viewport instead of camera 0.
+                dKyr_get_vectle_calc(&view_p->lookat.center, &view_p->lookat.eye, &camfwd);
                 light_pos = *pos_p + (camfwd * 500.0f);
                 light_pos.y += 40.0f;
 
@@ -3298,8 +3424,8 @@ void dScnKy_env_light_c::settingTevStruct_plightcol_plus(cXyz* pos_p, dKy_tevstr
                 #endif
 
                 if (tevstr_p->Type >= 1 && tevstr_p->Type <= 9) {
-                    dKyr_get_vectle_calc(&camera->view.lookat.center, &camera->view.lookat.eye, &camfwd);
-                    light_pos = camera->view.lookat.eye + (camfwd * 180.0f);
+                    dKyr_get_vectle_calc(&view_p->lookat.center, &view_p->lookat.eye, &camfwd);
+                    light_pos = view_p->lookat.eye + (camfwd * 180.0f);
                 }
 
                 field_0x10f8.r = light0_info->mColor.r;
@@ -3693,6 +3819,12 @@ void dScnKy_env_light_c::settingTevStruct(int tevstrType, cXyz* pos_p, dKy_tevst
     }
     #endif
 
+#if TARGET_PC
+    // Co-op: material refresh now needs the original tevstr inputs, not just the final
+    // material pointer, because the camera-owned light values are generated here.
+    dusk::coop::render_materials::registerKankyoTevstrContext(tevstrType, pos_p, tevstr_p);
+#endif
+
     if (tevstr_p != NULL && g_env_light.mActorLightEffect != 100) {
         tevstr_p->field_0x374 = g_env_light.mActorLightEffect / 100.0f;
     }
@@ -3710,7 +3842,12 @@ void dScnKy_env_light_c::settingTevStruct(int tevstrType, cXyz* pos_p, dKy_tevst
 
     if (tevstrType == 14) {
         MtxPtr sp50 = j3dSys.getViewMtx();
+#if TARGET_PC
+        view_class* view_p = dKy_getActiveDrawView();
+#else
         camera_class* camera_p = (camera_class*)dComIfGp_getCamera(0);
+        view_class* view_p = &camera_p->view;
+#endif
         cXyz calc_pos;
         tevstr_p->mLightMode = 0;
 
@@ -3747,7 +3884,9 @@ void dScnKy_env_light_c::settingTevStruct(int tevstrType, cXyz* pos_p, dKy_tevst
 
         fog_near = 30000.0f;
         fog_far = 30000.0f;
-        dKyr_get_vectle_calc(&pos, &camera_p->view.lookat.eye, &calc_pos);
+        // Co-op: Type 14 places its primary light at the camera eye; use the
+        // active split viewport so this camera-space light follows each view.
+        dKyr_get_vectle_calc(&pos, &view_p->lookat.eye, &calc_pos);
 
         for (int i = 0; i < 6; i++) {
             J3DLightInfo& light_info = *tevstr_p->mLights[i].getLightInfo();
@@ -3836,9 +3975,9 @@ void dScnKy_env_light_c::settingTevStruct(int tevstrType, cXyz* pos_p, dKy_tevst
         Vec sp8C;
         Vec sp80;
 
-        sp80.x = camera_p->view.lookat.eye.x;
-        sp80.y = camera_p->view.lookat.eye.y;
-        sp80.z = camera_p->view.lookat.eye.z;
+        sp80.x = view_p->lookat.eye.x;
+        sp80.y = view_p->lookat.eye.y;
+        sp80.z = view_p->lookat.eye.z;
 
         light_info = tevstr_p->mLightObj.getLightInfo();
         cMtx_multVec(view_mtx, &sp80, &sp8C);
@@ -4516,6 +4655,12 @@ void dKy_cloudshadow_scroll(J3DModelData* modelData_p, dKy_tevstr_c* tevstr_p, i
 
 void dScnKy_env_light_c::setLightTevColorType_MAJI(J3DModelData* modelData_p,
                                                    dKy_tevstr_c* tevstr_p) {
+#if TARGET_PC
+    // Co-op: material TEV/light state is patched during shared draw submission; remember it so
+    // split-screen can refresh the patch under each viewport's camera before list replay.
+    dusk::coop::render_materials::registerKankyoMaterial(modelData_p, tevstr_p);
+#endif
+
     #if DEBUG
     if (g_kankyoHIO.no_color_type) {
         return;
@@ -4554,6 +4699,17 @@ void dScnKy_env_light_c::setLightTevColorType_MAJI(J3DModelData* modelData_p,
             setLightTevColorType_MAJI_sub(material, tevstr_p, lightType);
         }
     }
+}
+
+void dScnKy_env_light_c::setLightTevColorType_MAJI(J3DModel* model_p,
+                                                   dKy_tevstr_c* tevstr_p) {
+#if TARGET_PC
+    // Co-op: live model packets need the same per-viewport kankyo light refresh as shared
+    // model data, but the packet patch must stay narrow so texture/sampler DL state is untouched.
+    dusk::coop::render_materials::registerKankyoModel(model_p, tevstr_p);
+#endif
+
+    setLightTevColorType_MAJI(model_p->getModelData(), tevstr_p);
 }
 
 void dScnKy_env_light_c::CalcTevColor() {
@@ -8384,7 +8540,6 @@ void dKy_GlobalLight_set() {
 
         Vec light_pos;
         cMtx_multVec(view_mtx, &light_status->position, &light_pos);
-
         GXLightObj light_obj;
         GXInitLightPos(&light_obj, light_pos.x, light_pos.y, light_pos.z);
         GXInitLightDir(&light_obj, light_status->mLightDir.x, light_status->mLightDir.y,
@@ -8424,7 +8579,21 @@ BOOL dKy_lightswitch_check(stage_pure_lightvec_info_class* stage_light_info_p, c
 
 void dKy_setLight_nowroom_common(char room_no, f32 light_ratio) {
     dScnKy_env_light_c* kankyo = dKy_getEnvlight();
+#if TARGET_PC
+    view_class* view_p = dKy_getActiveDrawView();
+    cXyz camera_eye;
+    bool has_camera_eye = view_p != NULL;
+    if (has_camera_eye) {
+        camera_eye = view_p->lookat.eye;
+    }
+#else
     camera_class* camera = (camera_class*)dComIfGp_getCamera(0);
+    cXyz camera_eye;
+    bool has_camera_eye = camera != NULL;
+    if (has_camera_eye) {
+        camera_eye = camera->view.lookat.eye;
+    }
+#endif
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
     MtxP view_mtx = j3dSys.getViewMtx();
     dKy_tevstr_c* room_tevstr = dComIfGp_roomControl_getTevStr(room_no);
@@ -8469,8 +8638,24 @@ void dKy_setLight_nowroom_common(char room_no, f32 light_ratio) {
             lightMask |= 2;
         }
 
-        if (camera != 0) {
-            eflight_id = dKy_eflight_influence_id(camera->view.lookat.eye, 0);
+#if TARGET_PC
+        if (has_camera_eye) {
+            cXyz* flame_pos = dKy_getActiveDrawPlayerFlamePos(camera_eye);
+            if (flame_pos != NULL) {
+                // Co-op: shadow/near-light mode 2 is player-flame-owned. Rebind it for the
+                // active split viewport so P2 does not inherit P1's lantern/fill light.
+                g_env_light.field_0x10a0 = *flame_pos;
+                dKy_shadow_mode_set(2);
+            } else if (dKy_shadow_mode_check(2)) {
+                dKy_shadow_mode_reset(2);
+            }
+        }
+#endif
+
+        if (has_camera_eye) {
+            // Co-op: active room/effect lights can be chosen from the camera eye; use the
+            // current split viewport eye instead of always camera 0.
+            eflight_id = dKy_eflight_influence_id(camera_eye, 0);
             if (eflight_id >= 0) {
                 dKy_bgparts_activelight_set(g_env_light.efplight[eflight_id], 1);
                 if (dKy_Indoor_check() == TRUE) {
@@ -8558,8 +8743,10 @@ void dKy_setLight_nowroom_common(char room_no, f32 light_ratio) {
 
                     if (i == 0) {
                         (lightStatusPt + 2)[i].position = kankyo->sun_pos;
-                    } else if (camera != 0) {
-                        (lightStatusPt + 2)[i].position = camera->view.lookat.eye + kankyo->moon_pos;
+                    } else if (has_camera_eye) {
+                        // Co-op: moonlight is eye-relative in this path too; bind it to the
+                        // active split viewport so P2 does not inherit P1's fill direction.
+                        (lightStatusPt + 2)[i].position = camera_eye + kankyo->moon_pos;
                     } else {
                         (lightStatusPt + 2)[i].position = kankyo->moon_pos;
                     }
@@ -8768,7 +8955,15 @@ void dKy_setLight_nowroom_actor(dKy_tevstr_c* tevstr_p) {
     dScnKy_env_light_c* kankyo = dKy_getEnvlight();
     Vec light_pos;
     Vec sp3C;
+#if TARGET_PC
+    view_class* view_p = dComIfGd_getView();
+    if (view_p == NULL) {
+        camera_class* camera = (camera_class*)dComIfGp_getCamera(0);
+        view_p = &camera->view;
+    }
+#else
     camera_class* camera = (camera_class*)dComIfGp_getCamera(0);
+#endif
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
     MtxP view_mtx = j3dSys.getViewMtx();
 
@@ -8851,10 +9046,12 @@ void dKy_setLight_nowroom_actor(dKy_tevstr_c* tevstr_p) {
                             sp3C.x = kankyo->sun_pos.x;
                             sp3C.y = kankyo->sun_pos.y;
                             sp3C.z = kankyo->sun_pos.z;
-                        } else if (camera != NULL) {
-                            sp3C.x = camera->view.lookat.eye.x + kankyo->moon_pos.x;
-                            sp3C.y = camera->view.lookat.eye.y + kankyo->moon_pos.y;
-                            sp3C.z = camera->view.lookat.eye.z + kankyo->moon_pos.z;
+                        } else if (view_p != NULL) {
+                            // Co-op: actor room lights are refreshed per viewport; moonlight is
+                            // eye-relative, so use the active draw view instead of camera 0.
+                            sp3C.x = view_p->lookat.eye.x + kankyo->moon_pos.x;
+                            sp3C.y = view_p->lookat.eye.y + kankyo->moon_pos.y;
+                            sp3C.z = view_p->lookat.eye.z + kankyo->moon_pos.z;
                         } else {
                             sp3C.x = kankyo->moon_pos.x;
                             sp3C.y = kankyo->moon_pos.y;
