@@ -102,9 +102,11 @@ them through the split-screen ownership families recorded in
   camera/body/controller state for P2. Gibdo scream stun now uses `caught_stun_owner`; Gibdo
   wolf-bite ownership remains deferred caught/grab work.
 - **Viewport/render ownership:** split-screen render passes, post effects, lighting, fog, HUD
-  projection, and draw-time visibility culling should be owned by viewport/render policy. Do not
-  scatter actor-specific culling fixes when a central PC split-screen visibility policy can answer
-  actor, world, foliage/detail, and background-part popping in one family.
+  projection, draw-time visibility culling, and shadows should be owned by viewport/render policy.
+  Use `render_visibility` for shared draw-culling decisions, `render_materials` for viewport-owned
+  kankyo/J3D material state, `render_effects` for late world/effect versus fullscreen framebuffer
+  ownership, and `render_shadows` for real-shadow culling or baked shadow matrix ownership. Do not
+  scatter actor-specific render fixes when a central PC split-screen policy can answer the question.
 - **Primary/global state:** story protagonist, demo/cutscene, save/restart, HUD, message, or
   single-camera state. Keep P1/global until a dedicated milestone proves otherwise.
 

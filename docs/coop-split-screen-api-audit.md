@@ -18,6 +18,7 @@ families, and which systems are intentionally deferred.
 | Which player-status bits should a camera or camera tag read? | `player_camera_status` | Not implemented; camera 1 currently borrows/clamps unsafe vanilla status reads |
 | Which render state must be installed per viewport? | `viewport_render_state` | Not implemented; lighting/global J3D state is currently contained, not truly per-viewport |
 | Which fullscreen effect owns this viewport/framebuffer? | `viewport_effect_owner` | Partially implemented through `dusk::coop::render_effects` policy helpers and the central per-window painter replay |
+| Which viewport owns real-shadow submission culling and baked shadow matrices? | `render_shadows` | Partially implemented through `dusk::coop::render_shadows` for shared-list culling bypass and per-viewport real-shadow refresh |
 | Which player owns HUD, reticles, prompts, and message UI? | `hud_owner` / `ui_owner` | Not implemented; HUD is constrained to P1's viewport |
 | Which player activated an NPC/object/event trigger? | `interaction_owner` / `event_trigger_owner` | Not implemented |
 | Which camera or player should audio listener state follow? | `audio_listener_owner` | Not implemented; audio listener stays camera 0/P1-owned |
@@ -85,6 +86,34 @@ Audit decision:
   enabled in split-screen. If an individual fullscreen framebuffer effect misbehaves, fix or
   classify that effect's ownership in `dusk::coop::render_effects` instead of disabling the whole
   tail again.
+
+### Real-shadow ownership
+
+Files:
+
+- `include/dusk/coop/render_shadows.h`
+- `src/dusk/coop/render_shadows.cpp`
+- `include/d/d_drawlist.h`
+- `src/d/d_drawlist.cpp`
+- `src/m_Do/m_Do_graphic.cpp`
+
+Current behavior:
+
+- Real shadows are still submitted once into the shared draw list, but camera-0 depth/frustum
+  rejection is bypassed during native PC split-screen so P2-visible real shadows are not discarded
+  before P2's viewport renders.
+- Each split viewport primes the active view/light/material state before the real-shadow texture
+  pass, then `dDlst_shadowReal_c` refreshes its baked projection matrices from the original shadow
+  setup inputs.
+
+Audit decision:
+
+- Keep this as `render_shadows`, not a generic visibility patch or material patch.
+- Do not make actor files manually resubmit shadows for P2. Shared-list culling and baked shadow
+  matrix ownership should stay centralized in `dusk::coop::render_shadows` and the draw-list shadow
+  classes.
+- If future shadow classes misbehave, add explicit policy to `render_shadows` instead of copying
+  camera-0 bypass checks to each caller.
 
 ### Camera 1 audio listener containment
 

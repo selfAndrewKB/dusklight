@@ -41,6 +41,7 @@
 #if TARGET_PC
 #include "dusk/coop/render_effects.h"
 #include "dusk/coop/render_materials.h"
+#include "dusk/coop/render_shadows.h"
 #endif
 
 #if PLATFORM_WII || PLATFORM_SHIELD
@@ -2170,6 +2171,22 @@ int mDoGph_Painter() {
         if (camera_p != NULL) {
 #if TARGET_PC
             const bool split_screen_active = dusk::coop::camera::isSplitScreenEnabled();
+            // Co-op: real-shadow texture generation happens before the main viewport replay,
+            // but its matrices depend on active camera/light state. Prime the render globals for
+            // this window before the shadow draw list refreshes its baked projection matrices.
+            if (dusk::coop::render_shadows::shouldRefreshRealShadowForCurrentView()) {
+                view_port_class* shadow_view_port = window_p->getViewPort();
+                dComIfGp_setCurrentWindow(window_p);
+                dComIfGp_setCurrentView(&camera_p->view);
+                dComIfGp_setCurrentViewport(shadow_view_port);
+                dComIfGd_setWindow(window_p);
+                dComIfGd_setView(&camera_p->view);
+                dComIfGd_setViewport(shadow_view_port);
+                j3dSys.setViewMtx(camera_p->view.viewMtx);
+                dKy_setLight();
+                dKy_setLight_again();
+                dusk::coop::render_materials::refreshKankyoMaterialsForCurrentView();
+            }
 #endif
             #if DEBUG
             fapGm_HIO_c::startCpuTimer();
