@@ -10,6 +10,7 @@
 #include "f_op/f_op_actor_enemy.h"
 #include "Z2AudioLib/Z2Instances.h"
 #if TARGET_PC
+#include "dusk/coop/player_attention.h"
 #include "dusk/coop/player_query.h"
 #endif
 
@@ -1194,8 +1195,14 @@ void daE_HM_c::ActionMode() {
         mAcch.CrrPos(dComIfG_Bgsp());
         break;
     case 1:
+#if TARGET_PC
+        // Co-op: Helmasaur down/stab response should accept the player slot that actually locked on.
+        if (dusk::coop::player_attention::isActorLockedByAnyPlayer(this)) {
+            daE_HM_c* hm = this;
+#else
         if (dComIfGp_getAttention()->LockonTruth()) {
             daE_HM_c* hm = (daE_HM_c*)dComIfGp_getAttention()->LockonTarget(0);
+#endif
             if (hm == this) {
                 onDownFlg();
                 setStabPos();

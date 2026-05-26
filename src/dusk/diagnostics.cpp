@@ -13,6 +13,7 @@
 #include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/gibdo_state_probe.h"
 #include "dusk/coop/input.h"
+#include "dusk/coop/player_attention.h"
 #include "dusk/coop/player_query.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/coop/selected_target_state.h"
@@ -1256,10 +1257,9 @@ json attentionListSummary(dAttList_c* entries, int capacity) {
     return list;
 }
 
-json collectAttentionState() {
-    dAttention_c* attention = dComIfGp_getAttention();
+json attentionObjectSummary(dAttention_c* attention, int slot) {
     json data = {
-        {"schema_version", 1},
+        {"slot", slot},
         {"available", attention != nullptr},
     };
     if (attention == nullptr) {
@@ -1283,6 +1283,9 @@ json collectAttentionState() {
     data["check_object_count"] = attention->GetCheckObjectCount();
     data["check_object_offset"] = attention->mCheckObjectOffset;
     data["attn_status"] = static_cast<unsigned int>(attention->mAttnStatus);
+    data["attn_button_state"] = static_cast<unsigned int>(attention->field_0x32b);
+    data["attn_refresh_timer"] = static_cast<unsigned int>(attention->field_0x32e);
+    data["attn_release_timer"] = static_cast<unsigned int>(attention->field_0x32f);
     data["attn_block_timer"] = attention->mAttnBlockTimer;
     data["lockon_target_0"] = actorSummary(attention->LockonTarget(0));
     data["action_target_0"] = actorSummary(attention->ActionTarget(0));
@@ -1294,6 +1297,29 @@ json collectAttentionState() {
     data["action_list_active"] = attentionListSummary(attention->mActionList, 4);
     data["check_object_list_capacity"] = 4;
     data["check_object_list_active"] = attentionListSummary(attention->mCheckObjectList, 4);
+    return data;
+}
+
+json collectAttentionState() {
+    dAttention_c* attention = dComIfGp_getAttention();
+    json data = {
+        {"schema_version", 2},
+        {"available", attention != nullptr},
+    };
+    if (attention == nullptr) {
+        return data;
+    }
+
+    json primary = attentionObjectSummary(attention, 0);
+    for (auto& item : primary.items()) {
+        data[item.key()] = item.value();
+    }
+
+    json slots = json::array();
+    for (int slot = 0; slot < coop::kPlayerSlotCount; slot++) {
+        slots.push_back(attentionObjectSummary(coop::player_attention::existingAttentionForSlot(slot), slot));
+    }
+    data["slots"] = slots;
     return data;
 }
 
@@ -2014,7 +2040,7 @@ Provider s_providers[] = {
     {"camera.state", 1, "cheap", 1, true, 20, 8192, collectCameraState},
     {"player.slots", 1, "cheap", 1, true, 120, 8192, collectPlayerSlots},
     {"input.pad", 1, "cheap", 1, true, 120, 4096, collectInputPad},
-    {"attention.state", 1, "medium", 5, true, 60, 12288, collectAttentionState},
+    {"attention.state", 2, "medium", 5, true, 60, 32768, collectAttentionState},
     {"player.status", 1, "cheap", 1, true, 120, 8192, collectPlayerStatus},
     {"coop.player_query", 1, "cheap", 5, true, 240, 8192, collectPlayerQuery},
     {"enemy.targeting", 1, "cheap", 5, true, 240, 12288, collectEnemyTargeting},

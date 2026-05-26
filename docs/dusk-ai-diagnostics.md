@@ -196,7 +196,7 @@ The recorder should enforce output budgets centrally as a safety fuse, not as th
 
 The recorder is intentionally small but should grow through provider/profile additions, not one-off logs. The next useful expansion is a set of reusable provider families:
 
-- `attention.state`: global attention lock state, current lock-on/action/check targets, and enough actor metadata to tell which player slot is observing the global attention object.
+- `attention.state`: global and slot-local attention lock state, current lock-on/action/check targets, and enough actor metadata to tell which player slot owns each attention object.
 - `player.status`: selected `dComIfGp` player status bits, R/Z/A/Do/UI button status, camera attention status, and secondary ALINK mirror hints. This is the next implemented provider for separating clean P2 input from shared player/attention state before any behavior fix.
 - `actor.lifecycle`: create/delete/register/unregister events with future stable actor UIDs, profile names, rooms, arguments, and parent/process-tree relationships.
 - `actor.processes`: low-rate or manual process-tree summaries derived from the same data used by `ImGuiProcessOverlay`.
@@ -223,7 +223,7 @@ This keeps the recorder extensible enough for future co-op systems without turni
 - `latest.json` is the rich current-state surface. It may include exact positions, stick values, animation frames, render buffer sizes, attention list weights/distances, and other context that would be too noisy as event keys.
 - `events.jsonl` is the semantic timeline. Providers should project their latest data into a smaller event key so standing still, window-focus buffer churn, animation frame advancement, or tiny stick/position drift does not emit new events by itself.
 - `input.pad` event keys should use semantic gameplay input rather than raw trigger edges or the full raw hold bitfield. Exact raw values belong in payload/latest, but controller-specific high bits, one-frame trigger churn, and noisy held item bits should not make JSONL grow during ordinary movement.
-- `attention.state` and `player.status` are complementary. `attention.state` describes the shared `dAttention_c` object; `player.status` describes selected shared `dComIfGp` player/button/camera status that ALINK uses around shield, lock-on, actions, and UI prompts.
+- `attention.state` and `player.status` are complementary. `attention.state` describes the shared P1 `dAttention_c` object plus co-op slot-local attention owners; `player.status` describes selected shared `dComIfGp` player/button/camera status that ALINK uses around shield, lock-on, actions, and UI prompts.
 - `caught_stun.owner` records retained stun ownership for effects such as Gibdo scream. It should emit semantic begin/end/owner-change/affected-set events only; stun timers, cry timers, and input drift belong in `latest.json` and event context, not in the event key.
 - Current evidence says the P2 shield/attention mirror is not P2 input leakage: P2 input remains clean while shared attention/status facts change. Use these providers to identify which state needs per-player decoupling instead of forcing secondary ALINK to ignore attention as a blind workaround.
 - Historical secondary ALINK captures used an explicit `Ignore shared attention lock` probe to prove
@@ -315,7 +315,7 @@ The smallest useful implementation starts with:
 - `input.pad`: raw pad state and current co-op input snapshot for player slots 0 and 1.
 - `coop.probes`: current secondary ALINK probe flags.
 - `alink.secondary`: the secondary ALINK state already being investigated: proc, animation frame/rate, relevant input/action bits, and model-data ownership summary.
-- `attention.state`: global attention owner, flags, lock truth, targets, counts, and lock/action/check lists with actor metadata.
+- `attention.state`: global attention owner plus co-op slot-local attention owners, flags, lock truth, targets, counts, and lock/action/check lists with actor metadata.
 - `selected_target.state`: selected/player-state decisions after identity is known, such as target speed, facing, position, cut activity, and horse state. Continuous facts are latest/context only and must not drive JSONL events.
 - `defender.owner`: enemy-attack contact decisions after a collider touches a player, such as defender slot, guard/block state, shield-hit flags, and hit position. Contact events are semantic; held collisions should not emit every frame.
   Bokoblin currently reports individual attack sphere labels such as `atk-sphere0 P2 hit`; the investigation notes live in `docs/coop-defender-owner-contact-investigation.md`.
@@ -348,7 +348,7 @@ First profile candidate:
   ],
   "budgets": {
     "scene.current": {"max_events_per_minute": 20, "max_payload_bytes": 4096},
-    "attention.state": {"max_events_per_minute": 60, "max_payload_bytes": 12288},
+    "attention.state": {"max_events_per_minute": 60, "max_payload_bytes": 32768},
     "alink.secondary": {"max_events_per_minute": 120, "max_payload_bytes": 8192}
   },
   "flush_triggers": [
@@ -383,7 +383,7 @@ Implemented:
 - `Ctrl+F12` is the fast co-op capture setup: enable the diagnostics profile and native split-screen prototype, reset secondary ALINK probes to default, spawn P2 if possible, and show a Dusk toast. Use the manual UI controls for recovery, alternate probe combinations, or flushing.
 - Actor Spawner also exposes `Show enemy target overlay`, with `Ctrl+Shift+F12` as the hotkey. This draws live `enemy_targeting` decisions in-game for fast inspection, but it is not a durable artifact. Use `latest.json` and `events.jsonl` when preserving evidence for later review.
 - The existing ALINK action-mirror helper now also feeds `alink.secondary` structured state whenever it emits the human-readable `secondary action-mirror` log. Its `"phase"` field is informational; identical state is not re-emitted just because the helper saw a new before/after phase.
-- `attention.state` records the shared `dAttention_c` object directly: owner actor, pad number, flags, lock truth, lock/action/check counts and offsets, primary targets, and active lock/action/check list entries with actor metadata. It samples every five frames and intentionally omits empty list slots plus noisy list weights/distances in this profile. This exists because the current shield/target mirror evidence points at shared attention state, not P2 raw input leakage.
+- `attention.state` records the shared `dAttention_c` object directly and includes a `slots` array for co-op slot-local attention owners: owner actor, pad number, flags, lock truth, lock/action/check counts and offsets, button/release timers, primary targets, and active lock/action/check list entries with actor metadata. It samples every five frames and intentionally omits empty list slots. This exists because P2 target/guard evidence points at attention ownership state, not raw input leakage.
 - `camera.state` records camera 0/1 assignment, player ids, window ids, attention status, pointers, initialization readiness, owner/global room numbers, aspect/FOV, eye/center, camera distance, native `dCamera_c` type id/name, mode/state/style, trim, gear, window dimensions, and map-tool inputs for room/stage/default/tag camera selection. It samples every frame during the active profile so half-initialized camera processes and P2 camera-behavior differences are visible, but its event key intentionally uses assignment/readiness/mode/style facts, not exact camera vectors, distance, style timers, or window dimensions.
 - `camera.state` events include `event_context.player_slots` so camera type/style/tag transitions can be read together with current P1/P2 position, room, angle, and speed. These context values do not participate in the event key and therefore cannot make movement itself spam `events.jsonl`.
 - `render.windows` records active render-window count, split-screen layout, viewport/scissor rectangles, and camera id per window. It samples every frame during the active profile so bootstrap failures are visible, but emits JSONL only when layout/window facts change.

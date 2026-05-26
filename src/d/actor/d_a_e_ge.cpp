@@ -11,6 +11,9 @@
 #include "f_op/f_op_actor_enemy.h"
 #include "f_op/f_op_camera_mng.h"
 
+#if TARGET_PC
+#include "dusk/coop/player_attention.h"
+#endif
 
 class daE_GE_HIO_c : public JORReflexible {
 public:
@@ -505,7 +508,12 @@ void daE_GE_c::executeAttack() {
     }
 
     bool bVar = false;
+#if TARGET_PC
+    // Co-op: Guay should react to lock-on from the slot-local attention owner that targeted it.
+    if (dusk::coop::player_attention::isActorLockedByAnyPlayer(this))
+#else
     if (dComIfGp_getAttention()->LockonTruth() && dComIfGp_getAttention()->LockonTarget(0) == this)
+#endif
     {
         bVar = true;
     }

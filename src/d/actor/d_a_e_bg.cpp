@@ -16,6 +16,10 @@
 #include "d/d_s_play.h"
 #include "f_op/f_op_camera_mng.h"
 
+#if TARGET_PC
+#include "dusk/coop/player_attention.h"
+#endif
+
 class daE_BG_HIO_c : public JORReflexible {
 public:
     daE_BG_HIO_c();
@@ -570,8 +574,12 @@ void daE_BG_c::executeAttack() {
         }
 
         unkFlag1 = false;
-        if (dComIfGp_getAttention()->LockonTruth() &&
-            dComIfGp_getAttention()->LockonTarget(0) == this) {
+#if TARGET_PC
+        // Co-op: enemy reactions to being locked-on should accept any player's attention owner.
+        if (dusk::coop::player_attention::isActorLockedByAnyPlayer(this)) {
+#else
+        if (dComIfGp_getAttention()->LockonTruth() && dComIfGp_getAttention()->LockonTarget(0) == this) {
+#endif
             unkFlag1 = true;
         } else {
             if ((s16)cLib_distanceAngleS(unkShort1, fopAcM_searchPlayerAngleY(this)) > 0x6800) {

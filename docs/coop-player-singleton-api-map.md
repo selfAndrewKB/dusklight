@@ -82,7 +82,7 @@ global attention/status state. See `docs/coop-p2-independent-control-plan.md`.
 | "Which player collided, rode, pushed, stood on, or picked this up?" | broader collision-owner helpers | Not implemented yet |
 | "Which player is caught, stunned, grabbed, carried, swallowed, or retained by this actor?" | `dusk::coop::caught_stun_owner` / future caught-grab helpers | Initial implementation for Gibdo scream stun |
 | "Which player owns this item/tool instance?" | item-owner helpers / owner keeps | Partially implemented by item ownership patches |
-| "What is this player slot locked onto or allowed to target?" | `dusk::coop::player_attention` | V1 gives additional ALINK actors their own `dAttention_c`; owner camera gameplay reads use the same attention owner, while P1 remains on global attention for HUD/story compatibility |
+| "What is this player slot locked onto or allowed to target?" | `dusk::coop::player_attention` | V1 gives additional ALINK actors their own `dAttention_c`; lock acquisition/status gating, owner target-capability masks, owner camera gameplay, cursor drawing, and actor-observed "am I locked-on?" checks use the same attention owner while P1 remains on global attention for HUD/story compatibility |
 | "What Do/R/Z/R action status should this ALINK consume?" | future `player_button_status` | Planned; global meter status remains P1-owned for now |
 | "Which player owns first-person/item camera status?" | future `player_camera_status` over `dusk::coop::camera` | Planned; bow/slingshot projectile ownership is fixed, camera/status ownership is not |
 | "Which player owns this prompt/object interaction?" | future `interaction_owner` | Planned for talk/check/pickup/howl prompts |

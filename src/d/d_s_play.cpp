@@ -42,6 +42,7 @@
 #if TARGET_PC
 #include "dusk/autosave.h"
 #include "dusk/coop/camera.h"
+#include "dusk/coop/player_attention.h"
 #include "dusk/memory.h"
 #include "dusk/ui/ui.hpp"
 #endif
@@ -680,8 +681,20 @@ static int dScnPly_Draw(dScnPly_c* i_this) {
         dPath_Draw();
         #endif
 
-        dAttention_c* attention = dComIfGp_getAttention();
-        attention->Draw();
+#if TARGET_PC
+        const bool drawAttentionHere = !dusk::coop::camera::isSplitScreenEnabled() ||
+                                       !dusk::coop::camera::isSecondaryCameraReady();
+        // Co-op: split-screen lock cursors are submitted in each camera viewport.
+        if (drawAttentionHere)
+#endif
+        {
+            dAttention_c* attention = dComIfGp_getAttention();
+            attention->Draw();
+#if TARGET_PC
+            // Co-op: draw additional players' slot-local lock cursors alongside P1's global cursor.
+            dusk::coop::player_attention::drawAll();
+#endif
+        }
     }
 
     #if DEBUG

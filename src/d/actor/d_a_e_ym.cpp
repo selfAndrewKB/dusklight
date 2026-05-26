@@ -17,6 +17,9 @@
 #include <cstring>
 
 #include "dusk/settings.h"
+#if TARGET_PC
+#include "dusk/coop/player_attention.h"
+#endif
 
 class daE_YM_HIO_c: public JORReflexible {
 public:
@@ -378,8 +381,14 @@ bool daE_YM_c::checkSurpriseLock() {
     }
 
     if (mAction != ACT_ATTACK) {
+#if TARGET_PC
+        // Co-op: Shadow Insect surprise logic should honor lock-on from any player slot.
+        if (dusk::coop::player_attention::isActorLockedByAnyPlayer(this)) {
+            if (mType == 0) {
+#else
         if (dComIfGp_getAttention()->LockonTruth()) {
             if (dComIfGp_getAttention()->LockonTarget(0) == this && mType == 0) {
+#endif
                 cXyz my_vec_0 = current.pos - mPrevPos;
                 cXyz my_vec_1 = player->current.pos - mPrevPos;
                 if (mType == 4) {
@@ -1605,7 +1614,12 @@ void daE_YM_c::executeAttack() {
             field_0x6a5 = 0;
             break;
         case 1:
+            // Co-op: losing lock-on here means no player attention owner is still locked to this actor.
+#if TARGET_PC
+            if (field_0x6d4 && !dusk::coop::player_attention::isActorLockedByAnyPlayer(this)) {
+#else
             if (field_0x6d4 && (dComIfGp_getAttention()->LockonTruth() == 0 || dComIfGp_getAttention()->LockonTarget(0) != this)) {
+#endif
                 if (checkSurpriseNear()) {
                     return;
                 }

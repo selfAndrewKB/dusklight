@@ -58,6 +58,7 @@
 #include "d/actor/d_a_horse.h"
 #include "dusk/coop/camera.h"
 #include "dusk/coop/debug_overlay.h"
+#include "dusk/coop/player_attention.h"
 #include "dusk/dusk.h"
 #include "dusk/endian.h"
 #include "dusk/frame_interpolation.h"
@@ -2659,6 +2660,12 @@ int mDoGph_Painter() {
                 #endif
 
                 GX_DEBUG_GROUP(dComIfGd_drawOpaList3Dlast);
+#if TARGET_PC
+                if (split_screen_active) {
+                    // Co-op: submit only this camera's target cursor into a private viewport buffer.
+                    dusk::coop::player_attention::drawForCamera(camera_id);
+                }
+#endif
 
                 #if DEBUG
                 // "saturation add filter (Rendering)"

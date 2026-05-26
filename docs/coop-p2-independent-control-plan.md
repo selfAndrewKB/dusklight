@@ -38,6 +38,21 @@ This is not a global replacement of `dComIfGp_getPlayer(0)`, `daPy_getPlayerActo
   derives `mTargetedActor`, mark state, and guard/target facts.
 - `dCamera_c` gameplay paths that already own an `mpPlayerActor` now read attention through that
   actor, so camera 1 can see P2's slot-local lock state instead of P1 global attention.
+- The play scene now draws additional players' slot-local attention cursors, and
+  `player_attention` exposes `isActorLockedByAnyPlayer()` for enemy/object code that asks whether
+  it is currently locked-on by a player.
+- `dAttention_c` lock acquisition and target reporting now ask `player_attention` whether the
+  owning slot is lock-blocked. P1 preserves vanilla singleton player-status gating; additional
+  players no longer have their slot-local lock state vetoed by P1-only status bits.
+- P2 keeps `attention_info.flags = 0` as an actor so P1/world scans do not target the secondary
+  Link, but `player_attention` now supplies the normal player capability mask to P2's own
+  `dAttention_c` scanner. This keeps actor targetability separate from "what can this player
+  target?" capability.
+- Additional players' scanners reject registered player actors as lock-on candidates. This keeps
+  P2 from target-locking P1 after restoring P2's normal player target capability mask.
+- `attention.state` diagnostics now include a `slots` array for slot-local attention objects, so
+  P2 lock-on failures can be separated into missing candidate list, button-state, lock promotion,
+  or ALINK target handoff failures.
 - The legacy `Ignore shared attention lock` probe is no longer part of default secondary ALINK
   behavior or the Actor Spawner UI. It was a containment switch, not the final ownership model.
 
