@@ -36,6 +36,8 @@ This is not a global replacement of `dComIfGp_getPlayer(0)`, `daPy_getPlayerActo
   the global `dComIfGp_getAttention()` path.
 - `daAlink_c::setAtnList()` updates and binds `mAttention` through `player_attention` before ALINK
   derives `mTargetedActor`, mark state, and guard/target facts.
+- `dCamera_c` gameplay paths that already own an `mpPlayerActor` now read attention through that
+  actor, so camera 1 can see P2's slot-local lock state instead of P1 global attention.
 - The legacy `Ignore shared attention lock` probe is no longer part of default secondary ALINK
   behavior or the Actor Spawner UI. It was a containment switch, not the final ownership model.
 
@@ -95,6 +97,7 @@ trained should not be forced to P1.
    - Keep P1 behavior identical.
    - Replace the secondary-only false result with a semantic slot-local answer.
    - Route `setAtnList()` through the same owner so P2 can have `mTargetedActor` again.
+   - Route owner-camera lock-on reads through the same attention owner.
 
 2. Add per-slot action/R/Z status reads for ALINK gameplay.
    - Start with guard/block and side-step/roll branches that currently read
