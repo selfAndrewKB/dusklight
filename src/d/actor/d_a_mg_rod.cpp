@@ -19,6 +19,7 @@
 #include "d/d_msg_object.h"
 #include "d/d_item.h"
 #include "dusk/coop/player_slots.h"
+#include "dusk/coop/player_camera_status.h"
 #include "f_op/f_op_kankyo_mng.h"
 #include "c/c_damagereaction.h"
 #include "SSystem/SComponent/c_counter.h"
@@ -50,6 +51,21 @@ static u32 dmg_rod_getOwnerPad(dmg_rod_class* i_this) {
     }
 
     return static_cast<u32>(dusk::coop::getPadForSlot(slot));
+}
+
+// Co-op: fishing camera control belongs to the player that owns this MG_ROD actor.
+static int dmg_rod_getOwnerPlayerIndex(dmg_rod_class* i_this) {
+    dusk::coop::PlayerSlot slot = dusk::coop::getSlotForActor(dmg_rod_getOwner(i_this));
+    if (slot == dusk::coop::PlayerSlot::Invalid) {
+        slot = dusk::coop::PlayerSlot::Primary;
+    }
+
+    return static_cast<int>(slot);
+}
+
+// Co-op: fishing camera actions should start/stop the owner viewport camera, not P1's camera.
+static camera_process_class* dmg_rod_getOwnerCamera(dmg_rod_class* i_this) {
+    return dComIfGp_getCamera(dComIfGp_getPlayerCameraID(dmg_rod_getOwnerPlayerIndex(i_this)));
 }
 
 class dmg_rod_HIO_c : public JORReflexible {
@@ -246,9 +262,10 @@ static int dmg_rod_Draw(dmg_rod_class* i_this) {
         g_env_light.setLightTevColorType_MAJI(model, &i_this->actor.tevStr);
         i_this->rod_modelMorf->entryDL();
     } else {
-        if (dComIfGp_checkPlayerStatus0(0, 0x2000)) {
-            fopAc_ac_c* player = dComIfGp_getPlayer(0);
-            camera_process_class* camera = dComIfGp_getCamera(0);
+        // Co-op: bobber hiding near the camera must use the owner player/camera pair.
+        if (dusk::coop::player_camera_status::checkStatus0ForPlayer(dmg_rod_getOwner(i_this), 0x2000)) {
+            fopAc_ac_c* player = dmg_rod_getOwner(i_this);
+            camera_process_class* camera = dmg_rod_getOwnerCamera(i_this);
             f32 dx = player->current.pos.x - camera->view.lookat.eye.x;
             f32 dz = player->current.pos.z - camera->view.lookat.eye.z;
 
@@ -802,7 +819,8 @@ static void line_control2(dmg_rod_class* i_this) {
 
 static void line_control1_u(dmg_rod_class* i_this) {
     fopAc_ac_c* actor = &i_this->actor;
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
+    // Co-op: casting line momentum is relative to the rod owner's facing, not P1.
+    daAlink_c* player = dmg_rod_getOwner(i_this);
     int i;
 
     cXyz work;
@@ -1021,7 +1039,7 @@ static void line_main(dmg_rod_class* i_this) {
 
     if (
         i_this->kind == MG_ROD_KIND_LURE && i_this->action != ACTION_LURE_CATCH && i_this->action == ACTION_LURE_HIT &&
-        (i_this->reel_btn_flags != 0 || mDoCPd_c::getHoldX(PAD_1))
+        (i_this->reel_btn_flags != 0 || mDoCPd_c::getHoldX(dmg_rod_getOwnerPad(i_this)))
     ) {
         cLib_addCalc2(&i_this->field_0xf5c, 0.5f, 1.0f, 0.1f + YREG_F(11));
     }
@@ -1073,7 +1091,9 @@ static void* s_boat_sub(void* i_actor, void* i_data) {
 
 static void lure_onboat(dmg_rod_class* i_this) {
     fopAc_ac_c* actor = &i_this->actor;
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
+    // Co-op: lure standby/camera setup follows the rod owner instead of P1.
+    daAlink_c* player = dmg_rod_getOwner(i_this);
+    u32 owner_pad = dmg_rod_getOwnerPad(i_this);
     cXyz pos_delta;
     cXyz sp14;
 
@@ -1085,12 +1105,13 @@ static void lure_onboat(dmg_rod_class* i_this) {
         return;
     }
 
-    if (mDoCPd_c::getTrigB(PAD_1)) {
+    if (mDoCPd_c::getTrigB(owner_pad)) {
         i_this->timers[1] = 30;
         i_this->input_cooldown = 30;
     }
 
-    if (i_this->input_cooldown == 0 && !dComIfGp_checkPlayerStatus0(0, 0x2000)) {
+    if (i_this->input_cooldown == 0 &&
+        !dusk::coop::player_camera_status::checkStatus0ForPlayer(player, 0x2000)) {
         dComIfGp_setAStatusForce(79, 2);
     }
 
@@ -1103,7 +1124,7 @@ static void lure_onboat(dmg_rod_class* i_this) {
     actor->current.angle.x = -cM_atan2s(pos_delta.y, pos_delta.z);
     actor->current.angle.y = (s16)cM_atan2s(pos_delta.x, JMAFastSqrt(SQUARE(pos_delta.y) + SQUARE(pos_delta.z)));
 
-    if (daAlink_getAlinkActorClass()->checkFishingRodGrab(actor)) {
+    if (player->checkFishingRodGrab(actor)) {
         i_this->action = ACTION_LURE_STANDBY;
         i_this->timers[4] = WREG_S(2) + 8;
         i_this->field_0xf5c = 0.5f;
@@ -1112,19 +1133,21 @@ static void lure_onboat(dmg_rod_class* i_this) {
         i_this->timers[1] = 10;
         i_this->field_0x14f8 = 0;
 
-        camera_process_class* camera = dComIfGp_getCamera(0);
+        camera_process_class* camera = dmg_rod_getOwnerCamera(i_this);
         f32 x_delta = camera->view.lookat.center.x - camera->view.lookat.eye.x;
         f32 z_delta = camera->view.lookat.center.z - camera->view.lookat.eye.z;
         i_this->field_0x1418 = cM_atan2s(x_delta, z_delta);
 
-        daAlink_getAlinkActorClass()->setCanoeFishingWaitAngle(i_this->field_0x1418);
-        daAlink_getAlinkActorClass()->seStartOnlyReverb(Z2SE_AL_ROD_TAKEOUT);
+        player->setCanoeFishingWaitAngle(i_this->field_0x1418);
+        player->seStartOnlyReverb(Z2SE_AL_ROD_TAKEOUT);
     }
 }
 
 static int lure_standby(dmg_rod_class* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)&i_this->actor;
-    fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+    // Co-op: lure cast angle, input, and ALINK rod animation belong to this rod owner.
+    daAlink_c* player = dmg_rod_getOwner(i_this);
+    u32 owner_pad = dmg_rod_getOwnerPad(i_this);
     cXyz work;
     cXyz offset;
 
@@ -1133,7 +1156,7 @@ static int lure_standby(dmg_rod_class* i_this) {
     i_this->field_0x10a6 = 0;
     i_this->is_hook_in_water = 0;
 
-    if (daAlink_getAlinkActorClass()->checkCanoeFishingRodGrabOrPut()) {
+    if (player->checkCanoeFishingRodGrabOrPut()) {
         i_this->input_cooldown = 5;
     }
 
@@ -1152,7 +1175,7 @@ static int lure_standby(dmg_rod_class* i_this) {
 
     if (i_this->timers[1] != 0) {
         i_this->field_0x14f8 = -7000;
-        daAlink_getAlinkActorClass()->setFishingArnmAngle(i_this->field_0x14f8);
+        player->setFishingArnmAngle(i_this->field_0x14f8);
         return sp14;
     }
 
@@ -1162,8 +1185,8 @@ static int lure_standby(dmg_rod_class* i_this) {
         dComIfGp_setDoStatusForce(42, 0);
     }
 
-    i_this->rod_stick_x = mDoCPd_c::getStickX3D(PAD_1) * mDoCPd_c::getStickX3D(PAD_1);
-    if (mDoCPd_c::getStickX3D(PAD_1) < 0.0f) {
+    i_this->rod_stick_x = mDoCPd_c::getStickX3D(owner_pad) * mDoCPd_c::getStickX3D(owner_pad);
+    if (mDoCPd_c::getStickX3D(owner_pad) < 0.0f) {
         i_this->rod_stick_x *= -1.0f;
     }
 
@@ -1193,7 +1216,7 @@ static int lure_standby(dmg_rod_class* i_this) {
         }
     }
 
-    daAlink_getAlinkActorClass()->setFishingArnmAngle(i_this->field_0x14f8);
+    player->setFishingArnmAngle(i_this->field_0x14f8);
     work = actor->current.pos - actor->old.pos;
 
     f32 var_f29 = (0.005f + NREG_F(9)) * work.abs();
@@ -1228,7 +1251,7 @@ static int lure_standby(dmg_rod_class* i_this) {
         }
 
         if (i_this->timers[0] == 1) {
-            daAlink_getAlinkActorClass()->setCanoeCast();
+            player->setCanoeCast();
             i_this->action = ACTION_LURE_CAST;
             i_this->field_0x10a8 = 0;
             i_this->play_cam_timer = 0;
@@ -1278,8 +1301,8 @@ static int lure_standby(dmg_rod_class* i_this) {
             i_this->timers[0] = XREG_S(7) + 4;
         }
 
-        daAlink_getAlinkActorClass()->seStartOnlyReverb(Z2SE_AL_ROD_SWING_LURE);
-        daAlink_getAlinkActorClass()->seStartOnlyReverb(Z2SE_AL_REEL_ROLL_THROW);
+        player->seStartOnlyReverb(Z2SE_AL_ROD_SWING_LURE);
+        player->seStartOnlyReverb(Z2SE_AL_REEL_ROLL_THROW);
         i_this->field_0x1514 = 30;
     }
     #if VERSION != VERSION_SHIELD_DEBUG
@@ -1290,17 +1313,17 @@ static int lure_standby(dmg_rod_class* i_this) {
 
     i_this->field_0x6f8 = (500.0f + NREG_F(19)) * i_this->cast_momentum;
 
-    if (!daAlink_getAlinkActorClass()->checkFishingRodGrab(actor)) {
+    if (!player->checkFishingRodGrab(actor)) {
         i_this->action = ACTION_LURE_ONBOAT;
         i_this->play_cam_mode = 0;
 
-        camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
+        camera_process_class* camera = dmg_rod_getOwnerCamera(i_this);
         camera->mCamera.Reset(i_this->play_cam_center, i_this->play_cam_eye, i_this->play_cam_fovy, 0);
         camera->mCamera.Start();
         camera->mCamera.SetTrimSize(0);
 
         dMw_onMenuRing();
-        daAlink_getAlinkActorClass()->seStartOnlyReverb(Z2SE_AL_ROD_TAKEOUT);
+        player->seStartOnlyReverb(Z2SE_AL_ROD_TAKEOUT);
         i_this->timers[1] = 30;
         i_this->input_cooldown = 5;
     }
@@ -1320,15 +1343,16 @@ static void lure_bound_se_set(dmg_rod_class* i_this) {
 
 static void lure_cast(dmg_rod_class* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)&i_this->actor;
-    fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+    // Co-op: lure cast collision and follow-up behavior use the rod owner's pose/facts.
+    daAlink_c* player = dmg_rod_getOwner(i_this);
     cXyz sp4C;
     cXyz sp40;
 
-    if (!daAlink_getAlinkActorClass()->checkFishingRodGrab(actor)) {
+    if (!player->checkFishingRodGrab(actor)) {
         i_this->action = ACTION_LURE_ONBOAT;
         i_this->play_cam_mode = 0;
 
-        camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
+        camera_process_class* camera = dmg_rod_getOwnerCamera(i_this);
         camera->mCamera.Reset(i_this->play_cam_center, i_this->play_cam_eye, i_this->play_cam_fovy, 0);
         camera->mCamera.Start();
         camera->mCamera.SetTrimSize(0);
@@ -1338,7 +1362,7 @@ static void lure_cast(dmg_rod_class* i_this) {
     }
 
     cLib_addCalcAngleS2(&i_this->field_0x14f8, (VREG_S(5) - 7000), 8, (VREG_S(6) + 200));
-    daAlink_getAlinkActorClass()->setFishingArnmAngle(i_this->field_0x14f8);
+    player->setFishingArnmAngle(i_this->field_0x14f8);
 
     sp4C = actor->current.pos - i_this->rod_tip_pos;
 
@@ -1458,7 +1482,7 @@ static void lure_cast(dmg_rod_class* i_this) {
         i_this->camera_morf_rate = 0.0f;
 
         if (i_this->lure_type == MG_LURE_SP) {
-            if ((s16)(player->shape_angle.y - daAlink_getAlinkActorClass()->getFishingRodAngleY()) < 0) {
+            if ((s16)(player->shape_angle.y - player->getFishingRodAngleY()) < 0) {
                 i_this->field_0x141a = 0x1000;
             } else {
                 i_this->field_0x141a = -0x1000;
@@ -2291,10 +2315,12 @@ static void lure_action(dmg_rod_class* i_this) {
             Z2GetAudioMgr()->changeFishingBgm(0);
 
             if (i_this->field_0x10a7 == 3) {
-                fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
-                daAlink_getAlinkActorClass()->setCanoeFishingWaitAngle(player->shape_angle.y);
+                // Co-op: returning to canoe wait should keep the owner's facing.
+                daAlink_c* player = dmg_rod_getOwner(i_this);
+                player->setCanoeFishingWaitAngle(player->shape_angle.y);
             } else {
-                daAlink_getAlinkActorClass()->setCanoeFishingWaitAngle(daAlink_getAlinkActorClass()->getFishingRodAngleY());
+                daAlink_c* player = dmg_rod_getOwner(i_this);
+                player->setCanoeFishingWaitAngle(player->getFishingRodAngleY());
             }
 
             i_this->field_0x10a7 = 0;
@@ -2328,7 +2354,7 @@ static void lure_action(dmg_rod_class* i_this) {
             i_this->play_cam_mode = 20;
             i_this->play_cam_timer = 0;
 
-            camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
+            camera_process_class* camera = dmg_rod_getOwnerCamera(i_this);
             camera->mCamera.SetTrimSize(1);
 
             i_this->action = ACTION_LURE_BARE;
@@ -2345,7 +2371,8 @@ static void lure_action(dmg_rod_class* i_this) {
 
 static void lure_hit(dmg_rod_class* i_this, mg_fish_class* i_mg_fish) {
     fopAc_ac_c* sp1C = &i_this->actor;
-    fopAc_ac_c* sp18 = dComIfGp_getPlayer(0);
+    // Co-op: fish-hit distance and reel angle are relative to the rod owner.
+    daAlink_c* sp18 = dmg_rod_getOwner(i_this);
     cXyz sp44;
     cXyz sp38;
 
@@ -2516,7 +2543,7 @@ static void lure_hit(dmg_rod_class* i_this, mg_fish_class* i_mg_fish) {
                     i_this->field_0x141c = i_this->field_0x1420 = 400.0f;
 
                     if (i_this->field_0x140c < 20.0f + AREG_F(19)) {
-                        if ((s16)(sp18->shape_angle.y - daAlink_getAlinkActorClass()->getFishingRodAngleY()) < 0) {
+                        if ((s16)(sp18->shape_angle.y - sp18->getFishingRodAngleY()) < 0) {
                             i_this->field_0x141a = 0x1000;
                         } else {
                             i_this->field_0x141a = -0x1000;
@@ -2714,10 +2741,11 @@ static void lure_catch(dmg_rod_class* i_this) {
                     i_this->mg_fish_id = -1;
                     i_this->play_cam_mode = 2;
                     i_this->play_cam_timer = 20;
-                    i_this->field_0x1418 = daAlink_getAlinkActorClass()->shape_angle.y;
+                    daAlink_c* player = dmg_rod_getOwner(i_this);
+                    i_this->field_0x1418 = player->shape_angle.y;
                     i_this->camera_morf_rate = 0.0f;
 
-                    camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
+                    camera_process_class* camera = dmg_rod_getOwnerCamera(i_this);
                     camera->mCamera.SetTrimSize(1);
                     daAlink_getAlinkActorClass()->onFishingKeep();
                     data_80450C9B = 2;
@@ -2805,7 +2833,7 @@ static void lure_bare(dmg_rod_class* i_this) {
             i_this->play_cam_mode = 5;
             i_this->camera_morf_rate = 1.0f;
             i_this->field_0x1407 = 110;
-            camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
+            camera_process_class* camera = dmg_rod_getOwnerCamera(i_this);
             camera->mCamera.SetTrimSize(1);
             i_this->action = ACTION_LURE_ACTION;
             i_this->field_0x1006 = 0;
@@ -2908,10 +2936,11 @@ static void lure_heart(dmg_rod_class* i_this) {
         if (i_this->msgflow.doFlow(actor, NULL, 0)) {
             i_this->play_cam_mode = 2;
             i_this->play_cam_timer = 20;
-            i_this->field_0x1418 = daAlink_getAlinkActorClass()->shape_angle.y;
+            daAlink_c* player = dmg_rod_getOwner(i_this);
+            i_this->field_0x1418 = player->shape_angle.y;
             i_this->camera_morf_rate = 0.0f;
 
-            camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
+            camera_process_class* camera = dmg_rod_getOwnerCamera(i_this);
             camera->mCamera.SetTrimSize(1);
             daAlink_getAlinkActorClass()->onFishingKeep();
 
@@ -2921,7 +2950,7 @@ static void lure_heart(dmg_rod_class* i_this) {
             i_this->timers[2] = 20;
 
             daAlink_getAlinkActorClass()->changeFishGetFace(0);
-            daAlink_getAlinkActorClass()->setCanoeFishingWaitAngle(daAlink_getAlinkActorClass()->shape_angle.y);
+            player->setCanoeFishingWaitAngle(player->shape_angle.y);
             actor->current.angle.set(0, 0, 0);
 
             if (obj_life != NULL) {
@@ -3595,7 +3624,7 @@ static void uki_ready(dmg_rod_class* i_this) {
         i_this->action = ACTION_UKI_STANDBY;
         i_this->cast_momentum = 0.0f;
         i_this->field_0x1504 = 0.0f;
-        i_this->field_0x1418 = player->shape_angle.y - dCam_getControledAngleY(dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0)));
+        i_this->field_0x1418 = player->shape_angle.y - dCam_getControledAngleY(dmg_rod_getOwnerCamera(i_this));
         i_this->timers[0] = 20;
         i_this->field_0x102e = 0;
         player->seStartOnlyReverb(Z2SE_AL_ROD_SWING_UKI);
@@ -4497,11 +4526,13 @@ static void cam_3d_morf(dmg_rod_class* i_this, f32 i_scale) {
 
 static void play_camera(dmg_rod_class* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)&i_this->actor;
-    daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+    // Co-op: lure-fishing camera math follows the ALINK that owns this rod actor.
+    daAlink_c* player = dmg_rod_getOwner(i_this);
     fopAc_ac_c* mgfish_a = fopAcM_SearchByID(i_this->mg_fish_id);
     mg_fish_class* mgfish = (mg_fish_class*)mgfish_a;
-    camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
-    camera_process_class* camera0 = dComIfGp_getCamera(0);
+    camera_process_class* camera = dmg_rod_getOwnerCamera(i_this);
+    camera_process_class* camera0 = dmg_rod_getOwnerCamera(i_this);
+    u32 owner_pad = dmg_rod_getOwnerPad(i_this);
 
     dBgS_GndChk gndChk;
     dBgS_ObjGndChk_Spl sp1F0;
@@ -4521,15 +4552,15 @@ static void play_camera(dmg_rod_class* i_this) {
     f32 sp60;
     f32 sp5C;
     camera_class* sp58;
-    // debug indicates these case bodies are likely unscoped despite containing declarations
-    // (due to extra an b instruction at the end)
     switch (i_this->play_cam_mode) {
     case 0:
-        if (dComIfGp_checkPlayerStatus0(0, 0x2000) || dComIfGp_event_runCheck()) {
+        // Co-op: fishing camera cooldown should read the owner slot's subject state.
+        if (dusk::coop::player_camera_status::checkStatus0ForPlayer(player, 0x2000) ||
+            dComIfGp_event_runCheck()) {
             i_this->input_cooldown = 20;
         }
 
-        if (daAlink_getAlinkActorClass()->checkCanoeRide()) {
+        if (player->checkCanoeRide()) {
             dComIfGp_setZStatusForce(94, 0);
             dMeter2Info_onUseButton(0x800);
 
@@ -4540,11 +4571,11 @@ static void play_camera(dmg_rod_class* i_this) {
             }
 
             if (i_this->input_cooldown == 0) {
-                if (mDoCPd_c::getTrigA(PAD_1)) {
+                if (mDoCPd_c::getTrigA(owner_pad)) {
                     i_this->play_cam_mode = 1050;
                 }
 
-                if (mDoCPd_c::getTrigZ(PAD_1)) {
+                if (mDoCPd_c::getTrigZ(owner_pad)) {
                     if (henna != NULL) {
                         i_this->play_cam_mode = 900;
                     } else {
@@ -4562,7 +4593,7 @@ static void play_camera(dmg_rod_class* i_this) {
         i_this->field_0x1424 = 180.0f + WREG_F(0);
         i_this->field_0x1428 = 100.0f + WREG_F(1);
 
-        sp58 = (camera_class*)dComIfGp_getCamera(0);
+        sp58 = (camera_class*)dmg_rod_getOwnerCamera(i_this);
         i_this->field_0x144c = sp58->view.lookat.eye;
         i_this->field_0x1458 = sp58->view.lookat.center;
         i_this->play_cam_eye = i_this->field_0x144c;
@@ -4581,7 +4612,7 @@ static void play_camera(dmg_rod_class* i_this) {
         sp5C = 30.0f;
 
         if (i_this->play_cam_timer > (s16)(8 + YREG_S(6))) {
-            cLib_addCalcAngleS2(&i_this->field_0x1418, daAlink_getAlinkActorClass()->getFishingRodAngleY(), 6, 2000);
+            cLib_addCalcAngleS2(&i_this->field_0x1418, player->getFishingRodAngleY(), 6, 2000);
         }
 
         sp6C = 0.5f + NREG_F(5);
@@ -4633,7 +4664,7 @@ static void play_camera(dmg_rod_class* i_this) {
         cLib_addCalc2(&i_this->play_cam_center.y, sp150.y, 0.2f + NREG_F(5), 200.0f * i_this->camera_morf_rate);
         cLib_addCalc2(&i_this->play_cam_center.z, sp150.z, 0.3f + NREG_F(4), 200.0f * i_this->camera_morf_rate);
 
-        i_this->field_0x141a = i_this->field_0x1418 - daAlink_getAlinkActorClass()->getFishingRodAngleY();
+        i_this->field_0x141a = i_this->field_0x1418 - player->getFishingRodAngleY();
         i_this->field_0x140c = i_this->play_cam_fovy;
         break;
     case 5: {
@@ -4808,7 +4839,7 @@ static void play_camera(dmg_rod_class* i_this) {
         f32 sp2C = -20.0f + (20.0f * cM_ssin(i_this->counter * 700));
         actor->eyePos.y = actor->current.pos.y + sp2C;
         if (TREG_S(7) != 0) {
-            camera_process_class* sp28 = dComIfGp_getCamera(0);
+            camera_process_class* sp28 = dmg_rod_getOwnerCamera(i_this);
             actor->eyePos = sp28->view.lookat.eye;
         }
         i_this->field_0xf78 = 0.05f;
@@ -4817,7 +4848,8 @@ static void play_camera(dmg_rod_class* i_this) {
     case 11:
         cLib_addCalc2(&i_this->play_cam_fovy, 55.0f + DREG_F(6), 0.05f, 1.0f);
 
-        cMtx_YrotS(*calc_mtx, daAlink_getAlinkActorClass()->getFishingRodAngleY());
+        // Co-op: cinematic lure camera offsets use the owner rod angle.
+        cMtx_YrotS(*calc_mtx, player->getFishingRodAngleY());
         sp174.x = -150.0f + DREG_F(0);
         sp174.y = 50.0f + DREG_F(1);
         sp174.z = 150.0f + DREG_F(2);
@@ -4841,7 +4873,7 @@ static void play_camera(dmg_rod_class* i_this) {
         if (i_this->play_cam_timer >= (s16)(XREG_S(4) + 68)) {
             i_this->play_cam_mode = 2;
             i_this->play_cam_timer = 20;
-            i_this->field_0x1418 = daAlink_getAlinkActorClass()->shape_angle.y;
+            i_this->field_0x1418 = player->shape_angle.y;
             i_this->camera_morf_rate = 0.0f;
             camera->mCamera.SetTrimSize(1);
         }
@@ -5328,9 +5360,10 @@ static void play_camera(dmg_rod_class* i_this) {
 
 static void play_camera_u(dmg_rod_class* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)&i_this->actor;
-    fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+    // Co-op: bobber-fishing camera math follows the ALINK that owns this rod actor.
+    daAlink_c* player = dmg_rod_getOwner(i_this);
     fopAc_ac_c* mgfish_a = fopAcM_SearchByID(i_this->mg_fish_id);
-    camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
+    camera_process_class* camera = dmg_rod_getOwnerCamera(i_this);
 
     i_this->field_0x13b0 = i_this->rod_substick_y;
     i_this->field_0x13ac = i_this->rod_substick_x;
@@ -5344,8 +5377,6 @@ static void play_camera_u(dmg_rod_class* i_this) {
     int sp14 = 0;
 
     f32 var_f31;
-    // debug indicates these case bodies are likely unscoped despite containing declarations
-    // (due to extra an b instruction at the end)
     switch (i_this->play_cam_mode) {
     case 0:
         break;
@@ -5356,7 +5387,7 @@ static void play_camera_u(dmg_rod_class* i_this) {
         dMw_offMenuRing();
         i_this->play_cam_fovy = 55.0f;
 
-        camera_class* sp10 = (camera_class*)dComIfGp_getCamera(0);
+        camera_class* sp10 = (camera_class*)dmg_rod_getOwnerCamera(i_this);
         camera->mCamera.SetTrimSize(1);
 
         i_this->play_cam_eye = sp10->view.lookat.eye;
@@ -5525,7 +5556,6 @@ static void play_camera_u(dmg_rod_class* i_this) {
         cLib_addCalc2(&i_this->play_cam_fovy, 55.0f, 0.1f, 10.0f);
         break;
     }
-    // debug indicates this case body is unscoped despite containing declarations
     case 20:
     case 21: {
         if (!actor->eventInfo.checkCommandDemoAccrpt()) {
@@ -6095,7 +6125,7 @@ static int dmg_rod_Execute(dmg_rod_class* i_this) {
 
 static int dmg_rod_IsDelete(dmg_rod_class* i_this) {
     if (i_this->play_cam_mode != 0) {
-        camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
+        camera_process_class* camera = dmg_rod_getOwnerCamera(i_this);
         camera->mCamera.Reset(i_this->play_cam_center, i_this->play_cam_eye, i_this->play_cam_fovy, 0);
         camera->mCamera.Start();
         camera->mCamera.SetTrimSize(0);

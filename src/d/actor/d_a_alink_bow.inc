@@ -8,11 +8,21 @@
 #include "d/actor/d_a_arrow.h"
 #include "d/actor/d_a_horse.h"
 
+#if TARGET_PC
+#include "dusk/coop/player_camera_status.h"
+#endif
+
 void daAlink_c::getArrowFlyData(f32* o_distance, f32* o_speed, BOOL i_forceCharge) const {
     if (mEquipItem == dItemNo_PACHINKO_e) {
         *o_distance = mpHIO->mItem.mBow.m.mSlingshotDistance;
         *o_speed = mpHIO->mItem.mBow.m.mSlingshotSpeed;
-    } else if (dComIfGp_checkPlayerStatus0(0, 0x200000)) {
+    } else if (
+#if TARGET_PC
+        dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x200000)
+#else
+        dComIfGp_checkPlayerStatus0(0, 0x200000)
+#endif
+    ) {
         *o_distance = mpHIO->mItem.mBow.m.mScopeArrowDistance;
         *o_speed = mpHIO->mItem.mBow.m.mScopeArrowSpeed;
     } else if (field_0x301c == 0 || i_forceCharge) {
@@ -144,17 +154,16 @@ void daAlink_c::deleteArrow() {
 
 void daAlink_c::setBowOrSlingStatus() {
 #if TARGET_PC
-    // Co-op: extra player bow use must not flip the global P1 camera/status bits before cameras are per-player.
-    if (dusk::coop::isAdditionalPlayer(this)) {
-        return;
-    }
-#endif
-
+    // Co-op: bow/slingshot subject state belongs to the player whose camera is aiming it.
+    dusk::coop::player_camera_status::setStatus0ForPlayer(
+        this, mEquipItem == dItemNo_PACHINKO_e ? 0x40 : 0x1000);
+#else
     if (mEquipItem == dItemNo_PACHINKO_e) {
         dComIfGp_setPlayerStatus0(0, 0x40);
     } else {
         dComIfGp_setPlayerStatus0(0, 0x1000);
     }
+#endif
 }
 
 void daAlink_c::changeArrowType() {
@@ -170,11 +179,27 @@ void daAlink_c::changeArrowType() {
 
     if (arrowChangeTrigger()) {
         if (mEquipItem == dItemNo_HAWK_ARROW_e) {
-            if (dComIfGp_checkPlayerStatus0(0, 0x200000)) {
+            if (
+#if TARGET_PC
+                dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x200000)
+#else
+                dComIfGp_checkPlayerStatus0(0, 0x200000)
+#endif
+            ) {
+#if TARGET_PC
+                // Co-op: Hawkeye scope mode is owned by this ALINK/camera pair.
+                dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0x200000);
+#else
                 dComIfGp_clearPlayerStatus0(0, 0x200000);
+#endif
                 seStartSystem(Z2SE_AL_HAWK_EYE_PUTOFF);
             } else {
+#if TARGET_PC
+                // Co-op: Hawkeye scope mode is owned by this ALINK/camera pair.
+                dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x200000);
+#else
                 dComIfGp_setPlayerStatus0(0, 0x200000);
+#endif
                 seStartSystem(Z2SE_AL_HAWK_EYE_PUTON);
             }
         } else {
@@ -382,7 +407,12 @@ BOOL daAlink_c::checkUpperItemActionBow() {
              cancelBowMoveRideNotAtn()))
         {
             resetUpperAnime(UPPER_2, 3.0f);
+#if TARGET_PC
+            // Co-op: cancel only the owner slot's bow/slingshot camera status.
+            dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0x1040);
+#else
             dComIfGp_clearPlayerStatus0(0, 0x1040);
+#endif
             return 1;
         }
 
@@ -412,7 +442,12 @@ BOOL daAlink_c::checkUpperItemActionBow() {
 
         if (checkAnmEnd(&mUpperFrameCtrl[2]) && cancelBowMoveRideNotAtn()) {
             resetUpperAnime(UPPER_2, 3.0f);
+#if TARGET_PC
+            // Co-op: cancel only the owner slot's bow/slingshot camera status.
+            dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0x1040);
+#else
             dComIfGp_clearPlayerStatus0(0, 0x1040);
+#endif
             return 1;
         }
 
@@ -508,7 +543,12 @@ int daAlink_c::checkNextActionBow() {
     }
 
     if (rt && is_hawk_arrow) {
+#if TARGET_PC
+        // Co-op: fast Hawkeye entry sets scope on the owning player camera only.
+        dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x200000);
+#else
         dComIfGp_setPlayerStatus0(0, 0x200000);
+#endif
         seStartSystem(Z2SE_AL_HAWK_EYE_PUTON);
     }
 
@@ -550,7 +590,13 @@ void daAlink_c::setBowNormalAnime() {
 }
 
 void daAlink_c::setBowSight() {
-    if (checkBowChargeWaitAnime() && !dComIfGp_checkPlayerStatus0(0, 0x200000)) {
+    if (checkBowChargeWaitAnime() && !
+#if TARGET_PC
+        dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x200000)
+#else
+        dComIfGp_checkPlayerStatus0(0, 0x200000)
+#endif
+    ) {
         cXyz sight_pos;
         f32 dist;
         f32 speed;

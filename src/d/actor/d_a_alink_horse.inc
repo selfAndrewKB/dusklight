@@ -269,7 +269,13 @@ BOOL daAlink_c::checkHorseLieAnime() const {
 }
 
 BOOL daAlink_c::checkHorseSubjectivity() const {
-    return dComIfGp_checkPlayerStatus0(0, 0x2000) || mProcID == PROC_HORSE_BOW_SUBJECT ||
+    // Co-op: horseback subjectivity is owned by this player's camera status.
+#if TARGET_PC
+    return dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x2000) ||
+#else
+    return dComIfGp_checkPlayerStatus0(0, 0x2000) ||
+#endif
+           mProcID == PROC_HORSE_BOW_SUBJECT ||
            mProcID == PROC_HORSE_HOOKSHOT_SUBJECT || mProcID == PROC_HORSE_BOOMERANG_SUBJECT;
 }
 
@@ -2388,7 +2394,12 @@ int daAlink_c::procHorseBoomerangSubjectInit() {
     setSyncRidePos();
     setBaseRideAnime();
     initBoomerangUpperAnimeSpeed(1);
+#if TARGET_PC
+    // Co-op: horse boomerang subject mode drives only the owner slot's camera.
+    dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x80000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x80000);
+#endif
     return 1;
 }
 
@@ -2430,7 +2441,12 @@ int daAlink_c::procHorseBoomerangMoveInit() {
     setSyncRidePos();
     setBaseRideAnime();
     initBoomerangUpperAnimeSpeed(0);
+#if TARGET_PC
+    // Co-op: horse boomerang move aim drives only the owner slot's camera.
+    dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x80000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x80000);
+#endif
     return 1;
 }
 

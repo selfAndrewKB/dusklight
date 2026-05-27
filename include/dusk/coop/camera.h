@@ -28,6 +28,7 @@ void resetSplitScreenCameraState();
 bool ensureSecondaryCamera();
 void syncSecondaryPlayerAssignment();
 void refreshWindowLayout();
+void refreshWindowLayoutForCamera(int cameraId);
 
 bool isExtensionIndex(int idx);
 int getEffectiveWindowNum(int baseWindowNum);

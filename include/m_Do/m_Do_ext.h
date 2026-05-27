@@ -579,6 +579,9 @@ private:
     /* 0x14 */ u16 field_0x14;
     /* 0x16 */ u8 field_0x16;
     /* 0x18 */ mDoExt_3Dline_c* field_0x18;
+#if TARGET_PC
+    u8 mLastUpdatedBuffer;
+#endif
 };
 
 class dKy_tevstr_c;

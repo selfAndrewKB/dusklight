@@ -85,9 +85,21 @@ while P1 still writes the global meter state as before.
 Owns per-slot camera/action status such as bow, slingshot, Hawkeye, iron ball subject mode,
 hookshot subject mode, and camera attention flags.
 
-This should build on the existing `dusk::coop::camera` split-screen sidecar. P2 first-person and
-item aiming should use camera 1 and slot 1 status, not global player-status bits that drive P1's
-camera/HUD.
+First pass implemented:
+
+- `dusk::coop::player_camera_status` stores slot-local player status 0/1 bits for additional
+  players while P1 still forwards to vanilla row 0.
+- `d_camera.cpp` status reads now consume the owner slot instead of clamping camera 1 to row 0.
+- Camera attention bits and subject zoom/focus writes are routed by camera id so first-person and
+  item aiming state stays viewport-local.
+- Bow/slingshot, Hawkeye, iron ball subject mode, and hookshot subject/hang/flight writes now use
+  the owner player's camera-status slot.
+- Fishing rod camera/status work has a first owner pass: camera actions, cast line momentum, lure
+  standby/cast input, and rod-angle reads route through the MG_ROD owner slot.
+
+Global HUD/meter display state remains P1-owned for now; the sidecar only covers gameplay camera
+status that the split-screen cameras consume. Hawkeye scope overlay and boomerang lock reticles are
+still HUD/2D-packet ownership work, separate from the gameplay camera status conversion.
 
 ### `interaction_owner`
 

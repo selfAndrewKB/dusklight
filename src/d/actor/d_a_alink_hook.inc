@@ -8,6 +8,11 @@
 #include "d/actor/d_a_obj_swhang.h"
 #include "d/actor/d_a_obj_chandelier.h"
 #include "JSystem/J3DGraphBase/J3DMaterial.h"
+
+#if TARGET_PC
+#include "dusk/coop/player_camera_status.h"
+#endif
+
 #include "dusk/frame_interpolation.h"
 #include "dusk/settings.h"
 
@@ -418,7 +423,13 @@ void daAlink_c::setHookshotCatchNow() {
 bool daAlink_c::setHookshotCarryOffset(fpc_ProcID i_carryActorID, cXyz const* i_posOffset) {
     fopAc_ac_c* actor;
 
-    if (dComIfGp_checkPlayerStatus1(0, 0x10000)) {
+    if (
+#if TARGET_PC
+        dusk::coop::player_camera_status::checkStatus1ForPlayer(this, 0x10000)
+#else
+        dComIfGp_checkPlayerStatus1(0, 0x10000)
+#endif
+    ) {
         actor = mCargoCarryAcKeep.getActor();
 
         if (actor != NULL && fopAcM_checkHookCarryNow(actor) &&
@@ -684,7 +695,12 @@ int daAlink_c::checkUpperItemActionHookshot() {
         #if PLATFORM_GCN
         if (checkModeFlg(0x400) && checkAttentionLock() && mTargetedActor == NULL) {
             resetUpperAnime(UPPER_2, 3.0f);
+#if TARGET_PC
+            // Co-op: hookshot subject cancellation clears only this player camera.
+            dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0x4000);
+#else
             dComIfGp_clearPlayerStatus0(0, 0x4000);
+#endif
             return 1;
         }
         #endif
@@ -1144,7 +1160,13 @@ void daAlink_c::setHookshotPos() {
                         mItemMode = HS_MODE_FLY_e;
                         hit_se = Z2SE_HIT_HOOKSHOT_STICK;
 
-                        if (dComIfGp_checkPlayerStatus1(0, 0x2010000) != 0 &&
+                        // Co-op: hookshot hang state is retained by the owning player slot.
+                        if (
+#if TARGET_PC
+                            dusk::coop::player_camera_status::checkStatus1ForPlayer(this, 0x2010000) != 0 &&
+#else
+                            dComIfGp_checkPlayerStatus1(0, 0x2010000) != 0 &&
+#endif
                             mCargoCarryAcKeep.getActor() == NULL)
                         {
                             mPolyInfo3.SetPolyInfo(mPolyInfo2);
@@ -1226,11 +1248,24 @@ void daAlink_c::setHookshotPos() {
     mpHookTipModel->calc();
 
     f32 bck_frame;
-    if (dComIfGp_checkPlayerStatus1(0, 0x10000)) {
+    // Co-op: hookshot hang presentation follows this player's retained camera status.
+    if (
+#if TARGET_PC
+        dusk::coop::player_camera_status::checkStatus1ForPlayer(this, 0x10000)
+#else
+        dComIfGp_checkPlayerStatus1(0, 0x10000)
+#endif
+    ) {
         mDoMtx_stack_c::transS(mIronBallBgChkPos);
         mDoMtx_stack_c::ZXYrotM(-0x4000, field_0x3022, 0);
         bck_frame = 14.0f;
-    } else if (dComIfGp_checkPlayerStatus1(0, 0x2000000)) {
+    } else if (
+#if TARGET_PC
+        dusk::coop::player_camera_status::checkStatus1ForPlayer(this, 0x2000000)
+#else
+        dComIfGp_checkPlayerStatus1(0, 0x2000000)
+#endif
+    ) {
         mDoMtx_stack_c::transS(mIronBallBgChkPos);
         mDoMtx_stack_c::ZXYrotM(0, field_0x3022, 0);
         bck_frame = 14.0f;
@@ -1295,7 +1330,14 @@ void daAlink_c::setHookshotWallWaitAnime() {
 
 void daAlink_c::hookshotRoofTurn() {
     BOOL is_play_sound = false;
-    if (!dComIfGp_checkPlayerStatus0(0, 0x2000)) {
+    // Co-op: hookshot turn suppression is scoped to the owner slot's camera state.
+    if (!
+#if TARGET_PC
+        dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x2000)
+#else
+        dComIfGp_checkPlayerStatus0(0, 0x2000)
+#endif
+    ) {
         f32 max_rise_y = (mIronBallBgChkPos.y + 15.0f) - 1.5f;
         f32 min_descend_y = mIronBallBgChkPos.y - mpHIO->mItem.mHookshot.m.mMaxLength;
 
@@ -1389,7 +1431,14 @@ int daAlink_c::checkNextHookPoint() {
             field_0x3026 = 0;
             return procHookshotFlyInit();
         }
-    } else if (dComIfGp_checkPlayerStatus1(0, 0x10000) && checkHookshotRoofLv7Boss()) {
+    } else if (
+#if TARGET_PC
+        // Co-op: dragon-roof hookshot state belongs to the player hanging from it.
+        dusk::coop::player_camera_status::checkStatus1ForPlayer(this, 0x10000) &&
+#else
+        dComIfGp_checkPlayerStatus1(0, 0x10000) &&
+#endif
+        checkHookshotRoofLv7Boss()) {
         if (!fopAcM_checkHookCarryNow(mCargoCarryAcKeep.getActor())) {
             field_0x3102 = shape_angle.y;
             return procCoLargeDamageInit(-6, TRUE, 0, 0, NULL, 0);
@@ -1415,7 +1464,14 @@ int daAlink_c::checkLandHookshotHang() {
         (!checkHookshotRoofLv7Boss() || !checkEquipHeavyBoots()) &&
         checkSetItemTrigger(dItemNo_HVY_BOOTS_e))
     {
-        if (dComIfGp_checkPlayerStatus1(0, 0x10000)) {
+        if (
+#if TARGET_PC
+            // Co-op: boots transition checks this player's hookshot-roof state.
+            dusk::coop::player_camera_status::checkStatus1ForPlayer(this, 0x10000)
+#else
+            dComIfGp_checkPlayerStatus1(0, 0x10000)
+#endif
+        ) {
             return procHookshotRoofBootsInit(mCargoCarryAcKeep.getActor());
         }
         setHeavyBoots(1);
@@ -1473,7 +1529,12 @@ int daAlink_c::procHookshotSubjectInit() {
                                 mpHIO->mItem.mHookshot.m.mStartInterpolation);
     }
 
+#if TARGET_PC
+    // Co-op: hookshot subject mode drives only the owner slot's camera.
+    dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x4000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x4000);
+#endif
     current.angle.y = shape_angle.y;
     setHookshotReadyMaterial();
     return 1;
@@ -1493,9 +1554,19 @@ int daAlink_c::procHookshotSubject() {
                 setHookshotSight();
             }
 
+#if TARGET_PC
+            // Co-op: hookshot wait/shot state belongs to the owner slot.
+            dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0x40000);
+#else
             dComIfGp_clearPlayerStatus0(0, 0x40000);
+#endif
         } else {
+#if TARGET_PC
+            // Co-op: hookshot wait/shot state belongs to the owner slot.
+            dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x40000);
+#else
             dComIfGp_setPlayerStatus0(0, 0x40000);
+#endif
         }
     }
 
@@ -1515,7 +1586,12 @@ int daAlink_c::procHookshotMoveInit() {
         setBlendAtnMoveAnime(mpHIO->mItem.mHookshot.m.mStartInterpolation);
     }
 
+#if TARGET_PC
+    // Co-op: hookshot move aim drives only the owner slot's camera.
+    dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x4000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x4000);
+#endif
     return 1;
 }
 
@@ -1567,8 +1643,14 @@ int daAlink_c::procHookshotFlyInit() {
     mNormalSpeed = 0.0f;
     speed.y = 0.0f;
 
+#if TARGET_PC
+    // Co-op: hookshot flight swaps camera status on the owning player only.
+    dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0x40000);
+    dusk::coop::player_camera_status::setStatus1ForPlayer(this, 0x10);
+#else
     dComIfGp_clearPlayerStatus0(0, 0x40000);
     dComIfGp_setPlayerStatus1(0, 0x10);
+#endif
 
     voiceStart(Z2SE_AL_V_JUMP_L);
 
@@ -1779,7 +1861,12 @@ int daAlink_c::procHookshotRoofWaitInit(BOOL param_0, fopAc_ac_c* param_1, int p
     field_0x2b98 = 6.5f;
     mProcVar5.field_0x3012 = param_2;
 
+#if TARGET_PC
+    // Co-op: hookshot roof hang is retained by the owning player slot.
+    dusk::coop::player_camera_status::setStatus1ForPlayer(this, 0x10000);
+#else
     dComIfGp_setPlayerStatus1(0, 0x10000);
+#endif
     mCcStts.SetWeight(255);
     return 1;
 }
@@ -1787,11 +1874,23 @@ int daAlink_c::procHookshotRoofWaitInit(BOOL param_0, fopAc_ac_c* param_1, int p
 int daAlink_c::procHookshotRoofWait() {
     if (dComIfGp_checkCameraAttentionStatus(field_0x317c, 0x80)) {
         if (checkSubjectEnd(TRUE)) {
+#if TARGET_PC
+            // Co-op: subject-mode exit clears only this player's camera status.
+            dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0x2000);
+#else
             dComIfGp_clearPlayerStatus0(0, 0x2000);
+#endif
             mBodyAngle.y = 0;
             mBodyAngle.x = 0;
             offModeFlg(0x60000000);
-        } else if (dComIfGp_checkPlayerStatus0(0, 0x2000)) {
+        } else if (
+#if TARGET_PC
+            // Co-op: subject-mode body aiming follows this player's camera status.
+            dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x2000)
+#else
+            dComIfGp_checkPlayerStatus0(0, 0x2000)
+#endif
+        ) {
             setBodyAngleToCamera();
         }
     } else if (dCam_getBody()->ChangeModeOK(4)) {
@@ -1864,8 +1963,14 @@ int daAlink_c::procHookshotRoofShootInit(fopAc_ac_c* param_0) {
     initHookshotRoofWaitActor(param_0);
     initHookshotReady();
 
+#if TARGET_PC
+    // Co-op: roof-shoot hookshot aim is owned by the hanging player slot.
+    dusk::coop::player_camera_status::setStatus1ForPlayer(this, 0x10000);
+    dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x4000);
+#else
     dComIfGp_setPlayerStatus1(0, 0x10000);
     dComIfGp_setPlayerStatus0(0, 0x4000);
+#endif
 
     mCcStts.SetWeight(255);
     mProcVar2.field_0x300c = 0;
@@ -1887,7 +1992,12 @@ int daAlink_c::procHookshotRoofShoot() {
     }
 
     mSight.offDrawFlg();
+#if TARGET_PC
+    // Co-op: roof-shoot ready state belongs to the owner slot.
+    dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0x40000);
+#else
     dComIfGp_clearPlayerStatus0(0, 0x40000);
+#endif
 
     if (mFastShotTime != 0 && checkHookshotWait()) {
         mFastShotTime--;
@@ -1906,7 +2016,12 @@ int daAlink_c::procHookshotRoofShoot() {
                     setHookshotSight();
                 }
             } else {
+#if TARGET_PC
+                // Co-op: roof-shoot active state belongs to the owner slot.
+                dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x40000);
+#else
                 dComIfGp_setPlayerStatus0(0, 0x40000);
+#endif
             }
 
             mProcVar2.field_0x300c = 1;
@@ -1956,7 +2071,12 @@ int daAlink_c::procHookshotRoofBootsInit(fopAc_ac_c* param_0) {
     initHookshotRoofWaitActor(param_0);
     field_0x2b98 = 6.5f;
 
+#if TARGET_PC
+    // Co-op: roof-boots hang keeps status on the owning player slot.
+    dusk::coop::player_camera_status::setStatus1ForPlayer(this, 0x10000);
+#else
     dComIfGp_setPlayerStatus1(0, 0x10000);
+#endif
 
     mCcStts.SetWeight(255);
     return 1;
@@ -2024,7 +2144,12 @@ int daAlink_c::procHookshotWallWaitInit(int param_0, s16 param_1, int param_2) {
         mProcVar2.field_0x300c = 1;
     }
 
+#if TARGET_PC
+    // Co-op: wall hang is retained by the owning player slot.
+    dusk::coop::player_camera_status::setStatus1ForPlayer(this, 0x2000000);
+#else
     dComIfGp_setPlayerStatus1(0, 0x2000000);
+#endif
     resetHookshotMode();
     field_0x3024 = 1;
     setSpecialGravity(0.0f, maxFallSpeed, 0);
@@ -2043,10 +2168,22 @@ int daAlink_c::procHookshotWallWaitInit(int param_0, s16 param_1, int param_2) {
 int daAlink_c::procHookshotWallWait() {
     if (dComIfGp_checkCameraAttentionStatus(field_0x317c, 0x80)) {
         if (checkSubjectEnd(TRUE)) {
+#if TARGET_PC
+            // Co-op: subject-mode exit clears only this player's camera status.
+            dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0x2000);
+#else
             dComIfGp_clearPlayerStatus0(0, 0x2000);
+#endif
             mBodyAngle.x = 0;
             offModeFlg(0x60000000);
-        } else if (dComIfGp_checkPlayerStatus0(0, 0x2000)) {
+        } else if (
+#if TARGET_PC
+            // Co-op: wall subject aiming follows this player's camera status.
+            dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x2000)
+#else
+            dComIfGp_checkPlayerStatus0(0, 0x2000)
+#endif
+        ) {
             s16 old_angle = shape_angle.y;
             shape_angle.y = field_0x310c;
             setBodyAngleToCamera();
@@ -2118,9 +2255,18 @@ int daAlink_c::procHookshotWallShootInit() {
     mNormalSpeed = 0.0f;
     speed.y = 0.0f;
 
+#if TARGET_PC
+    // Co-op: wall-shoot hookshot aim is owned by the hanging player slot.
+    dusk::coop::player_camera_status::setStatus1ForPlayer(this, 0x2000000);
+#else
     dComIfGp_setPlayerStatus1(0, 0x2000000);
+#endif
     initHookshotReady();
+#if TARGET_PC
+    dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x4000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x4000);
+#endif
 
     mProcVar2.field_0x300c = 0;
     mProcVar3.field_0x300e = mBodyAngle.x;
@@ -2140,7 +2286,12 @@ int daAlink_c::procHookshotWallShoot() {
     }
 
     mSight.offDrawFlg();
+#if TARGET_PC
+    // Co-op: wall-shoot ready state belongs to the owner slot.
+    dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0x40000);
+#else
     dComIfGp_clearPlayerStatus0(0, 0x40000);
+#endif
 
     if (mFastShotTime != 0 && checkHookshotWait()) {
         mFastShotTime--;
@@ -2162,7 +2313,12 @@ int daAlink_c::procHookshotWallShoot() {
                     var_r31 = true;
                 }
             } else {
+#if TARGET_PC
+                // Co-op: wall-shoot active state belongs to the owner slot.
+                dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x40000);
+#else
                 dComIfGp_setPlayerStatus0(0, 0x40000);
+#endif
             }
 
             mProcVar2.field_0x300c = 1;

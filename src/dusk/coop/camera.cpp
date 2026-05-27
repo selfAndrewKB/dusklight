@@ -90,6 +90,38 @@ void applyWindowLayout() {
     }
 }
 
+void applyWindowLayoutForCamera(int cameraId) {
+    if (!s_state.enabled || cameraId == kPrimaryCameraId) {
+        if (!s_state.enabled) {
+            dComIfGp_setWindow(0, 0.0f, 0.0f, FB_WIDTH, FB_HEIGHT, 0.0f, 1.0f,
+                               kPrimaryCameraId, 2);
+        } else if (s_state.layout == SplitScreenLayout::Horizontal) {
+            const f32 halfHeight = static_cast<f32>(FB_HEIGHT) * 0.5f;
+            dComIfGp_setWindow(0, 0.0f, 0.0f, FB_WIDTH, halfHeight, 0.0f, 1.0f,
+                               kPrimaryCameraId, 2);
+        } else {
+            const f32 halfWidth = static_cast<f32>(FB_WIDTH) * 0.5f;
+            dComIfGp_setWindow(0, 0.0f, 0.0f, halfWidth, FB_HEIGHT, 0.0f, 1.0f,
+                               kPrimaryCameraId, 2);
+        }
+        return;
+    }
+
+    if (cameraId != kSecondaryCameraId) {
+        return;
+    }
+
+    if (s_state.layout == SplitScreenLayout::Horizontal) {
+        const f32 halfHeight = static_cast<f32>(FB_HEIGHT) * 0.5f;
+        setWindowRaw(&s_state.window, 0.0f, halfHeight, FB_WIDTH, halfHeight, 0.0f, 1.0f,
+                     kSecondaryCameraId, 2);
+    } else {
+        const f32 halfWidth = static_cast<f32>(FB_WIDTH) * 0.5f;
+        setWindowRaw(&s_state.window, halfWidth, 0.0f, halfWidth, FB_HEIGHT, 0.0f, 1.0f,
+                     kSecondaryCameraId, 2);
+    }
+}
+
 }  // namespace
 
 bool isSplitScreenEnabled() {
@@ -187,6 +219,10 @@ void syncSecondaryPlayerAssignment() {
 
 void refreshWindowLayout() {
     applyWindowLayout();
+}
+
+void refreshWindowLayoutForCamera(int cameraId) {
+    applyWindowLayoutForCamera(cameraId);
 }
 
 bool isExtensionIndex(int idx) {

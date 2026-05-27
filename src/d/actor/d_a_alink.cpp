@@ -58,6 +58,7 @@
 #include "dusk/coop/camera.h"
 #include "dusk/coop/input.h"
 #include "dusk/coop/player_attention.h"
+#include "dusk/coop/player_camera_status.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/diagnostics.h"
 #include "dusk/logging.h"
@@ -363,6 +364,19 @@ void coopLogModelDataOwner(const char* phase, daAlink_c* player) {
         cb0, cb1, cb2);
 }
 }
+#endif
+
+#if TARGET_PC
+static int daAlink_getSightCameraId(daAlink_c* i_player) {
+    dusk::coop::PlayerSlot slot = dusk::coop::getSlotForActor(i_player);
+    if (slot == dusk::coop::PlayerSlot::Invalid) {
+        slot = dusk::coop::PlayerSlot::Primary;
+    }
+
+    int camera_id = dComIfGp_getPlayerCameraID(static_cast<int>(slot));
+    return camera_id >= 0 ? camera_id : 0;
+}
+
 #endif
 
 BOOL daAlink_c::getE3Zhint() {
@@ -6111,7 +6125,22 @@ void daAlink_c::setBodyPartPos() {
     } else {
         cMtx_multVec(mpLinkModel->getAnmMtx(field_0x30b4), &localEye, &eyePos);
 
-        if (dComIfGp_checkPlayerStatus0(0, 0x2000) && !dComIfGp_checkPlayerStatus1(0, 0x02010000) && (!checkModeFlg(0x40000) || !checkNoResetFlg0(FLG0_SWIM_UP)) && !dComIfGp_checkPlayerStatus0(0, 0x08000000)) {
+        // Co-op: first-person eye placement follows the player whose camera entered subject mode.
+        if (
+#if TARGET_PC
+            dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x2000) &&
+            !dusk::coop::player_camera_status::checkStatus1ForPlayer(this, 0x02010000) &&
+#else
+            dComIfGp_checkPlayerStatus0(0, 0x2000) &&
+            !dComIfGp_checkPlayerStatus1(0, 0x02010000) &&
+#endif
+            (!checkModeFlg(0x40000) || !checkNoResetFlg0(FLG0_SWIM_UP)) &&
+#if TARGET_PC
+            !dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x08000000)
+#else
+            !dComIfGp_checkPlayerStatus0(0, 0x08000000)
+#endif
+        ) {
             mDoMtx_stack_c::transS(current.pos.x, field_0x3834.y, current.pos.z);
             concatMagneBootMtx();
             mDoMtx_stack_c::ZXYrotM(field_0x310a, field_0x310c, 0);
@@ -10188,11 +10217,21 @@ void daAlink_c::setAtnList() {
     field_0x27f8 = NULL;
 
     if (checkEventRun() || checkAttentionLock() || checkInputOnR()) {
+#if TARGET_PC
+        // Co-op: thrown-boomerang focus state is per player, not a shared P1 bit.
+        dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0x400000);
+#else
         dComIfGp_clearPlayerStatus0(0, 0x400000);
+#endif
         offNoResetFlg3(FLG3_COPY_ROD_THROW_AFTER);
     } else {
         if (mThrowBoomerangAcKeep.getActor() == NULL) {
+#if TARGET_PC
+            // Co-op: clear only this player's thrown-boomerang focus bit.
+            dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0x400000);
+#else
             dComIfGp_clearPlayerStatus0(0, 0x400000);
+#endif
         }
         if (mCopyRodAcKeep.getActor() == NULL || getCopyRodControllActor() != NULL) {
             offNoResetFlg3(FLG3_COPY_ROD_THROW_AFTER);
@@ -10211,7 +10250,14 @@ void daAlink_c::setAtnList() {
     } else if (mProcID == PROC_CUT_FINISH && field_0x280c.getActor() != NULL) {
         mTargetedActor = field_0x280c.getActor();
         field_0x27f4 = mTargetedActor;
-    } else if (dComIfGp_checkPlayerStatus0(0, 0x400000)) {
+    } else if (
+#if TARGET_PC
+        // Co-op: the boomerang can be the attention target for its throwing player only.
+        dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x400000)
+#else
+        dComIfGp_checkPlayerStatus0(0, 0x400000)
+#endif
+    ) {
         mTargetedActor = mThrowBoomerangAcKeep.getActor();
         field_0x27f4 = mTargetedActor;
     } else if (checkNoResetFlg3(FLG3_COPY_ROD_THROW_AFTER)) {
@@ -11799,7 +11845,12 @@ int daAlink_c::checkItemChangeAutoAction() {
 }
 
 void daAlink_c::setFastShotTimer() {
+    // Co-op: item ready timing depends on this player's subject-camera state.
+#if TARGET_PC
+    if (!dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x2000)) {
+#else
     if (!dComIfGp_checkPlayerStatus0(0, 0x2000)) {
+#endif
         mFastShotTime = mpHIO->mItem.m.mItemFPTransitionTimer;
     }
 }
@@ -12653,7 +12704,12 @@ void daAlink_c::swordUnequip() {
 void daAlink_c::itemEquip(u16 i_itemID) {
     if (mThrowBoomerangAcKeep.getActor() == NULL || i_itemID != dItemNo_BOOMERANG_e) {
         field_0x2fde = i_itemID;
+#if TARGET_PC
+        // Co-op: item changes clear only this player's thrown-boomerang focus bit.
+        dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0x400000);
+#else
         dComIfGp_clearPlayerStatus0(0, 0x400000);
+#endif
         offNoResetFlg3(FLG3_COPY_ROD_THROW_AFTER);
         itemUnequip(field_0x2fde, -1.0f);
     }
@@ -15144,7 +15200,12 @@ int daAlink_c::changeItemTriggerKeepProc(u8 i_selItemIdx, int i_procType) {
         procNotUseItemInit((u16)sel_item);
     } else if (i_procType == ITEM_PROC_SUBJECTIVITY) {
         procCoSubjectivityInit();
+#if TARGET_PC
+        // Co-op: Hawkeye/subjectivity status belongs to the player entering scope mode.
+        dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x200000);
+#else
         dComIfGp_setPlayerStatus0(0, 0x200000);
+#endif
         seStartSystem(Z2SE_AL_HAWK_EYE_PUTON);
     } else if (i_procType == ITEM_PROC_PICK_PUT) {
         procPickPutInit(1);
@@ -15154,7 +15215,13 @@ int daAlink_c::changeItemTriggerKeepProc(u8 i_selItemIdx, int i_procType) {
         field_0x2fde = dItemNo_NONE_e;
         itemEquip(sel_item);
 
-        if (dComIfGp_checkPlayerStatus0(0, 0x2000) &&
+        // Co-op: in-subject item swapping must read this player's camera status.
+        if (
+#if TARGET_PC
+            dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x2000) &&
+#else
+            dComIfGp_checkPlayerStatus0(0, 0x2000) &&
+#endif
             ((checkBowAndSlingItem(field_0x2fde) || checkHookshotItem(field_0x2fde) ||
               field_0x2fde == dItemNo_COPY_ROD_e) ||
              field_0x2fde == dItemNo_BOOMERANG_e))
@@ -15913,8 +15980,21 @@ void daAlink_c::commonProcInit(daAlink_c::daAlink_PROC i_procID) {
         cancelHookshotCarry();
     }
 
-    if ((dComIfGp_checkPlayerStatus0(0, 8) && !checkModeFlg(MODE_VINE_CLIMB) && mProcID != PROC_HANG_CLIMB) ||
-        ((dComIfGp_checkPlayerStatus1(0, 0x2000000) && mProcID != PROC_HOOKSHOT_WALL_SHOOT && mProcID != PROC_HOOKSHOT_WALL_WAIT)))
+    if ((
+#if TARGET_PC
+            // Co-op: reset displacement checks this player's slot-local camera/action status.
+            dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 8)
+#else
+            dComIfGp_checkPlayerStatus0(0, 8)
+#endif
+            && !checkModeFlg(MODE_VINE_CLIMB) && mProcID != PROC_HANG_CLIMB) ||
+        ((
+#if TARGET_PC
+            dusk::coop::player_camera_status::checkStatus1ForPlayer(this, 0x2000000)
+#else
+            dComIfGp_checkPlayerStatus1(0, 0x2000000)
+#endif
+            && mProcID != PROC_HOOKSHOT_WALL_SHOOT && mProcID != PROC_HOOKSHOT_WALL_WAIT)))
     {
         if (mProcID == PROC_CLIMB_TO_ROOF) {
             current.pos.x += 10.0f * cM_ssin(shape_angle.y);
@@ -15925,17 +16005,39 @@ void daAlink_c::commonProcInit(daAlink_c::daAlink_PROC i_procID) {
         }
     }
 
-    if (dComIfGp_checkPlayerStatus0(0, 0x200000)) {
+    if (
+#if TARGET_PC
+        // Co-op: scope put-off sound follows the owner slot's camera status.
+        dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x200000)
+#else
+        dComIfGp_checkPlayerStatus0(0, 0x200000)
+#endif
+    ) {
         seStartSystem(Z2SE_AL_HAWK_EYE_PUTOFF);
     }
 
     if (checkUpperReadyThrowAnime() && mEquipItem != 0x102) {
+#if TARGET_PC
+        // Co-op: reset clears this player's retained camera/action bits without touching P1.
+        dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0xfeb5ab0f);
+#else
         dComIfGp_clearPlayerStatus0(0, 0xfeb5ab0f);
+#endif
     } else {
+#if TARGET_PC
+        // Co-op: reset clears this player's retained camera/action bits without touching P1.
+        dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0xffbfffcf);
+#else
         dComIfGp_clearPlayerStatus0(0, 0xffbfffcf);
+#endif
     }
 
+#if TARGET_PC
+    // Co-op: status1 reset is slot-local for hookshot hang/flight camera states.
+    dusk::coop::player_camera_status::clearStatus1ForPlayer(this, 0x7fb7b78);
+#else
     dComIfGp_clearPlayerStatus1(0, 0x7fb7b78);
+#endif
 
     cancelHookshotShot();
     if (mEquipItem == 0x109) {
@@ -19476,7 +19578,13 @@ int daAlink_c::execute() {
         }
     }
 
-    if (checkEndResetFlg2(ERFLG2_UNK_20) && dComIfGp_checkPlayerStatus0(0, 0x200000) &&
+    if (checkEndResetFlg2(ERFLG2_UNK_20) &&
+#if TARGET_PC
+        // Co-op: Hawkeye pan sound follows this player's scoped camera status.
+        dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x200000) &&
+#else
+        dComIfGp_checkPlayerStatus0(0, 0x200000) &&
+#endif
         (field_0x310e != field_0x310a || field_0x3110 != field_0x310c))
     {
         mDoAud_seStartLevel(Z2SE_AL_HAWK_EYE_PAN, NULL, 0, 0);
@@ -20108,9 +20216,24 @@ int daAlink_c::draw() {
     initTevCustomColor();
 
     if (mSight.getDrawFlg() && !checkEventRun()) {
-        #if PLATFORM_GCN
+#if PLATFORM_GCN || TARGET_PC
+#if TARGET_PC
+        if (dusk::coop::camera::isSplitScreenEnabled()) {
+            int camera_id = daAlink_getSightCameraId(this);
+            camera_process_class* camera = dComIfGp_getCamera(camera_id);
+            dDlst_window_c* window = dComIfGp_getWindow(dComIfGp_getCameraWinID(camera_id));
+            if (camera != NULL && window != NULL) {
+                // Co-op: Link draw submission is shared, so queue the reticle through this
+                // Link's camera instead of the last draw-list viewport.
+                mSight.setSightForView(&camera->view, window->getViewPort());
+            }
+        } else {
+            mSight.setSight();
+        }
+#else
         mSight.setSight();
-        #endif
+#endif
+#endif
     }
 
     if (checkNoResetFlg1(FLG1_UNK_80)) {
@@ -20540,8 +20663,11 @@ daAlink_c::~daAlink_c() {
     }
     const bool coop_secondary = coop_slot != dusk::coop::PlayerSlot::Invalid &&
                                 coop_slot != dusk::coop::PlayerSlot::Slot0;
-    // Co-op: secondary Link should not clear primary player's global status flags.
-    if (!coop_secondary) {
+    // Co-op: secondary Link clears its sidecar camera/action state instead of P1's global status flags.
+    if (coop_secondary) {
+        dusk::coop::player_camera_status::clearStatus0ForPlayer(this, ~0x400030);
+        dusk::coop::player_camera_status::clearStatus1ForPlayer(this, 0x7FB7B78);
+    } else {
 #endif
     dComIfGp_clearPlayerStatus0(0, ~0x400030);
     dComIfGp_clearPlayerStatus1(0, 0x7FB7B78);

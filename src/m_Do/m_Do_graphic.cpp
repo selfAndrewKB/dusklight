@@ -1210,14 +1210,16 @@ static void trimming(view_class* param_0, view_port_class* param_1) {
     #endif
     {
         #if TARGET_PC
-        f32 sc_top = param_1->scissor.y_orig;
+        f32 sc_top = param_1->scissor.y_orig - param_1->y_orig;
         f32 sc_bottom = sc_top + param_1->scissor.height;
         
         f32 sc_left = 0.0f;
         f32 sc_right = param_1->width;
 
         if (!dusk::getSettings().game.disableCutscenePillarboxing) {
-            sc_left = param_1->scissor.x_orig;
+            // Co-op: the PC trim quads draw in viewport-local ortho space, while
+            // window scissors are stored in framebuffer coordinates.
+            sc_left = param_1->scissor.x_orig - param_1->x_orig;
             sc_right = sc_left + param_1->scissor.width;
         }
         #else
@@ -1301,6 +1303,19 @@ static void trimming(view_class* param_0, view_port_class* param_1) {
                  param_1->scissor.height);
 #endif
 }
+
+#if TARGET_PC
+static bool viewport_has_trim(const view_port_class* view_port) {
+    if (view_port == NULL) {
+        return false;
+    }
+
+    return view_port->scissor.x_orig > view_port->x_orig ||
+           view_port->scissor.y_orig > view_port->y_orig ||
+           view_port->scissor.width < view_port->width ||
+           view_port->scissor.height < view_port->height;
+}
+#endif
 
 #if !PLATFORM_WII && !TARGET_PC
 void mDoGph_drawFilterQuad(s8 param_0, s8 param_1) {
@@ -2693,7 +2708,14 @@ int mDoGph_Painter() {
                     dComIfGp_particle_draw2Dgame(&draw_info2);
                 }
 
-                if (run_fullscreen_effects) {
+                // Co-op: trim bars are viewport-local camera presentation, so draw them when
+                // split-screen camera scissor requested trim even if fullscreen filters are gated.
+                if (run_fullscreen_effects
+#if TARGET_PC
+                    || (dusk::coop::render_effects::shouldDrawViewportTrim() &&
+                        viewport_has_trim(view_port))
+#endif
+                ) {
                     trimming(&camera_p->view, view_port);
                 }
 

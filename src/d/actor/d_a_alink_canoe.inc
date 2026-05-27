@@ -1425,7 +1425,12 @@ int daAlink_c::procCanoeBoomerangSubjectInit() {
 
     setSyncCanoePos();
     initBoomerangUpperAnimeSpeed(1);
+#if TARGET_PC
+    // Co-op: canoe boomerang subject mode drives only the owner slot's camera.
+    dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x80000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x80000);
+#endif
     return 1;
 }
 
@@ -1465,7 +1470,12 @@ int daAlink_c::procCanoeBoomerangMoveInit() {
 
     setSyncCanoePos();
     initBoomerangUpperAnimeSpeed(0);
+#if TARGET_PC
+    // Co-op: canoe boomerang move aim drives only the owner slot's camera.
+    dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x80000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x80000);
+#endif
     return 1;
 }
 

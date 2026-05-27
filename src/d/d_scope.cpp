@@ -8,6 +8,11 @@
 #include "JSystem/J2DGraph/J2DGrafContext.h"
 #include "m_Do/m_Do_graphic.h"
 #include "JSystem/J2DGraph/J2DOrthoGraph.h"
+#if TARGET_PC
+#include "d/d_drawlist.h"
+#include "dusk/coop/camera.h"
+#include "dusk/coop/player_camera_status.h"
+#endif
 
 typedef void (dScope_c::*initFunc)();
 initFunc init_process[] = {
@@ -109,7 +114,16 @@ int dScope_c::_execute(u32) {
     u8 old_proc = mProcess;
     (this->*move_process[mProcess])();
 
-    if (!dComIfGp_checkCameraAttentionStatus(0, 8)) {
+#if TARGET_PC
+    // Co-op: Hawkeye lifetime is owned by the player's camera row, not always camera 0.
+    int camera_id = dComIfGp_getPlayerCameraID(field_0x8d);
+    if (camera_id < 0) {
+        camera_id = 0;
+    }
+#else
+    int camera_id = 0;
+#endif
+    if (!dComIfGp_checkCameraAttentionStatus(camera_id, 8)) {
         mProcess = PROC_CLOSE;
     }
 
@@ -120,7 +134,11 @@ int dScope_c::_execute(u32) {
     if (mProcess != PROC_CLOSE) {
         dComIfGp_setCStickStatusForce(61, 10, 3);
 
+#if TARGET_PC
+        if (dusk::coop::player_camera_status::checkStatus0ForPlayerId(field_0x8d, 0x1000)) {
+#else
         if (dComIfGp_checkPlayerStatus0(0, 0x1000)) {
+#endif
             dComIfGp_setRStatusForce(0x11, 3);
         }
     }
@@ -130,12 +148,32 @@ int dScope_c::_execute(u32) {
 
 void dScope_c::draw() {
     dComIfGp_getCurrentGrafPort()->setup2D();
+#if TARGET_PC
+    if (dusk::coop::camera::isSplitScreenEnabled()) {
+        int camera_id = dComIfGp_getPlayerCameraID(field_0x8d);
+        if (camera_id < 0) {
+            camera_id = 0;
+        }
+
+        // Co-op: scope is a view overlay, so draw it into the owner's split viewport
+        // instead of the shared meter pass's P1 HUD viewport.
+        view_port_class* view_port = dComIfGp_getWindow(dComIfGp_getCameraWinID(camera_id))->getViewPort();
+        GXSetViewport(view_port->x_orig, view_port->y_orig, view_port->width, view_port->height,
+                      view_port->near_z, view_port->far_z);
+        GXSetScissor(view_port->x_orig, view_port->y_orig, view_port->width, view_port->height);
+    }
+#endif
     f32 temp_f1 = mScale;
     f32 temp_f31 = mWidth * temp_f1;
     f32 temp_f30 = mHeight * temp_f1;
     u8 alpha = mAlpha * 255.0f;
 
+#if TARGET_PC
+    // Co-op: the red scope reticle follows the scoped player's aim status.
+    if (dusk::coop::player_camera_status::checkStatus0ForPlayerId(field_0x8d, 0x1000)) {
+#else
     if (dComIfGp_checkPlayerStatus0(0, 0x1000)) {
+#endif
         J2DDrawLine(FB_WIDTH_BASE / 2, mDoGph_gInf_c::getMinYF(), FB_WIDTH_BASE / 2,
                     mDoGph_gInf_c::getMaxYF(), JUtility::TColor(255, 0, 0, alpha), 6);
         J2DDrawLine(mDoGph_gInf_c::getMinXF(), FB_HEIGHT_BASE / 2, mDoGph_gInf_c::getMaxXF(),

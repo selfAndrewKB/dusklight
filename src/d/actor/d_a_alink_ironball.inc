@@ -5,6 +5,10 @@
 
 #include "d/actor/d_a_alink.h"
 
+#if TARGET_PC
+#include "dusk/coop/player_camera_status.h"
+#endif
+
 cXyz* daAlink_c::getIronBallCenterPos() {
     if (mEquipItem == dItemNo_IRONBALL_e) {
         return &mIronBallCenterPos;
@@ -910,7 +914,12 @@ int daAlink_c::procIronBallSubjectInit() {
     }
 
     current.angle.y = shape_angle.y;
+#if TARGET_PC
+    // Co-op: iron ball subject mode drives only the owner slot's camera.
+    dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x400);
+#else
     dComIfGp_setPlayerStatus0(0, 0x400);
+#endif
     return 1;
 }
 
@@ -941,7 +950,12 @@ int daAlink_c::procIronBallMoveInit() {
         mNormalSpeed = 0.0f;
     }
 
+#if TARGET_PC
+    // Co-op: iron ball move aim drives only the owner slot's camera.
+    dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x400);
+#else
     dComIfGp_setPlayerStatus0(0, 0x400);
+#endif
     return 1;
 }
 

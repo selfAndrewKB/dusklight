@@ -7,6 +7,11 @@
 
 #define BOOMERANG_LOCK_MAX 5
 
+#if TARGET_PC
+struct view_class;
+struct view_port_class;
+#endif
+
 class daBoomerang_sight_c : public dDlst_base_c {
 public:
     int createHeap();
@@ -15,6 +20,9 @@ public:
     void initFrame(int);
     void copyNumData(int);
     void setSight(cXyz const*, int);
+#if TARGET_PC
+    void setSightForView(cXyz const*, int, view_class*, view_port_class*);
+#endif
 
     virtual void draw();
     virtual ~daBoomerang_sight_c() {}

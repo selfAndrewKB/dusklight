@@ -18,6 +18,12 @@ bool shouldRunFullscreenFramebufferEffects() {
 #endif
 }
 
+bool shouldDrawViewportTrim() {
+    // Co-op: trim bars are viewport-local camera presentation, not a shared
+    // framebuffer filter, so split-screen can draw them after fullscreen effects are gated.
+    return true;
+}
+
 bool shouldRefreshProjectionParticleFramebuffer() {
 #if TARGET_PC
     return dusk::coop::camera::isSplitScreenEnabled();

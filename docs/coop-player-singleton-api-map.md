@@ -84,7 +84,7 @@ global attention/status state. See `docs/coop-p2-independent-control-plan.md`.
 | "Which player owns this item/tool instance?" | item-owner helpers / owner keeps | Partially implemented by item ownership patches |
 | "What is this player slot locked onto or allowed to target?" | `dusk::coop::player_attention` | V1 gives additional ALINK actors their own `dAttention_c`; lock acquisition/status gating, owner target-capability masks, owner camera gameplay, cursor drawing, and actor-observed "am I locked-on?" checks use the same attention owner while P1 remains on global attention for HUD/story compatibility |
 | "What Do/R/Z/R action status should this ALINK consume?" | future `player_button_status` | Planned; global meter status remains P1-owned for now |
-| "Which player owns first-person/item camera status?" | future `player_camera_status` over `dusk::coop::camera` | Planned; bow/slingshot projectile ownership is fixed, camera/status ownership is not |
+| "Which player owns first-person/item camera status?" | `dusk::coop::player_camera_status` over `dusk::coop::camera` | First pass implemented for slot-local status 0/1 bits, camera attention bits, subject zoom/focus, bow/slingshot, Hawkeye, iron ball subject mode, hookshot subject/hang/flight status, and MG_ROD camera/cast status; global HUD/meter status and 2D item reticles remain P1/2D-packet work |
 | "Which player owns this prompt/object interaction?" | future `interaction_owner` | Planned for talk/check/pickup/howl prompts |
 | "Which player is retained by this training sequence?" | future `training_owner` | Planned for Hidden Skills / `NPC_KN` |
 | "Which player owns camera/HUD/message/story/save state?" | camera/HUD/story-specific APIs | Partially implemented for split-screen camera only |

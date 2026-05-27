@@ -25,8 +25,31 @@
 #include <cstring>
 
 #if TARGET_PC
+#include "dusk/coop/player_slots.h"
 #include "dusk/memory.h"
 #include "dusk/settings.h"
+#endif
+
+#if TARGET_PC
+namespace {
+
+int getScopeOwnerPlayerId() {
+    // Co-op: Hawkeye overlay ownership follows the scoped player's camera, not camera 0.
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        if (dComIfGp_getPlayer(i) == NULL) {
+            continue;
+        }
+
+        int camera_id = dComIfGp_getPlayerCameraID(i);
+        if (camera_id >= 0 && dComIfGp_checkCameraAttentionStatus(camera_id, 8)) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+}  // namespace
 #endif
 
 int dMeter2_c::_create() {
@@ -480,7 +503,13 @@ void dMeter2_c::checkStatus() {
         s16 sp8;
         s16 spA;
 
-        if (dComIfGp_checkCameraAttentionStatus(0, 8)) {
+        if (dComIfGp_checkCameraAttentionStatus(0, 8)
+#if TARGET_PC
+            // Co-op: P2 Hawkeye scope sets attention on P2's camera, so the shared meter
+            // needs to open the same subcontent for any scoped player.
+            || getScopeOwnerPlayerId() >= 0
+#endif
+        ) {
             mStatus |= 0x80;
         } else if (dComIfGp_checkCameraAttentionStatus(dComIfGp_getPlayerCameraID(0), 0x10) &&
                    dCam_getBody()->CalcSubjectAngle(&sp8, &spA))
@@ -2348,10 +2377,28 @@ void dMeter2_c::move2DContents() {
 
 void dMeter2_c::checkSubContents() {
     if (mStatus & 0x80) {
+#if TARGET_PC
+        int scope_owner = getScopeOwnerPlayerId();
+        if (scope_owner < 0) {
+            scope_owner = 0;
+        }
+#else
+        int scope_owner = 0;
+#endif
         killSubContents(4);
 
+        if (mSubContentType == 4 && mpSubContents != NULL &&
+            static_cast<dScope_c*>(mpSubContents)->field_0x8d != scope_owner)
+        {
+            JKR_DELETE(mpSubContents);
+            mpSubContents = NULL;
+            mpSubHeap->freeAll();
+            mSubContentType = 0;
+        }
+
         if (mSubContentType == 0) {
-            mpSubContents = JKR_NEW dScope_c(0);
+            // Co-op: pass the scoped player id so the overlay follows that player's camera/status.
+            mpSubContents = JKR_NEW dScope_c(scope_owner);
             mSubContentType = 4;
         }
         return;

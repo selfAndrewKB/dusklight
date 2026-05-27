@@ -31,6 +31,7 @@
 #if TARGET_PC
 #include "dusk/coop/camera.h"
 #include "dusk/coop/player_attention.h"
+#include "dusk/coop/player_camera_status.h"
 #include "dusk/frame_interpolation.h"
 #include "dusk/logging.h"
 #include "dusk/action_bindings.h"
@@ -55,6 +56,18 @@ static inline f32 rangef(f32 value1, f32 value2, f32 ratio) {
 
 inline static bool is_player(fopAc_ac_c* actor) {
     return fopAcM_GetName(actor) == fpcNm_ALINK_e || fopAcM_GetName(actor) == fpcNm_ALINK_e;
+}
+
+inline static daAlink_c* camera_player_link(fopAc_ac_c* actor) {
+#if TARGET_PC
+    // Co-op: camera behavior must query the ALINK actor owned by this viewport.
+    if (actor != NULL && is_player(actor)) {
+        return static_cast<daAlink_c*>(actor);
+    }
+#else
+    (void)actor;
+#endif
+    return daAlink_getAlinkActorClass();
 }
 
 static dAttention_c* attentionForCameraPlayer(fopAc_ac_c* actor) {
@@ -350,46 +363,74 @@ static f32 WideTurnSaving = 0.86f + OREG_F(1);
 
 inline static u32 check_owner_action(u32 param_0, u32 param_1) {
 #if TARGET_PC
-    if (param_0 != 0) {
-        // Co-op: vanilla has one player-status row; camera 1 keeps controller 1 input but must not read past it.
-        param_0 = 0;
-    }
-#endif
+    // Co-op: item/subject camera status is slot-owned; P1 still forwards to vanilla row 0.
+    return dusk::coop::player_camera_status::checkStatus0ForPlayerId(param_0, param_1);
+#else
     return dComIfGp_checkPlayerStatus0(param_0, param_1);
+#endif
 }
 
 inline static u32 check_owner_action1(u32 param_0, u32 param_1) {
 #if TARGET_PC
-    if (param_0 != 0) {
-        // Co-op: vanilla has one player-status row; camera 1 keeps controller 1 input but must not read past it.
-        param_0 = 0;
-    }
-#endif
+    // Co-op: item/subject camera status is slot-owned; P1 still forwards to vanilla row 0.
+    return dusk::coop::player_camera_status::checkStatus1ForPlayerId(param_0, param_1);
+#else
     return dComIfGp_checkPlayerStatus1(param_0, param_1);
+#endif
 }
 
 inline static bool isPlayerCharging(u32 param_0) {
     return check_owner_action(param_0, 0x40000000);
 }
 
-inline static void setComStat(u32 param_0) {
+inline static void setComStat(int cameraId, u32 param_0) {
+#if TARGET_PC
+    // Co-op: subject/first-person camera attention bits are per camera viewport.
+    dComIfGp_onCameraAttentionStatus(cameraId, param_0);
+#else
+    (void)cameraId;
     dComIfGp_onCameraAttentionStatus(0, param_0);
+#endif
 }
 
-inline static BOOL getComStat(u32 param_0) {
+inline static BOOL getComStat(int cameraId, u32 param_0) {
+#if TARGET_PC
+    // Co-op: subject/first-person camera attention bits are per camera viewport.
+    return dComIfGp_getCameraAttentionStatus(cameraId) & param_0;
+#else
+    (void)cameraId;
     return dComIfGp_getCameraAttentionStatus(0) & param_0;
+#endif
 }
 
-inline static void clrComStat(u32 param_0) {
+inline static void clrComStat(int cameraId, u32 param_0) {
+#if TARGET_PC
+    // Co-op: subject/first-person camera attention bits are per camera viewport.
+    dComIfGp_offCameraAttentionStatus(cameraId, param_0);
+#else
+    (void)cameraId;
     dComIfGp_offCameraAttentionStatus(0, param_0);
+#endif
 }
 
-inline static void setComZoomScale(f32 param_0) {
+inline static void setComZoomScale(int cameraId, f32 param_0) {
+#if TARGET_PC
+    // Co-op: subject camera zoom is viewport-local.
+    dComIfGp_setCameraZoomScale(cameraId, param_0);
+#else
+    (void)cameraId;
     dComIfGp_setCameraZoomScale(0, param_0);
+#endif
 }
 
-inline static void setComZoomForcus(f32 param_0) {
+inline static void setComZoomForcus(int cameraId, f32 param_0) {
+#if TARGET_PC
+    // Co-op: subject camera focus is viewport-local.
+    dComIfGp_setCameraZoomForcus(cameraId, param_0);
+#else
+    (void)cameraId;
     dComIfGp_setCameraZoomForcus(0, param_0);
+#endif
 }
 
 }  // namespace
@@ -594,7 +635,8 @@ void dCamera_c::initialize(camera_class* i_camera, fopAc_ac_c* i_player, u32 i_c
         mViewCache.mBank = mBank = cSAngle::_0;
 
         mViewCache.mFovy = mFovy = dComIfGs_getTurnRestart().getCameraFvy();
-    } else if (daAlink_getAlinkActorClass()->checkStartFall()) {
+    // Co-op: secondary cameras must query the viewport-owned player for startup state.
+    } else if (camera_player_link(mpPlayerActor)->checkStartFall()) {
         cXyz attn_pos = attentionPos(mpPlayerActor);
         if (mCamParam.Algorythmn() == 1) {
             attn_pos.y += -20.0f;
@@ -664,7 +706,7 @@ void dCamera_c::initialize(camera_class* i_camera, fopAc_ac_c* i_player, u32 i_c
 
     setFlag(0x1000);
 
-    daAlink_c* player = daAlink_getAlinkActorClass();
+    daAlink_c* player = camera_player_link(mpPlayerActor);
     daMidna_c* midna = daPy_py_c::getMidnaActor();
 
     mMidnaRidingAndVisible = player->checkMidnaRide() && !midna->checkNoDraw();
@@ -884,7 +926,7 @@ void dCamera_c::updatePad() {
     #if TARGET_PC
     // If our custom action binding is triggered, and we're not already in first person, go into first person
     if (dusk::getActionBindTrig(dusk::ActionBinds::FIRST_PERSON_CAMERA, mPadID) && mGear != -1) {
-        setComStat(0x1000);
+        setComStat(mCameraID, 0x1000);
         mGear = 0;
     }
 
@@ -930,7 +972,7 @@ void dCamera_c::updatePad() {
                 // Don't use regular first person trigger if custom mapping is set
                 if (mGear == -1 && mCurMode == 4 IF_DUSK(&& !dusk::isActionBound(dusk::ActionBinds::FIRST_PERSON_CAMERA, mPadID))) {
                     mGear = 0;
-                    setComStat(0x2000);
+                    setComStat(mCameraID, 0x2000);
                 } else if (mGear == 0 && sp6C) {
                     mGear = 1;
                 }
@@ -941,7 +983,7 @@ void dCamera_c::updatePad() {
             if (mCStickYState != 1) {
                 // Don't use regular first person trigger if custom mapping is set
                 if (mGear == 0 && sp6B IF_DUSK(&& !dusk::isActionBound(dusk::ActionBinds::FIRST_PERSON_CAMERA, mPadID))) {
-                    setComStat(0x1000);
+                    setComStat(mCameraID, 0x1000);
                 } else if (mGear == 1) {
                     mGear = 0;
                 }
@@ -1101,12 +1143,12 @@ bool dCamera_c::Run() {
     }
 #endif
 
-    daAlink_c* link = daAlink_getAlinkActorClass();
+    daAlink_c* link = camera_player_link(mpPlayerActor);
     daMidna_c* midna = daPy_py_c::getMidnaActor();
     mMidnaRidingAndVisible = link->checkMidnaRide() && !midna->checkNoDraw();
     bool sp10 = false;
     bool sp0F = false;
-    clrComStat(0x804);
+    clrComStat(mCameraID, 0x804);
 #if DEBUG
     debugDrawInit();
     dDbgCamera.InitlChk();
@@ -1145,7 +1187,7 @@ bool dCamera_c::Run() {
     dAttention_c* attn = attentionForCameraPlayer(mpPlayerActor);
     mpLockonTarget = attn->LockonTruth() ? attn->LockonTarget(0) : NULL;
     attn->LockSoundOn();
-    clrComStat(0xf400);
+    clrComStat(mCameraID, 0xf400);
 
     if (!dComIfGp_evmng_cameraPlay() && !chkFlag(0x20000000)) {
         updatePad();
@@ -1176,9 +1218,9 @@ bool dCamera_c::Run() {
         mCurType = mNextType;
     }
 
-    clrComStat(0x40000);
+    clrComStat(mCameraID, 0x40000);
     if (mCurType == specialType[CAM_TYPE_PEEP]) {
-        setComStat(0x40000);
+        setComStat(mCameraID, 0x40000);
     }
 
     mNextMode = nextMode(mCurMode);
@@ -1213,12 +1255,12 @@ bool dCamera_c::Run() {
     }
 
     clrFlag(0);
-    clrComStat(0x80);
+    clrComStat(mCameraID, 0x80);
     if (mGear == -1) {
-        setComStat(0x80);
+        setComStat(mCameraID, 0x80);
     }
-    if (getComStat(0x2000)) {
-        setComStat(0x80);
+    if (getComStat(mCameraID, 0x2000)) {
+        setComStat(mCameraID, 0x80);
     }
 
     if (mCamParam.CheckFlag(0x4000) && !check_owner_action(mPadID, 0x4000000)
@@ -1285,7 +1327,7 @@ bool dCamera_c::Run() {
             mBumpCheckFlags = 0x0;
         }
 #if PLATFORM_WII
-        if (mCurMode == 7 && !dComIfGp_checkPlayerStatus0(mPadID, 0x200000)) {
+        if (mCurMode == 7 && !check_owner_action(mPadID, 0x200000)) {
             mBumpCheckFlags = 0x2000;
         }
 #endif
@@ -1353,15 +1395,15 @@ bool dCamera_c::Run() {
     }
 
     if (isModeOK()) {
-        setComStat(0x10);
+        setComStat(mCameraID, 0x10);
     } else {
-        clrComStat(0x10);
+        clrComStat(mCameraID, 0x10);
     }
 
     f32 hide_dist = mCamSetup.PlayerHideDist();
     if (mDirection.R() < hide_dist) {
         if (chkFlag(0x800) & 1) {
-            setComStat(2);
+            setComStat(mCameraID, 2);
 
 #if DEBUG
             if (mCamSetup.CheckFlag(0x8000)) {
@@ -1369,7 +1411,7 @@ bool dCamera_c::Run() {
             }
 #endif
         } else if (chkFlag(0x10000000)) {
-            setComStat(0x20);
+            setComStat(mCameraID, 0x20);
 
 #if DEBUG
             if (mCamSetup.CheckFlag(0x8000)) {
@@ -1441,13 +1483,13 @@ bool dCamera_c::Run() {
 }
 
 bool dCamera_c::NotRun() {
-    daAlink_c* link = daAlink_getAlinkActorClass();
+    daAlink_c* link = camera_player_link(mpPlayerActor);
     daMidna_c* midna = daPy_py_c::getMidnaActor();
     mMidnaRidingAndVisible = link->checkMidnaRide() && !midna->checkNoDraw();
-    clrComStat(0x804);
+    clrComStat(mCameraID, 0x804);
     clrFlag(0x10168C21);
     checkGroundInfo();
-    clrComStat(0x80);
+    clrComStat(mCameraID, 0x80);
 
     if (dComIfGp_evmng_cameraPlay() || chkFlag(0x20000000)) {
         if (mCurType != specialType[CAM_TYPE_EVENT]) {
@@ -1465,7 +1507,7 @@ bool dCamera_c::NotRun() {
         mCurCamStyleTimer++;
     }
 
-    setComStat(0x14);
+    setComStat(mCameraID, 0x14);
     clrFlag(0x80080);
     mFocusLine.Off();
     shakeCamera();
@@ -1894,7 +1936,7 @@ bool dCamera_c::onModeChange(s32 i_curMode, s32 i_nextMode) {
 
     switch (i_curMode) {
     case 3:
-        clrComStat(4);
+        clrComStat(mCameraID, 4);
         break;
     case 4:
     case 7:
@@ -1965,7 +2007,7 @@ s32 dCamera_c::nextType(s32 i_curType) {
                 }
             }
 
-            daAlink_c* link = daAlink_getAlinkActorClass();
+            daAlink_c* link = camera_player_link(mpPlayerActor);
             daHorse_c* horse = dComIfGp_getHorseActor();
 
             bool bVar2 = false;
@@ -1986,7 +2028,14 @@ s32 dCamera_c::nextType(s32 i_curType) {
             }
 
             if (check_owner_action(mPadID, 0x200000) && ChangeModeOK(4)
-                                                     && !attn->Lockon()) {
+#if TARGET_PC
+                // Co-op: slot-local Hawkeye scope state should enter Scope even when another
+                // player/attention row has lock-on state.
+                )
+#else
+                && !attn->Lockon())
+#endif
+            {
                 next_type = specialType[CAM_TYPE_SCOPE];
                 var_r28 = 0x6f;
             } else if (iVar14 != 0xff && !(mTagCamTool.mFlags & 0x10)) {
@@ -2049,7 +2098,7 @@ s32 dCamera_c::nextType(s32 i_curType) {
                 next_type = specialType[CAM_TYPE_COCCO_JUMP];
                 var_r28 = 0x66;
             } else if (check_owner_action(mPadID, 0x100000)) {
-                if (getComStat(0x800)) {
+                if (getComStat(mCameraID, 0x800)) {
                     next_type = specialType[CAM_TYPE_WATER_SURF];
                     var_r28 = 0x77;
                 } else if (mBG.field_0xc0.field_0x3c != 0xff) {
@@ -2113,7 +2162,7 @@ s32 dCamera_c::nextType(s32 i_curType) {
     } else {
         clrFlag(0x40000000);
         if (dComIfGp_getEvent()->runCheck()) {
-            setComStat(4);
+            setComStat(mCameraID, 4);
             attn->LockSoundOff();
         }
 
@@ -2216,8 +2265,8 @@ bool dCamera_c::onStyleChange(s32 param_0, s32 param_1) {
         var_r30 = true;
         break;
     case 4:
-        clrComStat(8);
-        setComZoomScale(1.0f);
+        clrComStat(mCameraID, 8);
+        setComZoomScale(mCameraID, 1.0f);
         break;
     }
 
@@ -2757,6 +2806,11 @@ int dCamera_c::defaultTriming() {
     if (mTrimTypeForce >= 0) {
         SetTrimSize(mTrimTypeForce);
         mTrimTypeForce = -1;
+#if TARGET_PC
+    } else if (check_owner_action(mPadID, 0x400000)) {
+        // Co-op: thrown-boomerang focus is a slot-local camera presentation state.
+        SetTrimSize(1);
+#endif
     } else {
         switch (mCurMode) {
         case 3:
@@ -2793,8 +2847,9 @@ void dCamera_c::setView(f32 i_xOrig, f32 i_yOrig, f32 i_width, f32 i_height) {
 #if TARGET_PC
 void dCamera_c::ResetView() {
     if (dusk::coop::camera::isSplitScreenEnabled()) {
-        // Co-op: PC resets the camera's window every Run(); keep the split layout authoritative.
-        dusk::coop::camera::refreshWindowLayout();
+        // Co-op: PC resets the camera window every Run(); only reset this viewport so a
+        // later camera cannot erase another viewport's trim/scissor state.
+        dusk::coop::camera::refreshWindowLayoutForCamera(mCameraID);
         return;
     }
 
@@ -3516,7 +3571,7 @@ void dCamera_c::checkGroundInfo() {
     if (check_owner_action(mPadID, 0x100000)
         && mBG.field_0x0.field_0x58 < attentionPos(mpPlayerActor).y + 40.0f)
     {
-        setComStat(0x800);
+        setComStat(mCameraID, 0x800);
         mBG.field_0xc0.field_0x44 = 1;
     } else if (player->checkRide() || player->checkRoofSwitchHang() || player->checkWolfRope()) {
         mBG.field_0xc0.field_0x44 = 1;
@@ -7090,7 +7145,7 @@ bool dCamera_c::subjectCamera(s32 param_0) {
         if (mPadInfo.mCStick.mLastPosY < -mCamSetup.mCStick.SwTHH()) {
             if (mCStickYState != -1 && mGear == -1) {
                 mGear = 0;
-                setComStat(0x2000);
+                setComStat(mCameraID, 0x2000);
             }
             mCStickYState = -1;
         } else {
@@ -7143,7 +7198,7 @@ bool dCamera_c::subjectCamera(s32 param_0) {
         }
     }
 
-    if (mCurMode == 4 && getComStat(0x800)) {
+    if (mCurMode == 4 && getComStat(mCameraID, 0x800)) {
         val2 = 50.0f;
     } else if (player->checkHawkWait()) {
         val7 = 150.0f;
@@ -7294,10 +7349,10 @@ bool dCamera_c::subjectCamera(s32 param_0) {
         f32 tmp2 = subject->mZoomRatio * 8.0f + 1.0f;
         f32 zoom_fovy = dCamMath::zoomFovy(val17 * 0.5f, tmp2) * 2.0f;
         mViewCache.mFovy += (zoom_fovy - mViewCache.mFovy) * val22;
-        setComZoomScale(tmp2);
-        setComZoomForcus(1.0f - fabsf(sp88 - sp84) * -511.0f);
+        setComZoomScale(mCameraID, tmp2);
+        setComZoomForcus(mCameraID, 1.0f - fabsf(sp88 - sp84) * -511.0f);
         if (check_owner_action(mPadID, 0x200000)) {
-            setComStat(8);
+            setComStat(mCameraID, 8);
         }
 
     } else {
@@ -9762,7 +9817,7 @@ bool dCamera_c::manualCamera(s32 param_0) {
             sp2C = 0;
         case 0:
             if (sp3C < val8 * 1.0001f) {
-                setComStat(0x400);
+                setComStat(mCameraID, 0x400);
                 if (sp98[1] < 0.3f) {
                     sp2C = 1;
                 }
@@ -9773,10 +9828,10 @@ bool dCamera_c::manualCamera(s32 param_0) {
                 sp2C = 0;
             } else if (sp98[1] > 0.9f) {
                 sp2C = 2;
-                setComStat(0x1000);
-                setComStat(0x400);
+                setComStat(mCameraID, 0x1000);
+                setComStat(mCameraID, 0x400);
             } else {
-                setComStat(0x400);
+                setComStat(mCameraID, 0x400);
             }
             break;
         case 2:
@@ -10583,8 +10638,8 @@ bool dCamera_c::eventCamera(s32 param_0) {
 
     getEvIntData(&sp1C, "PlayerHide", 0);
     if (sp1C != 0) {
-        setComStat(2);
-        setComStat(0x10000);
+        setComStat(mCameraID, 2);
+        setComStat(mCameraID, 0x10000);
     }
 
     getEvIntData(&sp1C, "WideMode", 0);
@@ -10605,9 +10660,9 @@ bool dCamera_c::eventCamera(s32 param_0) {
 #endif
 
     if (isModeOK()) {
-        setComStat(4);
+        setComStat(mCameraID, 4);
     } else {
-        clrComStat(4);
+        clrComStat(mCameraID, 4);
     }
 
     clrFlag(0x400000);
@@ -11157,7 +11212,7 @@ static void view_setup(camera_process_class* i_this) {
 
     f32 far_;
     f32 var_f30;
-    if (getComStat(8)) {
+    if (getComStat(get_camera_id(a_this), 8)) {
         far_ = view->far_;
     } else {
 #if DEBUG
@@ -11487,7 +11542,7 @@ static int camera_draw(camera_process_class* i_this) {
     // Co-op: Z2Audience stores one audio camera/mic; camera 1 is visual-only for V1.
     if (camera_id == 0) {
         Z2GetAudience()->setAudioCamera(process->view.viewMtx, process->view.lookat.eye, process->view.lookat.center,
-                                        process->view.fovy, process->view.aspect, getComStat(0x80), camera_id,
+                                        process->view.fovy, process->view.aspect, getComStat(camera_id, 0x80), camera_id,
                                         false);
     }
 

@@ -14,6 +14,9 @@
 #include "d/actor/d_a_boomerang.h"
 #include "d/actor/d_a_midna.h"
 #include "d/actor/d_a_spinner.h"
+#if TARGET_PC
+#include "dusk/coop/camera.h"
+#endif
 
 bool daPy_frameCtrl_c::checkAnmEnd() {
     if (getEndFlg() != 0 && getNowSetFlg() == 0) {
@@ -391,8 +394,73 @@ static const u8* l_sightDL_get() {
 #include "assets/l_sightDL__d_a_player.h"
 #endif
 
+#if TARGET_PC
+struct SightPacketViewport {
+    daPy_sightPacket_c* packet;
+    view_port_class viewport;
+};
+
+static SightPacketViewport s_sightPacketViewports[2];
+
+static void recordSightPacketViewport(daPy_sightPacket_c* i_packet, view_port_class* i_viewport) {
+    if (i_viewport == NULL) {
+        return;
+    }
+
+    for (int i = 0; i < 2; i++) {
+        if (s_sightPacketViewports[i].packet == i_packet || s_sightPacketViewports[i].packet == NULL) {
+            s_sightPacketViewports[i].packet = i_packet;
+            s_sightPacketViewports[i].viewport = *i_viewport;
+            return;
+        }
+    }
+
+    s_sightPacketViewports[0].packet = i_packet;
+    s_sightPacketViewports[0].viewport = *i_viewport;
+}
+
+static view_port_class* findSightPacketViewport(daPy_sightPacket_c* i_packet) {
+    for (int i = 0; i < 2; i++) {
+        if (s_sightPacketViewports[i].packet == i_packet) {
+            return &s_sightPacketViewports[i].viewport;
+        }
+    }
+
+    return NULL;
+}
+
+static void removeSightPacketViewportOffset(view_port_class* i_viewport, Vec* io_proj) {
+    if (i_viewport == NULL) {
+        return;
+    }
+
+    // Co-op: mDoLib_project() returns framebuffer coordinates. The delayed 2D draw restores
+    // this packet's viewport, so remove only the projection offset added for shifted viewports.
+    if (i_viewport->x_orig != 0.0f) {
+        io_proj->x -= (0.5f * ((2.0f * i_viewport->x_orig) + i_viewport->width)) -
+                      (int)(FB_WIDTH / 2);
+    }
+    if (i_viewport->y_orig != 0.0f) {
+        io_proj->y -= (0.5f * ((2.0f * i_viewport->y_orig) + i_viewport->height)) -
+                      (int)(FB_HEIGHT / 2);
+    }
+}
+#endif
+
 void daPy_sightPacket_c::draw() {
     TGXTexObj texObj;
+#if TARGET_PC
+    if (dusk::coop::camera::isSplitScreenEnabled()) {
+        view_port_class* viewport = findSightPacketViewport(this);
+        if (viewport != NULL) {
+            // Co-op: sight packets are queued into a shared 2D list, so restore the viewport
+            // that was active when their world position was projected.
+            GXSetViewport(viewport->x_orig, viewport->y_orig, viewport->width, viewport->height,
+                          viewport->near_z, viewport->far_z);
+            GXSetScissor(viewport->x_orig, viewport->y_orig, viewport->width, viewport->height);
+        }
+    }
+#endif
 
     j3dSys.reinitGX();
     GXSetNumIndStages(0);
@@ -420,12 +488,41 @@ void daPy_sightPacket_c::draw() {
 
 void daPy_sightPacket_c::setSight() {
     Vec proj;
-    mDoLib_project(&mPos, &proj);
+#if TARGET_PC
+    if (dusk::coop::camera::isSplitScreenEnabled()) {
+        view_port_class* viewport = dComIfGd_getViewport();
+        recordSightPacketViewport(this, viewport);
+        mDoLib_project(&mPos, &proj);
+        removeSightPacketViewportOffset(viewport, &proj);
+    } else
+#endif
+    {
+        mDoLib_project(&mPos, &proj);
+    }
     mDoMtx_stack_c::transS(proj.x, proj.y, proj.z);
     mDoMtx_stack_c::scaleM(32.0f, 32.0f, 32.0f);
     mDoMtx_copy(mDoMtx_stack_c::get(), mProjMtx);
     dComIfGd_set2DXlu(this);
 }
+
+#if TARGET_PC
+void daPy_sightPacket_c::setSightForView(view_class* i_view, view_port_class* i_viewport) {
+    if (i_view == NULL || i_viewport == NULL) {
+        return;
+    }
+
+    view_class* old_view = dComIfGd_getView();
+    view_port_class* old_viewport = dComIfGd_getViewport();
+
+    // Co-op: Link draw submission is shared, but the live reticle is camera-owned.
+    // Project through the owner's view, then replay the packet in that same viewport.
+    dComIfGd_setView(i_view);
+    dComIfGd_setViewport(i_viewport);
+    setSight();
+    dComIfGd_setView(old_view);
+    dComIfGd_setViewport(old_viewport);
+}
+#endif
 
 void daPy_sightPacket_c::setSightImage(ResTIMG* i_img) {
     mpImg = i_img;

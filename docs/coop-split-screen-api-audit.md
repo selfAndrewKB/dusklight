@@ -19,6 +19,7 @@ families, and which systems are intentionally deferred.
 | Which render state must be installed per viewport? | `viewport_render_state` | Not implemented; lighting/global J3D state is currently contained, not truly per-viewport |
 | Which fullscreen effect owns this viewport/framebuffer? | `viewport_effect_owner` | Partially implemented through `dusk::coop::render_effects` policy helpers and the central per-window painter replay |
 | Which viewport owns real-shadow submission culling and baked shadow matrices? | `render_shadows` | Partially implemented through `dusk::coop::render_shadows` for shared-list culling bypass and per-viewport real-shadow refresh |
+| Which viewport should camera-facing 3D line/ribbon geometry use? | shared 3D-line material refresh | Implemented for `mDoExt_3DlineMat0_c` and `mDoExt_3DlineMat1_c` during the per-window painter pass |
 | Which player owns HUD, reticles, prompts, and message UI? | `hud_owner` / `ui_owner` | Not implemented; HUD is constrained to P1's viewport |
 | Which player activated an NPC/object/event trigger? | `interaction_owner` / `event_trigger_owner` | Not implemented |
 | Which camera or player should audio listener state follow? | `audio_listener_owner` | Not implemented; audio listener stays camera 0/P1-owned |

@@ -37,6 +37,9 @@ public:
     virtual ~daPy_sightPacket_c() {}
 
     void setSight();
+#if TARGET_PC
+    void setSightForView(view_class* i_view, view_port_class* i_viewport);
+#endif
     void setSightImage(ResTIMG* i_img);
 
     u8 getDrawFlg() { return mDrawFlag; }
