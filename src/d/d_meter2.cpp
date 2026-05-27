@@ -33,20 +33,81 @@
 #if TARGET_PC
 namespace {
 
+dScope_c* s_scopeContents[dusk::coop::kPlayerSlotCount] = {};
+
+bool isScopeOwnerActive(int playerId) {
+    if (playerId < 0 || playerId >= dusk::coop::kPlayerSlotCount) {
+        return false;
+    }
+
+    if (dComIfGp_getPlayer(playerId) == NULL) {
+        return false;
+    }
+
+    int camera_id = dComIfGp_getPlayerCameraID(playerId);
+    return camera_id >= 0 && dComIfGp_checkCameraAttentionStatus(camera_id, 8);
+}
+
 int getScopeOwnerPlayerId() {
     // Co-op: Hawkeye overlay ownership follows the scoped player's camera, not camera 0.
     for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
-        if (dComIfGp_getPlayer(i) == NULL) {
-            continue;
-        }
-
-        int camera_id = dComIfGp_getPlayerCameraID(i);
-        if (camera_id >= 0 && dComIfGp_checkCameraAttentionStatus(camera_id, 8)) {
+        if (isScopeOwnerActive(i)) {
             return i;
         }
     }
 
     return -1;
+}
+
+bool hasScopeOwner() {
+    return getScopeOwnerPlayerId() >= 0;
+}
+
+void deleteScopeContent(int playerId) {
+    if (playerId < 0 || playerId >= dusk::coop::kPlayerSlotCount) {
+        return;
+    }
+
+    if (s_scopeContents[playerId] != NULL) {
+        JKR_DELETE(s_scopeContents[playerId]);
+        s_scopeContents[playerId] = NULL;
+    }
+}
+
+void deleteAllScopeContents() {
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        deleteScopeContent(i);
+    }
+}
+
+void updateScopeContents() {
+    // Co-op: Hawkeye overlays are view-owned. Keep one scope subcontent per scoped
+    // player so P1 entering Hawkeye does not replace P2's active scope overlay.
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        if (isScopeOwnerActive(i)) {
+            if (s_scopeContents[i] == NULL) {
+                s_scopeContents[i] = JKR_NEW dScope_c(static_cast<u8>(i));
+            }
+        } else if (s_scopeContents[i] != NULL && s_scopeContents[i]->isDead()) {
+            deleteScopeContent(i);
+        }
+    }
+}
+
+void executeScopeContents(u32 status) {
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        if (s_scopeContents[i] != NULL) {
+            s_scopeContents[i]->_execute(status);
+        }
+    }
+}
+
+void drawScopeContents() {
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        if (s_scopeContents[i] != NULL) {
+            dComIfGd_set2DOpaTop(s_scopeContents[i]);
+        }
+    }
 }
 
 }  // namespace
@@ -352,6 +413,10 @@ int dMeter2_c::_draw() {
         mpMap->_draw();
     }
 
+#if TARGET_PC
+    drawScopeContents();
+#endif
+
     if (mpSubContents != NULL) {
         dComIfGd_set2DOpaTop(mpSubContents);
     }
@@ -405,6 +470,9 @@ int dMeter2_c::_delete() {
 
     mpHeap->getTotalFreeSize();
     mDoExt_setCurrentHeap(mpSubHeap);
+#if TARGET_PC
+    deleteAllScopeContents();
+#endif
     if (mpSubContents != NULL) {
         JKR_DELETE(mpSubContents);
         mpSubContents = NULL;
@@ -2218,6 +2286,10 @@ void dMeter2_c::moveSubContents() {
         mpSubContents->_execute(mStatus);
     }
 
+#if TARGET_PC
+    executeScopeContents(mStatus);
+#endif
+
     if (mpSubSubContents != NULL) {
         if (mSubContentType == 5 && mSubContentsStringType != dMeter2Info_getMeterStringType()) {
             mSubContentsStringType = dMeter2Info_getMeterStringType();
@@ -2378,6 +2450,17 @@ void dMeter2_c::move2DContents() {
 void dMeter2_c::checkSubContents() {
     if (mStatus & 0x80) {
 #if TARGET_PC
+        if (hasScopeOwner()) {
+            killSubContents(4);
+            if (mSubContentType == 4 && mpSubContents != NULL) {
+                JKR_DELETE(mpSubContents);
+                mpSubContents = NULL;
+            }
+            updateScopeContents();
+            mSubContentType = 4;
+            return;
+        }
+
         int scope_owner = getScopeOwnerPlayerId();
         if (scope_owner < 0) {
             scope_owner = 0;
@@ -2441,6 +2524,9 @@ void dMeter2_c::checkSubContents() {
             mSubContentType = 3;
         }
     } else if (mSubContentType == 4) {
+#if TARGET_PC
+        deleteAllScopeContents();
+#endif
         if (mpSubContents != NULL || mpSubSubContents != NULL) {
             bool free_heap = false;
 
@@ -2465,6 +2551,9 @@ void dMeter2_c::checkSubContents() {
             mSubContentType = 0;
         }
     } else if (mSubContentType != 0) {
+#if TARGET_PC
+        deleteAllScopeContents();
+#endif
         bool free_heap = false;
 
         if (mpSubContents != NULL) {
@@ -3049,6 +3138,10 @@ bool dMeter2_c::isShowLightDrop() {
 void dMeter2_c::killSubContents(u8 param_0) {
     if (mSubContentType != param_0 && mSubContentType != 0) {
         bool free = false;
+
+#if TARGET_PC
+        deleteAllScopeContents();
+#endif
 
         if (mpSubContents != NULL) {
             JKR_DELETE(mpSubContents);

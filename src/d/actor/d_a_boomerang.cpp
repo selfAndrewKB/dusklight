@@ -53,7 +53,7 @@ struct SightDrawOwner {
     int cameraId;
 };
 
-static SightDrawOwner s_sightDrawOwners[2];
+static SightDrawOwner s_sightDrawOwners[dusk::coop::kPlayerSlotCount];
 
 static int daBoomerang_getOwnerCameraId(daBoomerang_c* i_boomerang) {
     dusk::coop::PlayerSlot slot = dusk::coop::getSlotForActor(daBoomerang_getOwner(i_boomerang));
@@ -66,7 +66,7 @@ static int daBoomerang_getOwnerCameraId(daBoomerang_c* i_boomerang) {
 }
 
 static void daBoomerang_recordSightDrawOwner(daBoomerang_sight_c* i_sight, int i_cameraId) {
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
         if (s_sightDrawOwners[i].sight == i_sight || s_sightDrawOwners[i].sight == NULL) {
             s_sightDrawOwners[i].sight = i_sight;
             s_sightDrawOwners[i].cameraId = i_cameraId;
@@ -74,12 +74,13 @@ static void daBoomerang_recordSightDrawOwner(daBoomerang_sight_c* i_sight, int i
         }
     }
 
+    JUT_ASSERT(105, 0);
     s_sightDrawOwners[0].sight = i_sight;
     s_sightDrawOwners[0].cameraId = i_cameraId;
 }
 
 static int daBoomerang_findSightDrawCamera(daBoomerang_sight_c* i_sight) {
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
         if (s_sightDrawOwners[i].sight == i_sight) {
             return s_sightDrawOwners[i].cameraId;
         }

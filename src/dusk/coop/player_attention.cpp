@@ -48,8 +48,8 @@ dAttention_c* constructAttention(SlotAttention* state, daAlink_c* player, Player
         // Co-op: extra players need their own vanilla scanner state keyed to their pad.
         state->attention = new (state->storage) dAttention_c(player, getPadForSlot(slot));
     } else if (state->player != player) {
-        state->attention->Init(player, getPadForSlot(slot));
-        state->attention->initList(0xFFFFFFFF);
+        state->attention->~dAttention_c();
+        state->attention = new (state->storage) dAttention_c(player, getPadForSlot(slot));
     }
 
     state->player = player;
@@ -159,7 +159,8 @@ bool isLockBlockedByPlayerStatus(dAttention_c* attention) {
                dComIfGp_checkPlayerStatus1(0, 0x11);
     }
 
-    // Co-op: additional players must not borrow P1's singleton lock-out status.
+    // Co-op: additional players must not borrow P1's singleton lock-out status. This leaves
+    // P2 lock gating intentionally open until player_camera_status owns equivalent local bits.
     return false;
 }
 

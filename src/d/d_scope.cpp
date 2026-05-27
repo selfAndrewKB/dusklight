@@ -149,6 +149,9 @@ int dScope_c::_execute(u32) {
 void dScope_c::draw() {
     dComIfGp_getCurrentGrafPort()->setup2D();
 #if TARGET_PC
+    f32 saved_viewport[6];
+    u32 saved_scissor[4];
+    bool restore_viewport = false;
     if (dusk::coop::camera::isSplitScreenEnabled()) {
         int camera_id = dComIfGp_getPlayerCameraID(field_0x8d);
         if (camera_id < 0) {
@@ -156,7 +159,10 @@ void dScope_c::draw() {
         }
 
         // Co-op: scope is a view overlay, so draw it into the owner's split viewport
-        // instead of the shared meter pass's P1 HUD viewport.
+        // instead of the shared meter pass's P1 HUD viewport, then restore HUD state.
+        GXGetViewportv(saved_viewport);
+        GXGetScissor(&saved_scissor[0], &saved_scissor[1], &saved_scissor[2], &saved_scissor[3]);
+        restore_viewport = true;
         view_port_class* view_port = dComIfGp_getWindow(dComIfGp_getCameraWinID(camera_id))->getViewPort();
         GXSetViewport(view_port->x_orig, view_port->y_orig, view_port->width, view_port->height,
                       view_port->near_z, view_port->far_z);
@@ -202,6 +208,13 @@ void dScope_c::draw() {
                      temp_f26 - temp_f27, false, false, false);
     mpBlackTex->draw(temp_f28, temp_f27, mDoGph_gInf_c::getMaxXF() - temp_f28, temp_f26 - temp_f27,
                      false, false, false);
+#if TARGET_PC
+    if (restore_viewport) {
+        GXSetViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3],
+                      saved_viewport[4], saved_viewport[5]);
+        GXSetScissor(saved_scissor[0], saved_scissor[1], saved_scissor[2], saved_scissor[3]);
+    }
+#endif
 }
 
 

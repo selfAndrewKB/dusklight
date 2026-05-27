@@ -68,25 +68,12 @@ void setWindowRaw(dDlst_window_c* window, f32 x, f32 y, f32 width, f32 height, f
     window->setMode(mode);
 }
 
-void applyWindowLayout() {
-    if (!s_state.enabled) {
-        dComIfGp_setWindow(0, 0.0f, 0.0f, FB_WIDTH, FB_HEIGHT, 0.0f, 1.0f,
-                           kPrimaryCameraId, 2);
-        return;
-    }
+void applyWindowLayoutForCamera(int cameraId);
 
-    if (s_state.layout == SplitScreenLayout::Horizontal) {
-        const f32 halfHeight = static_cast<f32>(FB_HEIGHT) * 0.5f;
-        dComIfGp_setWindow(0, 0.0f, 0.0f, FB_WIDTH, halfHeight, 0.0f, 1.0f,
-                           kPrimaryCameraId, 2);
-        setWindowRaw(&s_state.window, 0.0f, halfHeight, FB_WIDTH, halfHeight, 0.0f, 1.0f,
-                     kSecondaryCameraId, 2);
-    } else {
-        const f32 halfWidth = static_cast<f32>(FB_WIDTH) * 0.5f;
-        dComIfGp_setWindow(0, 0.0f, 0.0f, halfWidth, FB_HEIGHT, 0.0f, 1.0f,
-                           kPrimaryCameraId, 2);
-        setWindowRaw(&s_state.window, halfWidth, 0.0f, halfWidth, FB_HEIGHT, 0.0f, 1.0f,
-                     kSecondaryCameraId, 2);
+void applyWindowLayout() {
+    applyWindowLayoutForCamera(kPrimaryCameraId);
+    if (s_state.enabled) {
+        applyWindowLayoutForCamera(kSecondaryCameraId);
     }
 }
 
