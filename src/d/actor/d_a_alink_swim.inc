@@ -185,7 +185,7 @@ void daAlink_c::swimBgCheck(f32 param_0) {
 }
 
 void daAlink_c::setSpeedAndAngleSwim() {
-    if (!checkBootsOrArmorHeavy() && dComIfGp_getDoStatus() == BUTTON_STATUS_NONE && (!checkHookshotAnime() || (checkHookshotItem(mEquipItem) && (mItemMode == 0 || mItemMode == 1)))) {
+    if (!checkBootsOrArmorHeavy() && getDoStatus() == BUTTON_STATUS_NONE && (!checkHookshotAnime() || (checkHookshotItem(mEquipItem) && (mItemMode == 0 || mItemMode == 1)))) {
         if (checkZoraWearAbility()) {
             if (checkNoResetFlg0(FLG0_SWIM_UP)) {
                 if (field_0x2fcd == 0) {
@@ -854,11 +854,11 @@ void daAlink_c::setSwimMoveAnime() {
 }
 
 bool daAlink_c::checkSwimButtonAccept() {
-    return dComIfGp_getDoStatus() == BUTTON_STATUS_DIVE || dComIfGp_getDoStatus() == BUTTON_STATUS_SWIM;
+    return getDoStatus() == BUTTON_STATUS_DIVE || getDoStatus() == BUTTON_STATUS_SWIM;
 }
 
 bool daAlink_c::checkUpSwimButtonAccept() {
-    return dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_151;
+    return getDoStatus() == BUTTON_STATUS_UNK_151;
 }
 
 BOOL daAlink_c::checkSwimButtonMove() {
@@ -1115,7 +1115,7 @@ int daAlink_c::procSwimMove() {
 
     if (checkSwimButtonAccept() && doTrigger() && !getZoraSwim()) {
         procSwimDiveInit();
-    } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_DASH && doTrigger()) {
+    } else if (getDoStatus() == BUTTON_STATUS_DASH && doTrigger()) {
         onNoResetFlg1(FLG1_DASH_MODE);
         field_0x30d0 = mpHIO->mSwim.m.field_0x5c;
         setSingleAnimeParam(ANM_SWIM_DASH, &mpHIO->mSwim.m.mDashAnm);

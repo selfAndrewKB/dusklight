@@ -1425,6 +1425,7 @@ set(DUSK_FILES
         include/dusk/coop/gibdo_state_probe.h
         include/dusk/coop/input.h
         include/dusk/coop/player_attention.h
+        include/dusk/coop/player_button_status.h
         include/dusk/coop/player_camera_status.h
         include/dusk/coop/player_query.h
         include/dusk/coop/player_slots.h
@@ -1448,6 +1449,7 @@ set(DUSK_FILES
         src/dusk/coop/gibdo_state_probe.cpp
         src/dusk/coop/player_query.cpp
         src/dusk/coop/player_slots.cpp
+        src/dusk/coop/player_button_status.cpp
         src/dusk/coop/player_camera_status.cpp
         src/dusk/coop/render_effects.cpp
         src/dusk/coop/render_materials.cpp

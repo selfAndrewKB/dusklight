@@ -11,6 +11,7 @@
 #include "d/d_msg_flow.h"
 #include "d/d_particle_copoly.h"
 #include "d/d_save.h"
+#include "dusk/coop/player_button_status.h"
 #include "f_op/f_op_actor_mng.h"
 #include "f_op/f_op_camera_mng.h"
 
@@ -1838,9 +1839,14 @@ public:
     BOOL checkWolfEnemyThrowAnime() const {
         return checkUpperAnime(0x2BD) || checkUpperAnime(0x2BE);
     }
-    void setMidnaTalkStatus(u8 status) { dComIfGp_setZStatus(status, 0); }
+    void setMidnaTalkStatus(u8 status) {
+        // Co-op: Midna/Z prompts are player-local gameplay state before the HUD grows a P2 meter.
+        dusk::coop::player_button_status::setStatusForPlayer(
+            this, dusk::coop::player_button_status::ButtonStatusKind::Z, status, 0);
+    }
     void set3DStatus(u8 status, u8 direction) {
-        dComIfGp_set3DStatus(status, direction, 0);
+        // Co-op: 3D action prompt status belongs to the acting Link, not P1's global meter state.
+        dusk::coop::player_button_status::set3DStatusForPlayer(this, status, direction, 0);
     }
     void checkCutTurnCharge();
     void checkLightSwordMtrl();
@@ -3858,8 +3864,26 @@ public:
 
     BOOL checkStartFall() { return getStartMode() == 3; }
 
-    u8 getBStatus() { return dComIfGp_getAStatus(); }
-    void setRStatus(u8 i_status, u8 i_flag) { dComIfGp_setRStatus(i_status, i_flag); }
+    u8 getBStatus() const {
+        // Co-op: ALINK gameplay reads use the acting player's prompt owner, not P1's meter copy.
+        return dusk::coop::player_button_status::getStatusForPlayer(
+            this, dusk::coop::player_button_status::ButtonStatusKind::A);
+    }
+    u8 getDoStatus() const {
+        // Co-op: ALINK gameplay reads use the acting player's prompt owner, not P1's meter copy.
+        return dusk::coop::player_button_status::getStatusForPlayer(
+            this, dusk::coop::player_button_status::ButtonStatusKind::Do);
+    }
+    u8 getRStatus() const {
+        // Co-op: ALINK gameplay reads use the acting player's prompt owner, not P1's meter copy.
+        return dusk::coop::player_button_status::getStatusForPlayer(
+            this, dusk::coop::player_button_status::ButtonStatusKind::R);
+    }
+    void setRStatus(u8 i_status, u8 i_flag) {
+        // Co-op: retain the original overload shape while routing ALINK writes through the owner slot.
+        dusk::coop::player_button_status::setStatusForPlayer(
+            this, dusk::coop::player_button_status::ButtonStatusKind::R, i_status, i_flag);
+    }
 
     BOOL checkWindSpeedMoveXZ() const { return mWindSpeed.abs2XZ() > 1.0f; }
 

@@ -633,7 +633,7 @@ int daAlink_c::procCanoeWait() {
                     return 1;
                 }
 
-                if (doTrigger() && dComIfGp_getDoStatus() == BUTTON_STATUS_GET_OFF) {
+                if (doTrigger() && getDoStatus() == BUTTON_STATUS_GET_OFF) {
                     if (mEquipItem == 0x10B) {
                         return procCanoePaddlePutInit(1);
                     }

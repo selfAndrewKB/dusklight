@@ -58,6 +58,7 @@
 #include "dusk/coop/camera.h"
 #include "dusk/coop/input.h"
 #include "dusk/coop/player_attention.h"
+#include "dusk/coop/player_button_status.h"
 #include "dusk/coop/player_camera_status.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/diagnostics.h"
@@ -177,7 +178,9 @@ void populateCoopSecondaryAlinkState(const char* phase, daAlink_c* player,
     diag->rawMask |= p2_hold_r_button ? 1u << 11 : 0;
     diag->rawMask |= p2_hold_l_button ? 1u << 12 : 0;
     diag->rawMask |= p2_hold_z_button ? 1u << 13 : 0;
-    diag->rStatus = dComIfGp_getRStatus();
+    // Co-op: diagnostics compare the sampled player's R prompt owner, not P1's global meter copy.
+    diag->rStatus = dusk::coop::player_button_status::getStatusForPlayer(
+        player, dusk::coop::player_button_status::ButtonStatusKind::R);
     diag->speedF = player->speedF;
     diag->normalSpeed = player->mNormalSpeed;
     diag->stickValue = player->mStickValue;
@@ -248,7 +251,9 @@ void coopLogSecondaryActionMirrorState(const char* phase, daAlink_c* player) {
     const dusk::coop::PlayerInputState p1_input = dusk::coop::readLocalInput(dusk::coop::PlayerSlot::Primary);
     const dusk::coop::PlayerInputState p2_input = dusk::coop::readLocalInput(dusk::coop::PlayerSlot::Secondary);
     const uintptr_t target = reinterpret_cast<uintptr_t>(player->mTargetedActor);
-    const u8 r_status = dComIfGp_getRStatus();
+    // Co-op: mirror diagnostics must follow the sampled player's prompt owner.
+    const u8 r_status = dusk::coop::player_button_status::getStatusForPlayer(
+        player, dusk::coop::player_button_status::ButtonStatusKind::R);
     const u8 btn_r = static_cast<u8>(daAlink_c::BTN_R);
     const bool p1_hold_r_button = (p1_input.holdButtons & PAD_TRIGGER_R) != 0;
     const bool p1_hold_l_button = (p1_input.holdButtons & PAD_TRIGGER_L) != 0;
@@ -375,6 +380,26 @@ static int daAlink_getSightCameraId(daAlink_c* i_player) {
 
     int camera_id = dComIfGp_getPlayerCameraID(static_cast<int>(slot));
     return camera_id >= 0 ? camera_id : 0;
+}
+
+static void daAlink_setOwnerCameraStatus0(daAlink_c* i_player, u32 i_flag) {
+    // Co-op: climb/hang/ladder camera hints belong to the ALINK actor changing state.
+    dusk::coop::player_camera_status::setStatus0ForPlayer(i_player, i_flag);
+}
+
+static void daAlink_setOwnerCameraStatus1(daAlink_c* i_player, u32 i_flag) {
+    // Co-op: climb/hang/ladder camera hints belong to the ALINK actor changing state.
+    dusk::coop::player_camera_status::setStatus1ForPlayer(i_player, i_flag);
+}
+
+#else
+
+static void daAlink_setOwnerCameraStatus0(daAlink_c*, u32 i_flag) {
+    dComIfGp_setPlayerStatus0(0, i_flag);
+}
+
+static void daAlink_setOwnerCameraStatus1(daAlink_c*, u32 i_flag) {
+    dComIfGp_setPlayerStatus1(0, i_flag);
 }
 
 #endif
@@ -10328,27 +10353,39 @@ BOOL daAlink_c::checkAttentionLock() {
 }
 
 void daAlink_c::setRStatus(u8 i_status) {
-    dComIfGp_setRStatus(i_status, BUTTON_STATUS_FLAG_NONE);
+    // Co-op: ALINK gameplay button prompts are owned per player; the global meter stays P1.
+    dusk::coop::player_button_status::setStatusForPlayer(
+        this, dusk::coop::player_button_status::ButtonStatusKind::R, i_status, BUTTON_STATUS_FLAG_NONE);
 }
 
 void daAlink_c::setRStatusEmphasys(u8 i_status) {
-    dComIfGp_setRStatus(i_status, BUTTON_STATUS_FLAG_EMPHASIS);
+    // Co-op: ALINK gameplay button prompts are owned per player; the global meter stays P1.
+    dusk::coop::player_button_status::setStatusForPlayer(
+        this, dusk::coop::player_button_status::ButtonStatusKind::R, i_status, BUTTON_STATUS_FLAG_EMPHASIS);
 }
 
 void daAlink_c::setDoStatus(u8 i_status) {
-    dComIfGp_setDoStatus(i_status, BUTTON_STATUS_FLAG_NONE);
+    // Co-op: ALINK gameplay button prompts are owned per player; the global meter stays P1.
+    dusk::coop::player_button_status::setStatusForPlayer(
+        this, dusk::coop::player_button_status::ButtonStatusKind::Do, i_status, BUTTON_STATUS_FLAG_NONE);
 }
 
 void daAlink_c::setDoStatusEmphasys(u8 i_status) {
-    dComIfGp_setDoStatus(i_status, BUTTON_STATUS_FLAG_EMPHASIS);
+    // Co-op: ALINK gameplay button prompts are owned per player; the global meter stays P1.
+    dusk::coop::player_button_status::setStatusForPlayer(
+        this, dusk::coop::player_button_status::ButtonStatusKind::Do, i_status, BUTTON_STATUS_FLAG_EMPHASIS);
 }
 
 void daAlink_c::setDoStatusContinuation(u8 i_status) {
-    dComIfGp_setDoStatus(i_status, BUTTON_STATUS_FLAG_CONTINUATION);
+    // Co-op: ALINK gameplay button prompts are owned per player; the global meter stays P1.
+    dusk::coop::player_button_status::setStatusForPlayer(
+        this, dusk::coop::player_button_status::ButtonStatusKind::Do, i_status, BUTTON_STATUS_FLAG_CONTINUATION);
 }
 
 void daAlink_c::setBStatus(u8 i_status) {
-    dComIfGp_setAStatus(i_status, BUTTON_STATUS_FLAG_NONE);
+    // Co-op: ALINK's B action status uses the vanilla A-status storage name.
+    dusk::coop::player_button_status::setStatusForPlayer(
+        this, dusk::coop::player_button_status::ButtonStatusKind::A, i_status, BUTTON_STATUS_FLAG_NONE);
 }
 
 BOOL daAlink_c::checkAtnWaitAnime() {
@@ -10979,7 +11016,7 @@ f32 daAlink_c::getFrontRollRate() {
 }
 
 void daAlink_c::decideCommonDoStatus() {
-    if (!checkFmChainGrabAnime() && dComIfGp_getDoStatus() == BUTTON_STATUS_NONE) {
+    if (!checkFmChainGrabAnime() && getDoStatus() == BUTTON_STATUS_NONE) {
         bool isFshopStage = checkStageName("R_SP127");
 
         if (checkRoomOnly() && !checkWolf() && !isFshopStage) {
@@ -11026,12 +11063,12 @@ void daAlink_c::decideCommonDoStatus() {
             }
 
             if (checkNotJumpSinkLimit() &&
-                (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_139
-                    || dComIfGp_getDoStatus() == BUTTON_STATUS_FINISH
-                    || dComIfGp_getDoStatus() == BUTTON_STATUS_HELM_SPLITTER
-                    || dComIfGp_getDoStatus() == BUTTON_STATUS_JUMP
-                    || dComIfGp_getDoStatus() == BUTTON_STATUS_DASH
-                    || dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_147
+                (getDoStatus() == BUTTON_STATUS_UNK_139
+                    || getDoStatus() == BUTTON_STATUS_FINISH
+                    || getDoStatus() == BUTTON_STATUS_HELM_SPLITTER
+                    || getDoStatus() == BUTTON_STATUS_JUMP
+                    || getDoStatus() == BUTTON_STATUS_DASH
+                    || getDoStatus() == BUTTON_STATUS_UNK_147
                 )
                 )
             {
@@ -11091,20 +11128,20 @@ void daAlink_c::decideCommonDoStatus() {
             }
 
             if ((((checkMagneBootsOn() || checkIronBallWaitAnime() || checkNotJumpSinkLimit())
-                    && (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_121
-                        || dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_134
-                        || dComIfGp_getDoStatus() == BUTTON_STATUS_FINISH
-                        || dComIfGp_getDoStatus() == BUTTON_STATUS_HELM_SPLITTER
-                        || dComIfGp_getDoStatus() == BUTTON_STATUS_JUMP
+                    && (getDoStatus() == BUTTON_STATUS_UNK_121
+                        || getDoStatus() == BUTTON_STATUS_UNK_134
+                        || getDoStatus() == BUTTON_STATUS_FINISH
+                        || getDoStatus() == BUTTON_STATUS_HELM_SPLITTER
+                        || getDoStatus() == BUTTON_STATUS_JUMP
                         )
-                 ) || (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_121
+                 ) || (getDoStatus() == BUTTON_STATUS_UNK_121
                         && (checkKandelaarSwingAnime()
                             || mGndPolySpecialCode == dBgW_SPCODE_HEAVY_SNOW
                             || checkCopyRodThrowAnime()
                             || checkBoomerangThrowAnime()
                             )
                         )
-                 ) && (!checkMagneBootsOn() || dComIfGp_getDoStatus() != BUTTON_STATUS_UNK_121 || !cBgW_CheckBGround(mMagneBootsTopVec.y))
+                 ) && (!checkMagneBootsOn() || getDoStatus() != BUTTON_STATUS_UNK_121 || !cBgW_CheckBGround(mMagneBootsTopVec.y))
                 )
             {
                 if (mEquipItem == 0x42 && checkModeFlg(4)) {
@@ -11114,11 +11151,11 @@ void daAlink_c::decideCommonDoStatus() {
                 }
             }
 
-            if (isFshopStage && dComIfGp_getDoStatus() == BUTTON_STATUS_JUMP) {
+            if (isFshopStage && getDoStatus() == BUTTON_STATUS_JUMP) {
                 setDoStatus(BUTTON_STATUS_NONE);
             }
 
-            if (dComIfGp_getDoStatus() == BUTTON_STATUS_PUT_AWAY && checkCopyRodControllAnime()) {
+            if (getDoStatus() == BUTTON_STATUS_PUT_AWAY && checkCopyRodControllAnime()) {
                 setDoStatus(BUTTON_STATUS_QUIT);
             }
         }
@@ -11863,7 +11900,7 @@ void daAlink_c::cancelItemUseQuake(int param_0) {
 }
 
 int daAlink_c::cancelUpperItemReadyAnime(BOOL param_0) {
-    if ((dComIfGp_getDoStatus() == BUTTON_STATUS_BACK || param_0)
+    if ((getDoStatus() == BUTTON_STATUS_BACK || param_0)
         && ((param_0 == 0 && doTrigger())
             || (checkCanoeSlider() && (subjectCancelTrigger() || checkEndResetFlg1(ERFLG1_CANOE_ITEM_CANCEL)))
             )
@@ -12022,7 +12059,7 @@ BOOL daAlink_c::checkUpperItemAction() {
             setBStatus(btn_status);
             setDoStatus(btn_status);
 
-            if ((btn_status == dComIfGp_getDoStatus() && doTrigger()) || (btn_status == getBStatus() && swordTrigger())) {
+            if ((btn_status == getDoStatus() && doTrigger()) || (btn_status == getBStatus() && swordTrigger())) {
                 if (btn_status == BUTTON_STATUS_THROW) {
                     return procWolfGrabThrowInit();
                 }
@@ -12107,12 +12144,12 @@ int daAlink_c::orderTalk(int i_checkZTalk) {
         return 0;
     }
 
-    if ((dComIfGp_getDoStatus() == BUTTON_STATUS_SPEAK
-        || dComIfGp_getDoStatus() == BUTTON_STATUS_LOOK
-        || dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_128
-        || dComIfGp_getDoStatus() == BUTTON_STATUS_LISTEN
-        || dComIfGp_getDoStatus() == BUTTON_STATUS_DRINK
-        || dComIfGp_getDoStatus() == BUTTON_STATUS_CHECK
+    if ((getDoStatus() == BUTTON_STATUS_SPEAK
+        || getDoStatus() == BUTTON_STATUS_LOOK
+        || getDoStatus() == BUTTON_STATUS_UNK_128
+        || getDoStatus() == BUTTON_STATUS_LISTEN
+        || getDoStatus() == BUTTON_STATUS_DRINK
+        || getDoStatus() == BUTTON_STATUS_CHECK
         )
         && talkTrigger())
     {
@@ -12230,12 +12267,12 @@ int daAlink_c::checkNormalAction() {
     }
 
     if (doTrigger()) {
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_137) {
+        if (getDoStatus() == BUTTON_STATUS_UNK_137) {
             orderPeep();
             return 1;
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_ENTER) {
+        if (getDoStatus() == BUTTON_STATUS_ENTER) {
             if (checkWolf()) {
                 return procWolfLieStartInit(1);
             } else {
@@ -12243,19 +12280,19 @@ int daAlink_c::checkNormalAction() {
             }
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_PICK_UP) {
+        if (getDoStatus() == BUTTON_STATUS_PICK_UP) {
             return procWolfGrabUpInit();
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_123) {
+        if (getDoStatus() == BUTTON_STATUS_UNK_123) {
             return procWolfChainReadyInit();
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_ROLL) {
+        if (getDoStatus() == BUTTON_STATUS_ROLL) {
             return procWolfPushInit();
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_GET_ON) {
+        if (getDoStatus() == BUTTON_STATUS_GET_ON) {
             if (fopAcM_GetName(field_0x27f4) == fpcNm_Obj_IceLeaf_e) {
                 return procBoardRideInit();
             }
@@ -12277,7 +12314,7 @@ int daAlink_c::checkNormalAction() {
             }
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_32) {
+        if (getDoStatus() == BUTTON_STATUS_UNK_32) {
             if (checkWolf()) {
                 return procWolfHangReadyInit();
             } else {
@@ -12289,7 +12326,7 @@ int daAlink_c::checkNormalAction() {
             }
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_OPEN) {
+        if (getDoStatus() == BUTTON_STATUS_OPEN) {
             if (mAttList->mType == fopAc_attn_DOOR_e) {
                 if (!checkStageName("F_SP103") ||
                     !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchBouDoor, NULL))
@@ -12304,15 +12341,15 @@ int daAlink_c::checkNormalAction() {
             return 1;
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_PICK) {
+        if (getDoStatus() == BUTTON_STATUS_PICK) {
             return procGrassWhistleGetInit();
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_PET) {
+        if (getDoStatus() == BUTTON_STATUS_PET) {
             return procGoatStrokeInit();
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_STRIKE) {
+        if (getDoStatus() == BUTTON_STATUS_STRIKE) {
             if (fopAcM_GetName(field_0x27f4) == fpcNm_Tag_Lv6Gate_e) {
                 static_cast<daTagLv6Gate_c*>(field_0x27f4)->stabMasterSword();
             } else {
@@ -12323,7 +12360,7 @@ int daAlink_c::checkNormalAction() {
             return 1;
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_145) {
+        if (getDoStatus() == BUTTON_STATUS_UNK_145) {
             onNoResetFlg0(FLG0_UNK_10000000);
 
             if (field_0x27f4->current.pos.abs2XZ(current.pos) < getGoatCatchDistance2()) {
@@ -12333,10 +12370,10 @@ int daAlink_c::checkNormalAction() {
                     return procGoatCatchInit(field_0x27f4, 0.0f);
                 }
             }
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_152) {
+        } else if (getDoStatus() == BUTTON_STATUS_UNK_152) {
             return procInsectCatchInit();
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_31 || dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_57 ||
-                   dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_52)
+        } else if (getDoStatus() == BUTTON_STATUS_UNK_31 || getDoStatus() == BUTTON_STATUS_UNK_57 ||
+                   getDoStatus() == BUTTON_STATUS_UNK_52)
         {
             if (checkWolf()) {
                 return procWolfGrabUpInit();
@@ -12347,35 +12384,35 @@ int daAlink_c::checkNormalAction() {
                     return procGrabReadyInit();
                 }
             }
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_153) {
+        } else if (getDoStatus() == BUTTON_STATUS_UNK_153) {
             return procHangLeverDownInit();
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_FINISH) {
+        } else if (getDoStatus() == BUTTON_STATUS_FINISH) {
             if (checkWolf()) {
                 return procWolfDownAttackInit();
             } else {
                 return checkDoCutAction();
             }
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_HELM_SPLITTER) {
+        } else if (getDoStatus() == BUTTON_STATUS_HELM_SPLITTER) {
             if (checkWolf()) {
                 return procWolfJumpAttackInit(1);
             } else {
                 return checkDoCutAction();
             }
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_139) {
+        } else if (getDoStatus() == BUTTON_STATUS_UNK_139) {
             return procWolfJumpAttackInit(1);
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_DRAW) {
+        } else if (getDoStatus() == BUTTON_STATUS_DRAW) {
             changeCutFast();
             return 1;
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_134) {
+        } else if (getDoStatus() == BUTTON_STATUS_UNK_134) {
             return checkDoCutAction();
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_HOWL) {
+        } else if (getDoStatus() == BUTTON_STATUS_HOWL) {
             return procWolfHowlDemoInit();
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_SNIFF) {
+        } else if (getDoStatus() == BUTTON_STATUS_SNIFF) {
             return procWolfGetSmellInit();
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_147) {
+        } else if (getDoStatus() == BUTTON_STATUS_UNK_147) {
             return procWolfTagJumpInit(field_0x27f4);
         }
-    } else if (checkNoResetFlg0(FLG0_UNK_10000000) && dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_145) {
+    } else if (checkNoResetFlg0(FLG0_UNK_10000000) && getDoStatus() == BUTTON_STATUS_UNK_145) {
         if (field_0x27f4->current.pos.abs2XZ(current.pos) < getGoatCatchDistance2()) {
             if (checkWolf()) {
                 return procWolfGanonCatchInit();
@@ -12511,16 +12548,16 @@ BOOL daAlink_c::checkItemAction() {
             }
         } else if (mEquipItem == 0x102) {
             if (doTrigger()) {
-                if (dComIfGp_getDoStatus() == BUTTON_STATUS_THROW) {
+                if (getDoStatus() == BUTTON_STATUS_THROW) {
                     setThrowBoomerangAnime();
                     return true;
                 }
 
-                if (dComIfGp_getDoStatus() == BUTTON_STATUS_PLACE) {
+                if (getDoStatus() == BUTTON_STATUS_PLACE) {
                     return procPickPutInit(0);
                 }
             }
-        } else if (doTrigger() && dComIfGp_getDoStatus() == BUTTON_STATUS_QUIT && mCopyRodAcKeep.getActor() != NULL) {
+        } else if (doTrigger() && getDoStatus() == BUTTON_STATUS_QUIT && mCopyRodAcKeep.getActor() != NULL) {
             ((daCrod_c*)mCopyRodAcKeep.getActor())->offControll();
             resetUpperAnime(UPPER_2, 3.0f);
             return true;
@@ -12543,7 +12580,7 @@ BOOL daAlink_c::checkItemAction() {
                 && !checkModeFlg(0x70C52)
                 && checkShieldGet()
                 && !checkNotBattleStage()
-            ) && ((mLinkAcch.ChkGroundHit() || checkMagneBootsOn()) && dComIfGp_getRStatus() == 0)
+            ) && ((mLinkAcch.ChkGroundHit() || checkMagneBootsOn()) && getRStatus() == 0)
             )
         {
             setRStatus(BUTTON_STATUS_SHIELD_ATTACK);
@@ -12563,7 +12600,7 @@ BOOL daAlink_c::checkRAction() {
 
 BOOL daAlink_c::checkMoveDoAction() {
     if (doTrigger()) {
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_JUMP) {
+        if (getDoStatus() == BUTTON_STATUS_JUMP) {
             if (checkWolf()) {
                 return procWolfSideStepInit(0);
             }
@@ -12576,7 +12613,7 @@ BOOL daAlink_c::checkMoveDoAction() {
             return procSideStepInit(direction);
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_121) {
+        if (getDoStatus() == BUTTON_STATUS_UNK_121) {
             if (!checkAttentionLock() && checkInputOnR()) {
                 shape_angle.y = mMoveAngle;
             }
@@ -12584,7 +12621,7 @@ BOOL daAlink_c::checkMoveDoAction() {
             return procFrontRollInit();
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_DASH) {
+        if (getDoStatus() == BUTTON_STATUS_DASH) {
             return procWolfDashInit();
         }
     }
@@ -12825,7 +12862,7 @@ BOOL daAlink_c::checkItemChangeFromButton() {
                 }
             }
 
-            if (doTrigger() && dComIfGp_getDoStatus() == BUTTON_STATUS_PUT_AWAY) {
+            if (doTrigger() && getDoStatus() == BUTTON_STATUS_PUT_AWAY) {
                 if (mEquipItem != dItemNo_KANTERA_e && checkNoResetFlg2(FLG2_UNK_1)) {
                     offKandelaarModel();
                 } else if (mSwordFlourishTimer != 0 && mEquipItem == 0x103 &&
@@ -12875,7 +12912,7 @@ BOOL daAlink_c::checkNextActionFromButton() {
     }
 
     if (checkModeFlg(0x400)) {
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_NONE && checkCanoeRide() && checkFisingRodLure()) {
+        if (getDoStatus() == BUTTON_STATUS_NONE && checkCanoeRide() && checkFisingRodLure()) {
             setDoStatus(BUTTON_STATUS_PUT_AWAY);
         }
     } else if (!checkModeFlg(0x40000)) {
@@ -19499,25 +19536,25 @@ int daAlink_c::execute() {
                 }
                 setRStatus(BUTTON_STATUS_NONE);
             } else {
-                if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_134 || dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_139) {
+                if (getDoStatus() == BUTTON_STATUS_UNK_134 || getDoStatus() == BUTTON_STATUS_UNK_139) {
                     setDoStatus(BUTTON_STATUS_ATTACK);
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_137) {
+                } else if (getDoStatus() == BUTTON_STATUS_UNK_137) {
                     setDoStatus(BUTTON_STATUS_CHECK);
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_147) {
+                } else if (getDoStatus() == BUTTON_STATUS_UNK_147) {
                     setDoStatusEmphasys(BUTTON_STATUS_JUMP);
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_142) {
+                } else if (getDoStatus() == BUTTON_STATUS_UNK_142) {
                     setDoStatusEmphasys(BUTTON_STATUS_GRAB);
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_140) {
+                } else if (getDoStatus() == BUTTON_STATUS_UNK_140) {
                     setDoStatus(BUTTON_STATUS_NONE);
-                } else if (checkStageName("F_SP127") && checkCanoeRide() && dComIfGp_getDoStatus() == BUTTON_STATUS_PUT_AWAY) {
+                } else if (checkStageName("F_SP127") && checkCanoeRide() && getDoStatus() == BUTTON_STATUS_PUT_AWAY) {
                     setDoStatus(BUTTON_STATUS_NONE);
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_144) {
+                } else if (getDoStatus() == BUTTON_STATUS_UNK_144) {
                     setDoStatus(BUTTON_STATUS_NONE);
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_152) {
+                } else if (getDoStatus() == BUTTON_STATUS_UNK_152) {
                     setDoStatusEmphasys(BUTTON_STATUS_UNK_57);
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_153) {
+                } else if (getDoStatus() == BUTTON_STATUS_UNK_153) {
                     setDoStatusEmphasys(BUTTON_STATUS_GRAB);
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_145) {
+                } else if (getDoStatus() == BUTTON_STATUS_UNK_145) {
                     if (checkWolf() ||
                         (field_0x27f4 != NULL &&
                             (field_0x27f4->speedF > 0.1f ||
@@ -19527,22 +19564,22 @@ int daAlink_c::execute() {
                     } else {
                         setDoStatus(BUTTON_STATUS_NONE);
                     }
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_151) {
+                } else if (getDoStatus() == BUTTON_STATUS_UNK_151) {
                     if (current.pos.y + 200.0f < mWaterY) {
                         setDoStatus(BUTTON_STATUS_SWIM);
                     } else {
                         setDoStatus(BUTTON_STATUS_NONE);
                     }
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_JUMP && dComIfGp_getHorseActor() != NULL &&
+                } else if (getDoStatus() == BUTTON_STATUS_JUMP && dComIfGp_getHorseActor() != NULL &&
                             dComIfGp_getHorseActor()->getZeldaActor() != NULL)
                 {
                     setDoStatus(BUTTON_STATUS_JUMP);
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_HOWL && field_0x27f4 != NULL &&
+                } else if (getDoStatus() == BUTTON_STATUS_HOWL && field_0x27f4 != NULL &&
                             (fopAcM_GetName(field_0x27f4) == fpcNm_Obj_WindStone_e ||
                             fopAcM_GetName(field_0x27f4) == fpcNm_Obj_SmWStone_e))
                 {
                     setDoStatusEmphasys(BUTTON_STATUS_LISTEN);
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_PLACE) {
+                } else if (getDoStatus() == BUTTON_STATUS_PLACE) {
                     if (checkEndResetFlg1(ERFLG1_DO_EXCHANGE_PUT_IN)) {
                         setDoStatusEmphasys(BUTTON_STATUS_INSERT);
                     } else if (checkEndResetFlg1(ERFLG1_DO_PUT_EMPHASYS)) {
@@ -19562,7 +19599,7 @@ int daAlink_c::execute() {
                         setWallGrabStatus(BUTTON_STATUS_GRAB, checkChainEmphasys());
                     }
 
-                    if (dComIfGp_getRStatus() == BUTTON_STATUS_SHIELD_ATTACK && checkShieldAttackEmphasys() == 0) {
+                    if (getRStatus() == BUTTON_STATUS_SHIELD_ATTACK && checkShieldAttackEmphasys() == 0) {
                         setRStatus(BUTTON_STATUS_NONE);
                     }
                 }

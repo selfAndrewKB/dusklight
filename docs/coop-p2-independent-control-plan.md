@@ -80,6 +80,18 @@ The existing global `dComIfGp_getDoStatus()`, `dComIfGp_getRStatus()`, and `dCom
 should remain P1/HUD status until the HUD is expanded. P2 gameplay should read a slot-local answer,
 while P1 still writes the global meter state as before.
 
+First pass implemented:
+
+- `dusk::coop::player_button_status` stores slot-local Do/A/R/Z and 3D prompt status for additional
+  players while P1 still forwards to the vanilla global meter fields.
+- ALINK's prompt write wrappers now route Do/B/A/R/Z/3D status through the acting player slot.
+- ALINK gameplay reads of Do/R status now use owner-local wrappers, so P2 guard/action branches do
+  not consume P1's prompt state after setting their own.
+- Message progression reads A/B input from the event owner, so P2-started dialogue can advance from
+  P2's controller.
+- Force-status fields, item button HUD state, and actual P2 meter rendering remain future
+  `hud_owner`/UI work.
+
 ### `player_camera_status`
 
 Owns per-slot camera/action status such as bow, slingshot, Hawkeye, iron ball subject mode,
@@ -126,10 +138,10 @@ trained should not be forced to P1.
    - Route `setAtnList()` through the same owner so P2 can have `mTargetedActor` again.
    - Route owner-camera lock-on reads through the same attention owner.
 
-2. Add per-slot action/R/Z status reads for ALINK gameplay.
-   - Start with guard/block and side-step/roll branches that currently read
-     `dComIfGp_getDoStatus()` or `dComIfGp_getRStatus()`.
-   - Keep global meter writes P1-owned until a HUD milestone exists.
+2. Add per-slot action/R/Z status reads for ALINK gameplay. First pass complete.
+   - ALINK Do/A/R/Z/3D prompt writes are slot-owned.
+   - ALINK Do/R gameplay reads now use the acting player's prompt owner.
+   - Keep force-status, item HUD, and meter rendering P1-owned until a HUD milestone exists.
 
 3. Convert first-person/item aiming status.
    - Bow/slingshot: replace the current secondary status skip with slot-owned camera/status.
@@ -150,10 +162,11 @@ trained should not be forced to P1.
 
 | Area | Files | Notes |
 | --- | --- | --- |
-| Attention core | `src/d/d_attention.cpp`, `include/d/d_attention.h` | `Run()` still sets `mpPlayer = dComIfGp_getPlayer(0)` and `mPadNo = PAD_1`. |
+| Attention core | `src/d/d_attention.cpp`, `include/d/d_attention.h` | Scanner reset and broader action prompt/event ownership still need a dedicated pass; knob/shutter door prompt eligibility now checks active players. |
 | ALINK target/guard/status | `src/d/actor/d_a_alink.cpp`, `src/d/actor/d_a_alink_guard.inc` | `checkAttentionLock()`, `setAtnList()`, `checkGuardActionChange()`, `checkNormalAction()`, `checkMoveDoAction()`. |
 | First-person and item aim | `src/d/actor/d_a_alink_bow.inc`, `src/d/actor/d_a_alink_ironball.inc`, hookshot code in ALINK, `src/d/actor/d_a_arrow.cpp` | Bow/slingshot ownership exists, camera/status ownership does not. |
-| Interaction prompts | `src/d/actor/d_a_alink.cpp`, `src/f_op/f_op_actor_mng.cpp`, NPC/object actors with action prompts | Do/R/Z status is still global. |
+| Interaction prompts | `src/d/actor/d_a_alink.cpp`, `src/f_op/f_op_actor_mng.cpp`, NPC/object actors with action prompts | Do/R/Z gameplay status is slot-local; knob/shutter door prompt side selection is active-player aware; HUD rendering and other world prompt/event owners still need a dedicated pass. |
+| Climb/hang camera hints | `src/d/actor/d_a_alink_hang.inc` | Hang, ladder, climb, and roof-hang camera status writes route through `player_camera_status` so P2 climb states do not write into P1's camera row. |
 | Howling/Hidden Skills | `src/d/actor/d_a_tag_howl.cpp`, `src/d/actor/d_a_obj_smw_stone.cpp`, `src/d/actor/d_a_npc_kn.cpp` | Howl entry is P1/wolf-owned; Hidden Skill trainer is P1/training-owned. |
 
 ## Test Plan

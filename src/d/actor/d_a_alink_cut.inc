@@ -529,7 +529,7 @@ int daAlink_c::commonCutAction() {
         resetCombo(TRUE);
     }
 
-    if (dComIfGp_getDoStatus() == BUTTON_STATUS_PUT_AWAY) {
+    if (getDoStatus() == BUTTON_STATUS_PUT_AWAY) {
         setDoStatus(BUTTON_STATUS_NONE);
     }
 

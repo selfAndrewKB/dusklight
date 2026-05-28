@@ -11,6 +11,9 @@
 #include "d/actor/d_a_player.h"
 #include "d/d_meter2_info.h"
 #include "SSystem/SComponent/c_math.h"
+#if TARGET_PC
+#include "dusk/coop/player_query.h"
+#endif
 #include <cstdio>
 #include <cstring>
 
@@ -212,6 +215,42 @@ void daKnob20_c::setEventId() {
 }
 
 int daKnob20_c::checkArea(f32 param_1, f32 param_2, f32 param_3) {
+#if TARGET_PC
+    int bestSide = field_0x60f;
+    f32 bestDist = param_3;
+    bool found = false;
+
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+        daPy_py_c* player = static_cast<daPy_py_c*>(actor);
+        cXyz playerDistance = player->current.pos - current.pos;
+        mDoMtx_stack_c::YrotS(-current.angle.y);
+        mDoMtx_stack_c::multVec(&playerDistance, &playerDistance);
+        const f32 distance = playerDistance.abs();
+        if (distance > param_3 || fabsf(playerDistance.x) > param_1 || fabsf(playerDistance.z) > param_2) {
+            return;
+        }
+
+        const int side = playerDistance.z > 0.0f ? 0 : 1;
+        s16 angle = current.angle.y;
+        if (side == 1) {
+            angle += 0x7fff;
+        }
+
+        if (abs(static_cast<s16>(angle - player->current.angle.y)) >= 0x5000 && (!found || distance < bestDist)) {
+            found = true;
+            bestDist = distance;
+            bestSide = side;
+        }
+    });
+
+    if (found) {
+        // Co-op: door prompt eligibility is actor-global, so seed it from the nearest active
+        // player who is actually in the knob-door interaction area instead of only P1.
+        field_0x60f = bestSide;
+        return 1;
+    }
+    return 0;
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
     cXyz playerDistance = player->current.pos - current.pos;
     mDoMtx_stack_c::YrotS(-current.angle.y);
@@ -235,6 +274,7 @@ int daKnob20_c::checkArea(f32 param_1, f32 param_2, f32 param_3) {
     } else {
         return 1;
     }
+#endif
 }
 
 void daKnob20_c::setEventPrm() {
@@ -247,6 +287,16 @@ void daKnob20_c::setEventPrm() {
         if (dMsgObject_getMsgObjectClass()->isPlaceMessage()) {
             return;
         }
+    }
+    if (!daPy_py_c::checkNowWolf()) {
+#if TARGET_PC
+        // Co-op: pick the prompt side before event ids are selected, otherwise P2 can
+        // satisfy the area check but inherit P1's previous door side.
+        if (!checkArea(80.0f, 110.0f, 250.0f)) {
+            offFlag(4);
+            return;
+        }
+#endif
     }
     if (field_0x60f == 0) {
         field_0x5b9 = 0;
@@ -267,6 +317,11 @@ void daKnob20_c::setEventPrm() {
         }
     }
     if (!daPy_py_c::checkNowWolf()) {
+#if TARGET_PC
+        eventInfo.setEventId(field_0x5a4[field_0x5b9]);
+        eventInfo.setMapToolId(field_0x5b2[field_0x5b9]);
+        eventInfo.onCondition(4);
+#else
         if (!checkArea(80.0f, 110.0f, 250.0f)) {
             offFlag(4);
         } else {
@@ -274,6 +329,7 @@ void daKnob20_c::setEventPrm() {
             eventInfo.setMapToolId(field_0x5b2[field_0x5b9]);
             eventInfo.onCondition(4);
         }
+#endif
     }
 }
 

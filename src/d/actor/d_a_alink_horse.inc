@@ -901,7 +901,7 @@ int daAlink_c::setSyncBoar(int param_0) {
 }
 
 int daAlink_c::setSyncRide(int param_0) {
-    if (param_0 && mMidnaTalkDelayTimer == 0 && dComIfGp_getDoStatus() == BUTTON_STATUS_NONE &&
+    if (param_0 && mMidnaTalkDelayTimer == 0 && getDoStatus() == BUTTON_STATUS_NONE &&
         (!checkHorseRide() || dComIfGp_getHorseActor()->getAnmIdx(0) != 7))
     {
         param_0 = TRUE;
@@ -1249,7 +1249,7 @@ int daAlink_c::checkHorseGetOffAndSetDoStatus() {
 int daAlink_c::setHorseGetOff(int param_0) {
     daHorse_c* horse_p = dComIfGp_getHorseActor();
 
-    if (dComIfGp_getDoStatus() == BUTTON_STATUS_DISMOUNT && doTrigger()) {
+    if (getDoStatus() == BUTTON_STATUS_DISMOUNT && doTrigger()) {
         if ((checkHorseRide() && horse_p->checkEnemySearch()) || checkHorseLieAnime()) {
             resetUpperAnime(UPPER_2, -1.0f);
             procBackJumpInit(0);
