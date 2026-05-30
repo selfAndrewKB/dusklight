@@ -69,6 +69,12 @@ guard/block availability, first-person item camera modes, prompts, and Hidden Sk
 slot-local ownership APIs so P2 can answer "what am I targeting or doing?" without consuming P1's
 global attention/status state. See `docs/coop-p2-independent-control-plan.md`.
 
+Accepted events and demos are also not automatically primary-player state. The event manager already
+retains the requester in `Pt1`, so scripted interaction code should ask `event_owner` when the
+question is "which player started this accepted event?" Door demos are the first proof surface:
+prompt eligibility may still be interaction-owned, but the accepted door animation/placement belongs
+to the requesting player slot.
+
 ## Routing Table
 
 | Question the callsite is asking | Use | Current status |
@@ -83,9 +89,10 @@ global attention/status state. See `docs/coop-p2-independent-control-plan.md`.
 | "Which player is caught, stunned, grabbed, carried, swallowed, or retained by this actor?" | `dusk::coop::caught_stun_owner` / future caught-grab helpers | Initial implementation for Gibdo scream stun |
 | "Which player owns this item/tool instance?" | item-owner helpers / owner keeps | Partially implemented by item ownership patches |
 | "What is this player slot locked onto or allowed to target?" | `dusk::coop::player_attention` | V1 gives additional ALINK actors their own `dAttention_c`; lock acquisition/status gating, owner target-capability masks, owner camera gameplay, cursor drawing, and actor-observed "am I locked-on?" checks use the same attention owner while P1 remains on global attention for HUD/story compatibility |
-| "What Do/R/Z/R action status should this ALINK consume?" | future `player_button_status` | Planned; global meter status remains P1-owned for now |
+| "What Do/R/Z/R action status should this ALINK consume?" | `dusk::coop::player_button_status` | First pass implemented for ALINK gameplay Do/A/R/Z/3D prompt state; global meter/HUD rendering remains P1-owned |
 | "Which player owns first-person/item camera status?" | `dusk::coop::player_camera_status` over `dusk::coop::camera` | First pass implemented for slot-local status 0/1 bits, camera attention bits, subject zoom/focus, bow/slingshot, Hawkeye, iron ball subject mode, hookshot subject/hang/flight status, and MG_ROD camera/cast status; global HUD/meter status and 2D item reticles remain P1/2D-packet work |
-| "Which player owns this prompt/object interaction?" | future `interaction_owner` | Planned for talk/check/pickup/howl prompts |
+| "Which player owns this prompt/object interaction?" | future `interaction_owner` | Planned for talk/check/pickup/howl prompts; knob/shutter door prompt side selection is active-player aware but still actor-local |
+| "Which player requested this accepted event/demo?" | `dusk::coop::event_owner` | Initial implementation derives from event `Pt1`; message input, ALINK door-demo staff consumption, and knob/shutter door demos use it so P2-started scripted interactions do not animate or move P1 |
 | "Which player is retained by this training sequence?" | future `training_owner` | Planned for Hidden Skills / `NPC_KN` |
 | "Which player owns camera/HUD/message/story/save state?" | camera/HUD/story-specific APIs | Partially implemented for split-screen camera only |
 | "Which viewport owns this render pass, post effect, lighting, fog, or culling decision?" | split-screen viewport/render ownership APIs | Initial audit in `coop-split-screen-api-audit.md`; `render_visibility` implemented for known draw-culling paths |
@@ -121,6 +128,10 @@ global attention/status state. See `docs/coop-p2-independent-control-plan.md`.
   player-status bits.
 - **Interaction owner:** prompt-driven actions such as talk, check, pickup, howl, and object use.
   Keep it separate from enemy targeting and item owner lookup.
+- **Event owner:** accepted event/demo ownership after the event manager chooses an order. Derive
+  from `dComIfGp_event_getPt1()` where possible so scripted interaction placement, input, and
+  animation follow the requesting player. Do not use it for raw prompt eligibility before an event is
+  accepted; that is `interaction_owner`.
 - **Training owner:** retained instructional/event combat sequences such as Hidden Skills. Once a
   trainer binds to a slot, required move checks and forced placement should follow that slot.
 - **Viewport/render ownership:** split-screen render passes, post effects, lighting, fog, HUD

@@ -92,6 +92,23 @@ First pass implemented:
 - Force-status fields, item button HUD state, and actual P2 meter rendering remain future
   `hud_owner`/UI work.
 
+### `event_owner`
+
+Owns "which player requested this accepted event/demo?" once the vanilla event manager has chosen an
+order.
+
+The first implementation derives ownership from existing event state instead of storing a parallel
+sidecar:
+
+- `Pt1` is the request actor set by `dEvt_control_c::setParam()`;
+- if `Pt1` is a registered player, that slot owns the event;
+- otherwise, explicit fallback actors and then P1 preserve vanilla behavior.
+
+Door demos are the first consumer. Knob/shutter door demo placement, facing, scene-change, restart,
+wolf-animation, and animation-rate reads now use the event owner so P2 can open doors without
+teleporting P1. ALINK's generic door-demo staff consumption is also owner-gated so P1 does not play
+the door animation for P2-owned events.
+
 ### `player_camera_status`
 
 Owns per-slot camera/action status such as bow, slingshot, Hawkeye, iron ball subject mode,
@@ -121,6 +138,11 @@ and similar action-button interactions.
 This is separate from enemy targeting and item ownership. It should be used when the world prompt
 itself is the owner, especially for NPC/object interactions and howl tags.
 
+The current knob/shutter prompt eligibility patches are interaction-owner-shaped but still
+actor-local: they search active players and seed the shared door side from the nearest eligible
+player. A future pass should lift that selected prompt actor/slot into `interaction_owner` before
+broader talk/check/pickup prompt work, rather than duplicating door-specific nearest-player state.
+
 ### `training_owner`
 
 Owns retained training sequences such as Hidden Skills. Once a trainer starts a lesson against a
@@ -149,6 +171,7 @@ trained should not be forced to P1.
    - Iron ball and hookshot subject modes: route subject camera/status to the owning slot/camera.
 
 4. Convert basic interaction prompts through `interaction_owner`.
+   - Lift the knob/shutter door prompt owner out of actor-local active-player scans.
    - Begin with howl tags/stones because they are small and visibly P1-owned.
    - Then audit talk/check/pickup prompt reads in `setAtnList()`, `orderTalk()`, and normal action
      entry.
@@ -165,7 +188,7 @@ trained should not be forced to P1.
 | Attention core | `src/d/d_attention.cpp`, `include/d/d_attention.h` | Scanner reset and broader action prompt/event ownership still need a dedicated pass; knob/shutter door prompt eligibility now checks active players. |
 | ALINK target/guard/status | `src/d/actor/d_a_alink.cpp`, `src/d/actor/d_a_alink_guard.inc` | `checkAttentionLock()`, `setAtnList()`, `checkGuardActionChange()`, `checkNormalAction()`, `checkMoveDoAction()`. |
 | First-person and item aim | `src/d/actor/d_a_alink_bow.inc`, `src/d/actor/d_a_alink_ironball.inc`, hookshot code in ALINK, `src/d/actor/d_a_arrow.cpp` | Bow/slingshot ownership exists, camera/status ownership does not. |
-| Interaction prompts | `src/d/actor/d_a_alink.cpp`, `src/f_op/f_op_actor_mng.cpp`, NPC/object actors with action prompts | Do/R/Z gameplay status is slot-local; knob/shutter door prompt side selection is active-player aware; HUD rendering and other world prompt/event owners still need a dedicated pass. |
+| Interaction prompts | `src/d/actor/d_a_alink.cpp`, `src/f_op/f_op_actor_mng.cpp`, NPC/object actors with action prompts | Do/R/Z gameplay status is slot-local; knob/shutter door prompt side selection is active-player aware; event-owner door demos now move the requester; HUD rendering and broader prompt owners still need a dedicated pass. |
 | Climb/hang camera hints | `src/d/actor/d_a_alink_hang.inc` | Hang, ladder, climb, and roof-hang camera status writes route through `player_camera_status` so P2 climb states do not write into P1's camera row. |
 | Howling/Hidden Skills | `src/d/actor/d_a_tag_howl.cpp`, `src/d/actor/d_a_obj_smw_stone.cpp`, `src/d/actor/d_a_npc_kn.cpp` | Howl entry is P1/wolf-owned; Hidden Skill trainer is P1/training-owned. |
 

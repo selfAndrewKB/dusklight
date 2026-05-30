@@ -24,8 +24,24 @@
 #include <cstring>
 
 #include "dusk/imgui/ImGuiConsole.hpp"
+#if TARGET_PC
+#include "dusk/coop/event_owner.h"
+#endif
 #include "dusk/settings.h"
 #include "dusk/speedrun.h"
+
+#if TARGET_PC
+static bool alinkShouldSkipDoorEventDemo(const daAlink_c* player) {
+    fopAc_ac_c* door = dComIfGp_event_getPt2();
+    if (door == NULL || !door->eventInfo.checkCommandDoor()) {
+        return false;
+    }
+
+    // Co-op: door event scripts use a generic Alink staff track; only the requester should
+    // consume it, otherwise P1 also enters the door animation for P2-owned events.
+    return !dusk::coop::event_owner::isCurrentOwner(static_cast<const fopAc_ac_c*>(player));
+}
+#endif
 
 BOOL daAlink_c::checkEventRun() const {
     return dComIfGp_event_runCheck() || checkPlayerDemoMode();
@@ -79,6 +95,13 @@ int daAlink_c::checkDemoAction() {
         }
         return 0;
     }
+
+#if TARGET_PC
+    if (alinkShouldSkipDoorEventDemo(this)) {
+        mAlinkStaffId = -1;
+        return 0;
+    }
+#endif
 
     u32 demoMode = mDemo.getDemoMode();
     JUT_ASSERT(155,

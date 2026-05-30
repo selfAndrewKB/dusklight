@@ -2,6 +2,7 @@
 
 #include "d/actor/d_a_alink.h"
 #include "d/d_com_inf_game.h"
+#include "dusk/coop/event_owner.h"
 #include "m_Do/m_Do_controller_pad.h"
 
 namespace dusk::coop::player_button_status {
@@ -179,13 +180,7 @@ void set3DStatusForPlayer(const daAlink_c* player, u8 status, u8 direction, u8 f
 }
 
 int messagePad() {
-    // Co-op: message advancement follows the player actor that started the current event.
-    PlayerSlot slot = getSlotForActor(dComIfGp_event_getPt1());
-    if (slot == PlayerSlot::Invalid) {
-        slot = PlayerSlot::Primary;
-    }
-
-    return getPadForSlot(slot);
+    return event_owner::currentOwnerPad();
 }
 
 bool messageTrigA() {
