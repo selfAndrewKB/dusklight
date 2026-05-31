@@ -1363,7 +1363,7 @@ int daAlink_c::procPickPut() {
                 if (bombActor != NULL) {
                     // Co-op: bombling lifetime can outlive the creating ALINK action, so preserve its owner.
                     static_cast<daNbomb_c*>(bombActor)->setOwner(this);
-                    dComIfGp_addSelectItemNum(mSelectItemId, -1);
+                    addSelectItemNum(mSelectItemId, -1);
                     field_0x2fcf++;
                 }
             }

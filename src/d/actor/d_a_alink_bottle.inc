@@ -178,7 +178,7 @@ int daAlink_c::commonBottleDrink(BOOL param_0) {
                     dComIfGp_setItemLifeCount(32, 0);
                 } else if (mEquipItem == dItemNo_BEE_CHILD_e) {
                     field_0x2fd3 = 3;
-                    dComIfGp_setItemLifeCount(dComIfGp_getSelectItemNum(mSelectItemId), 0);
+                    dComIfGp_setItemLifeCount(getSelectItemNum(mSelectItemId), 0);
                 } else if (mEquipItem == dItemNo_RED_BOTTLE_e || mEquipItem == dItemNo_CHUCHU_RED_e ||
                            mEquipItem == dItemNo_RED_BOTTLE_2_e)
                 {
@@ -214,7 +214,8 @@ int daAlink_c::commonBottleDrink(BOOL param_0) {
 
                 field_0x072c->setFrame(1.0f);
                 if (mDemo.getDemoType() == daPy_demo_c::DEMO_TYPE_SPECIAL_e) {
-                    dComIfGs_setEquipBottleItemIn(mSelectItemId, dItemNo_HALF_MILK_BOTTLE_e);
+                    // Co-op: bottle inventory stays shared, but the equipped bottle belongs to this ALINK.
+                    setBottleItem(mSelectItemId, dItemNo_HALF_MILK_BOTTLE_e);
                 }
             } else if (mProcVar2.field_0x300c == 0) {
                 mProcVar2.field_0x300c = 1;
@@ -268,7 +269,7 @@ int daAlink_c::commonBottleDrink(BOOL param_0) {
 
                 field_0x072c->setFrame(2.0f);
                 if (mDemo.getDemoType() == daPy_demo_c::DEMO_TYPE_SPECIAL_e) {
-                    dComIfGs_setEquipBottleItemEmpty(mSelectItemId);
+                    emptyBottle(mSelectItemId);
                 }
 
                 if (mEquipItem == dItemNo_CHUCHU_RARE_e || mEquipItem == dItemNo_FAIRY_DROP_e) {
@@ -497,7 +498,7 @@ int daAlink_c::procBottleOpen() {
         } else if (frameCtrl_p->checkPass(11.0f)) {
             mHeldItemModel->getModelData()->entryTexMtxAnimator(field_0x0720);
             mProcVar2.field_0x300c = 2;
-            dComIfGs_setEquipBottleItemEmpty(mSelectItemId);
+            emptyBottle(mSelectItemId);
 
             if (mEquipItem == dItemNo_WATER_BOTTLE_e && mProcVar3.field_0x300e != 0) {
                 seStartOnlyReverb(Z2SE_LK_SPRINKLE_WATER);
@@ -645,10 +646,10 @@ int daAlink_c::procBottleSwing() {
                         bottle_item = dItemNo_HOT_SPRING_e;
                     }
 
-                    dComIfGs_setEquipBottleItemIn(mSelectItemId, bottle_item);
+                    setBottleItem(mSelectItemId, bottle_item);
 
                     if (bottle_item == dItemNo_BEE_CHILD_e) {
-                        dComIfGp_setSelectItemNum(mSelectItemId, dComIfGs_getBottleMax());
+                        setSelectItemNum(mSelectItemId, dComIfGs_getBottleMax());
                     } else if (bottle_item == dItemNo_WATER_BOTTLE_e) {
                         seStartOnlyReverb(Z2SE_LK_SCOOP_WATER);
                     } else if (checkOilBottleItem(bottle_item)) {

@@ -1430,6 +1430,7 @@ set(DUSK_FILES
         include/dusk/coop/player_attention.h
         include/dusk/coop/player_button_status.h
         include/dusk/coop/player_camera_status.h
+        include/dusk/coop/player_item_selection.h
         include/dusk/coop/player_query.h
         include/dusk/coop/player_slots.h
         include/dusk/coop/render_effects.h
@@ -1437,6 +1438,7 @@ set(DUSK_FILES
         include/dusk/coop/render_shadows.h
         include/dusk/coop/render_visibility.h
         include/dusk/coop/selected_target_state.h
+        include/dusk/coop/ui_owner.h
         include/dusk/coop/young_gohma_state_probe.h
         include/dusk/diagnostics.h
         include/dusk/dvd_asset.hpp
@@ -1457,11 +1459,13 @@ set(DUSK_FILES
         src/dusk/coop/player_slots.cpp
         src/dusk/coop/player_button_status.cpp
         src/dusk/coop/player_camera_status.cpp
+        src/dusk/coop/player_item_selection.cpp
         src/dusk/coop/render_effects.cpp
         src/dusk/coop/render_materials.cpp
         src/dusk/coop/render_shadows.cpp
         src/dusk/coop/render_visibility.cpp
         src/dusk/coop/selected_target_state.cpp
+        src/dusk/coop/ui_owner.cpp
         src/dusk/coop/young_gohma_state_probe.cpp
         src/dusk/coop/input.cpp
         src/dusk/coop/player_attention.cpp

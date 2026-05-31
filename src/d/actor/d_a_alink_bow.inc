@@ -119,7 +119,7 @@ BOOL daAlink_c::checkBowAnime() const {
 
 void daAlink_c::makeArrow() {
     if (dComIfGs_getArrowNum() != 0) {
-        if (field_0x301e == 1 && dComIfGp_getSelectItemNum(mSelectItemId) == 0) {
+        if (field_0x301e == 1 && getSelectItemNum(mSelectItemId) == 0) {
             field_0x301e = 0;
         }
 
@@ -143,7 +143,7 @@ void daAlink_c::deleteArrow() {
             (mDamageTimer == mpHIO->mDamage.m.mInvincibleTime || checkModeFlg(8)))
         {
             arrow_p->setBombArrowExplode();
-            dComIfGp_addSelectItemNum(mSelectItemId, -1);
+            addSelectItemNum(mSelectItemId, -1);
             dComIfGp_setItemArrowNumCount(-1);
         } else {
             fopAcM_delete(arrow_p);
@@ -169,7 +169,7 @@ void daAlink_c::setBowOrSlingStatus() {
 void daAlink_c::changeArrowType() {
     if (checkCanoeSlider() || (mEquipItem == dItemNo_BOW_e && field_0x301e == 0) ||
         (mEquipItem == dItemNo_BOMB_ARROW_e && field_0x301e == 0 &&
-         dComIfGp_getSelectItemNum(mSelectItemId) == 0) ||
+         getSelectItemNum(mSelectItemId) == 0) ||
         (mEquipItem == dItemNo_HAWK_ARROW_e && checkAttentionLock()))
     {
         return;
@@ -236,7 +236,7 @@ BOOL daAlink_c::cancelBowMove() {
 void daAlink_c::setBowReadyAnime() {
     if (!checkBowAnime()) {
         if (mEquipItem == dItemNo_BOMB_ARROW_e) {
-            if (dComIfGp_getSelectItemNum(mSelectItemId) != 0) {
+            if (getSelectItemNum(mSelectItemId) != 0) {
                 field_0x301e = 1;
             } else {
                 field_0x301e = 0;
@@ -367,7 +367,7 @@ BOOL daAlink_c::checkUpperItemActionBow() {
                     seStartOnlyReverb(sound);
 
                     if (field_0x301e == 1) {
-                        dComIfGp_addSelectItemNum(mSelectItemId, -1);
+                        addSelectItemNum(mSelectItemId, -1);
                     }
 
                     dComIfGp_setItemArrowNumCount(-1);

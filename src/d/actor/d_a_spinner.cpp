@@ -12,6 +12,7 @@
 #include "Z2AudioLib/Z2Instances.h"
 #include "SSystem/SComponent/c_math.h"
 #include "dusk/coop/player_slots.h"
+#include "dusk/coop/player_item_selection.h"
 #include "m_Do/m_Do_controller_pad.h"
 
 static u8 const lit_3768[12] = {
@@ -703,7 +704,10 @@ int daSpinner_c::execute() {
         move_angle = (mDoCPd_c::getStickAngle3D(owner_pad) + 0x10000 + dCam_getControledAngleY(dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0)))) - 0x8000;
 
 #if PLATFORM_WII || VERSION == VERSION_SHIELD_DEBUG
-        if (dComIfG_getTrigB(owner_pad) && dComIfGp_getSelectItem(3) == dItemNo_SPINNER_e) {
+        if (dComIfG_getTrigB(owner_pad) &&
+            dusk::coop::player_item_selection::getItem(
+                dusk::coop::getSlotForActor(daSpinner_getOwner(this)), 3) == dItemNo_SPINNER_e)
+        {
 #else
         if (dComIfG_getTrigA(owner_pad)) {
 #endif

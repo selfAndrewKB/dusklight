@@ -11989,8 +11989,8 @@ void daAlink_c::checkItemButtonChange() {
         u8 temp_r0;
         for (u8 i = 0; i < 2; i++) {
             temp_r0 = (i + 1) % 2;
-            if (mEquipItem == dComIfGp_getSelectItem(i) &&
-                (mEquipItem != dComIfGp_getSelectItem(temp_r0) || mSelectItemId != temp_r0))
+            if (mEquipItem == getSelectItem(i) &&
+                (mEquipItem != getSelectItem(temp_r0) || mSelectItemId != temp_r0))
             {
                 mSelectItemId = i;
             }
@@ -12160,7 +12160,7 @@ int daAlink_c::orderTalk(int i_checkZTalk) {
     if (!checkWolf() && checkRequestTalkActor(mAttList2, field_0x27f8)) {
         for (int i = 0; i < 2; i++) {
             // check if pressed X or Y and if item on button is a trade item
-            if (checkTradeItem(dComIfGp_getSelectItem(i)) && itemTriggerCheck(1 << i)) {
+            if (checkTradeItem(getSelectItem(i)) && itemTriggerCheck(1 << i)) {
                 fopAcM_orderTalkItemBtnEvent(itemTalkType[i], this, field_0x27f8, 0, 0);
                 return 1;
             }
@@ -12803,7 +12803,7 @@ void daAlink_c::allUnequip(BOOL param_0) {
         mEquipItem != dItemNo_KANTERA_e)
     {
         for (u8 i = 0; i < 2; i++) {
-            if (dComIfGp_getSelectItem(i) == dItemNo_KANTERA_e) {
+            if (getSelectItem(i) == dItemNo_KANTERA_e) {
                 mSelectItemId = i;
             }
         }
@@ -12876,7 +12876,7 @@ BOOL daAlink_c::checkItemChangeFromButton() {
                        !checkCanoeRide() && checkNoUpperAnime() && checkNoResetFlg2(FLG2_UNK_1))
             {
                 for (i = 0; i < 2; i++) {
-                    if (dComIfGp_getSelectItem(i) == dItemNo_KANTERA_e) {
+                    if (getSelectItem(i) == dItemNo_KANTERA_e) {
                         mSelectItemId = i;
                     }
                 }
@@ -14968,7 +14968,7 @@ BOOL daAlink_c::setItemActor() {
                 static_cast<daNbomb_c*>(actor)->setOwner(this);
                 mActiveBombNum++;
                 setGrabItemActor(actor);
-                dComIfGp_addSelectItemNum(mSelectItemId, -1);
+                addSelectItemNum(mSelectItemId, -1);
                 field_0x33e4 = 38.0f;
                 setGrabUpperAnime(mpHIO->mBasic.m.mBasicInterpolation);
             }
@@ -15084,7 +15084,7 @@ BOOL daAlink_c::checkGroupItem(int i_itemNo, int i_selItem) const {
 
 int daAlink_c::checkSetItemTrigger(int i_itemNo) {
     for (u8 i = 0; i < 2; i++) {
-        if (checkGroupItem(i_itemNo, dComIfGp_getSelectItem(i)) && itemTriggerCheck(1 << i)) {
+        if (checkGroupItem(i_itemNo, getSelectItem(i)) && itemTriggerCheck(1 << i)) {
             if (i_itemNo != dItemNo_HVY_BOOTS_e) {
                 mSelectItemId = i;
             }
@@ -15097,7 +15097,7 @@ int daAlink_c::checkSetItemTrigger(int i_itemNo) {
 
 int daAlink_c::checkItemSetButton(int i_itemNo) {
     for (u8 i = 0; i < 2; i++) {
-        if (checkGroupItem(i_itemNo, dComIfGp_getSelectItem(i))) {
+        if (checkGroupItem(i_itemNo, getSelectItem(i))) {
             return i;
         }
     }
@@ -15198,7 +15198,7 @@ enum daAlink_ItemProc {
 };
 
 int daAlink_c::changeItemTriggerKeepProc(u8 i_selItemIdx, int i_procType) {
-    u32 sel_item = dComIfGp_getSelectItem(i_selItemIdx);
+    u32 sel_item = getSelectItem(i_selItemIdx);
     mSelectItemId = i_selItemIdx;
 
     if (i_procType == ITEM_PROC_GRASS_WHISTLE) {
@@ -15279,7 +15279,7 @@ int daAlink_c::changeItemTriggerKeepProc(u8 i_selItemIdx, int i_procType) {
  * `changeItemTriggerKeepProc`
  */
 int daAlink_c::checkNewItemChange(u8 i_selItemIdx) {
-    u16 sel_item = dComIfGp_getSelectItem(i_selItemIdx);
+    u16 sel_item = getSelectItem(i_selItemIdx);
 
     if (checkSpinnerRide()
         || sel_item == dItemNo_BOMB_BAG_LV1_e
@@ -15361,7 +15361,7 @@ int daAlink_c::checkNewItemChange(u8 i_selItemIdx) {
                 } else if (checkItemSetButton(0x108) != 2 &&
                            (sel_item == dItemNo_WORM_e || sel_item == dItemNo_BEE_CHILD_e))
                 {
-                    int itemNo = dComIfGp_getSelectItem(checkItemSetButton(0x108));
+                    int itemNo = getSelectItem(checkItemSetButton(0x108));
                     if (itemNo == dItemNo_WORM_ROD_e || itemNo == dItemNo_JEWEL_WORM_ROD_e) {
                         if (sel_item == dItemNo_BEE_CHILD_e) {
                             return ITEM_PROC_BOTTLE_DRINK;
@@ -15388,7 +15388,7 @@ int daAlink_c::checkNewItemChange(u8 i_selItemIdx) {
                     if (acceptSubjectModeChange()) {
                         return ITEM_PROC_SUBJECTIVITY;
                     }
-                } else if (sel_item == dItemNo_POKE_BOMB_e && dComIfGp_getSelectItemNum(i_selItemIdx) &&
+                } else if (sel_item == dItemNo_POKE_BOMB_e && getSelectItemNum(i_selItemIdx) &&
                            field_0x2fcf < 2)
                 {
                     return ITEM_PROC_PICK_PUT;
@@ -15398,7 +15398,7 @@ int daAlink_c::checkNewItemChange(u8 i_selItemIdx) {
             }
         }
     } else if (sel_item != dItemNo_NONE_e && mEquipItem != sel_item) {
-        if ((checkBombItem(sel_item) && !dComIfGp_getSelectItemNum(i_selItemIdx))
+        if ((checkBombItem(sel_item) && !getSelectItemNum(i_selItemIdx))
             || ((sel_item == dItemNo_NORMAL_BOMB_e || sel_item == dItemNo_WATER_BOMB_e) && mActiveBombNum >= 3)
             || (sel_item == dItemNo_IRONBALL_e && (!mLinkAcch.ChkGroundHit() || checkModeFlg(0x70C52)))
             || (sel_item == dItemNo_KANTERA_e && (checkNoResetFlg0(FLG0_WATER_IN_MOVE) || checkEndResetFlg1(ERFLG1_UNK_4) || checkModeFlg(0x40000))))
@@ -19493,8 +19493,8 @@ int daAlink_c::execute() {
                 u8 tmp;
                 for (u8 i = 0; i < 2; i++) {
                     tmp = (i + 1) % 2;
-                    if (dComIfGp_getSelectItem(i) == dItemNo_EMPTY_BOTTLE_e && (mUseButtonFlags & (1 << i)) &&
-                        dComIfGp_getSelectItem(tmp) == dItemNo_EMPTY_BOTTLE_e)
+                    if (getSelectItem(i) == dItemNo_EMPTY_BOTTLE_e && (mUseButtonFlags & (1 << i)) &&
+                        getSelectItem(tmp) == dItemNo_EMPTY_BOTTLE_e)
                     {
                         mUseButtonFlags |= (u8)(1 << tmp);
                     }

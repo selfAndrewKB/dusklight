@@ -12,6 +12,9 @@
 #include "d/d_particle_copoly.h"
 #include "d/d_save.h"
 #include "dusk/coop/player_button_status.h"
+#if TARGET_PC
+#include "dusk/coop/player_item_selection.h"
+#endif
 #include "f_op/f_op_actor_mng.h"
 #include "f_op/f_op_camera_mng.h"
 
@@ -3929,7 +3932,57 @@ public:
 
     inline void startRestartRoomFromOut(int, u32, int);
 
-    u16 getReadyItem() { return dComIfGp_getSelectItem(mSelectItemId); }
+    u16 getReadyItem() {
+#if TARGET_PC
+        // Co-op: equipped-item lookup belongs to this ALINK slot while inventory stays shared.
+        return dusk::coop::player_item_selection::getItemForPlayer(this, mSelectItemId);
+#else
+        return dComIfGp_getSelectItem(mSelectItemId);
+#endif
+    }
+    u8 getSelectItem(int button) const {
+#if TARGET_PC
+        return dusk::coop::player_item_selection::getItemForPlayer(this, button);
+#else
+        return dComIfGp_getSelectItem(button);
+#endif
+    }
+    s16 getSelectItemNum(int button) const {
+#if TARGET_PC
+        return dusk::coop::player_item_selection::getItemNumForPlayer(this, button);
+#else
+        return dComIfGp_getSelectItemNum(button);
+#endif
+    }
+    void setSelectItemNum(int button, s16 value) const {
+#if TARGET_PC
+        dusk::coop::player_item_selection::setItemNumForPlayer(this, button, value);
+#else
+        dComIfGp_setSelectItemNum(button, value);
+#endif
+    }
+    void addSelectItemNum(int button, s16 delta) const {
+#if TARGET_PC
+        dusk::coop::player_item_selection::addItemNumForPlayer(this, button, delta);
+#else
+        dComIfGp_addSelectItemNum(button, delta);
+#endif
+    }
+    // Co-op: bottle writes resolve this ALINK's selected bottle slot before mutating shared inventory.
+    void setBottleItem(int button, u8 item) const {
+#if TARGET_PC
+        dusk::coop::player_item_selection::setBottleItemForPlayer(this, button, item);
+#else
+        dComIfGs_setEquipBottleItemIn(button, item);
+#endif
+    }
+    void emptyBottle(int button) const {
+#if TARGET_PC
+        dusk::coop::player_item_selection::emptyBottleForPlayer(this, button);
+#else
+        dComIfGs_setEquipBottleItemEmpty(button);
+#endif
+    }
 
     static u32 getOtherHeapSize() { return 0xF0A60; }
 
