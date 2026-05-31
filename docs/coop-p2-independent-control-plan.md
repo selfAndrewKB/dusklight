@@ -135,13 +135,20 @@ still HUD/2D-packet ownership work, separate from the gameplay camera status con
 Owns "which player is using this prompt or object?" for talk, inspect, pick up, climb/enter, howl,
 and similar action-button interactions.
 
-This is separate from enemy targeting and item ownership. It should be used when the world prompt
-itself is the owner, especially for NPC/object interactions and howl tags.
+This is separate from enemy targeting, item ownership, and accepted event ownership. It should be
+used when the world prompt itself is the owner, especially for NPC/object interactions and howl tags.
 
-The current knob/shutter prompt eligibility patches are interaction-owner-shaped but still
-actor-local: they search active players and seed the shared door side from the nearest eligible
-player. A future pass should lift that selected prompt actor/slot into `interaction_owner` before
-broader talk/check/pickup prompt work, rather than duplicating door-specific nearest-player state.
+First pass:
+
+- `interaction_owner` can choose the nearest active player that satisfies a prompt volume/facing
+  test and return the selected slot, actor, and side.
+- Knob and shutter door prompt selection use it, then seed the door's existing shared side field.
+- Shutter prompt setup uses the selected prompt actor for wolf/Midna and lock-message side
+  decisions, while accepted door demos continue through `event_owner`.
+
+This keeps the prompt question ("who can use this?") separate from the event question ("who got the
+accepted demo?"). Broader talk/check/pickup prompts should move to the same API instead of adding
+new actor-local active-player scans.
 
 ### `training_owner`
 
@@ -171,7 +178,7 @@ trained should not be forced to P1.
    - Iron ball and hookshot subject modes: route subject camera/status to the owning slot/camera.
 
 4. Convert basic interaction prompts through `interaction_owner`.
-   - Lift the knob/shutter door prompt owner out of actor-local active-player scans.
+   - Door prompt side selection is the first migrated proof.
    - Begin with howl tags/stones because they are small and visibly P1-owned.
    - Then audit talk/check/pickup prompt reads in `setAtnList()`, `orderTalk()`, and normal action
      entry.
@@ -188,7 +195,7 @@ trained should not be forced to P1.
 | Attention core | `src/d/d_attention.cpp`, `include/d/d_attention.h` | Scanner reset and broader action prompt/event ownership still need a dedicated pass; knob/shutter door prompt eligibility now checks active players. |
 | ALINK target/guard/status | `src/d/actor/d_a_alink.cpp`, `src/d/actor/d_a_alink_guard.inc` | `checkAttentionLock()`, `setAtnList()`, `checkGuardActionChange()`, `checkNormalAction()`, `checkMoveDoAction()`. |
 | First-person and item aim | `src/d/actor/d_a_alink_bow.inc`, `src/d/actor/d_a_alink_ironball.inc`, hookshot code in ALINK, `src/d/actor/d_a_arrow.cpp` | Bow/slingshot ownership exists, camera/status ownership does not. |
-| Interaction prompts | `src/d/actor/d_a_alink.cpp`, `src/f_op/f_op_actor_mng.cpp`, NPC/object actors with action prompts | Do/R/Z gameplay status is slot-local; knob/shutter door prompt side selection is active-player aware; event-owner door demos now move the requester; HUD rendering and broader prompt owners still need a dedicated pass. |
+| Interaction prompts | `src/d/actor/d_a_alink.cpp`, `src/f_op/f_op_actor_mng.cpp`, NPC/object actors with action prompts | Do/R/Z gameplay status is slot-local; knob/shutter door prompt side selection uses `interaction_owner`; event-owner door demos now move the requester; HUD rendering and broader prompt owners still need a dedicated pass. |
 | Climb/hang camera hints | `src/d/actor/d_a_alink_hang.inc` | Hang, ladder, climb, and roof-hang camera status writes route through `player_camera_status` so P2 climb states do not write into P1's camera row. |
 | Howling/Hidden Skills | `src/d/actor/d_a_tag_howl.cpp`, `src/d/actor/d_a_obj_smw_stone.cpp`, `src/d/actor/d_a_npc_kn.cpp` | Howl entry is P1/wolf-owned; Hidden Skill trainer is P1/training-owned. |
 

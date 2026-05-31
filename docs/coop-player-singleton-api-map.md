@@ -91,7 +91,7 @@ to the requesting player slot.
 | "What is this player slot locked onto or allowed to target?" | `dusk::coop::player_attention` | V1 gives additional ALINK actors their own `dAttention_c`; lock acquisition/status gating, owner target-capability masks, owner camera gameplay, cursor drawing, and actor-observed "am I locked-on?" checks use the same attention owner while P1 remains on global attention for HUD/story compatibility |
 | "What Do/R/Z/R action status should this ALINK consume?" | `dusk::coop::player_button_status` | First pass implemented for ALINK gameplay Do/A/R/Z/3D prompt state; global meter/HUD rendering remains P1-owned |
 | "Which player owns first-person/item camera status?" | `dusk::coop::player_camera_status` over `dusk::coop::camera` | First pass implemented for slot-local status 0/1 bits, camera attention bits, subject zoom/focus, bow/slingshot, Hawkeye, iron ball subject mode, hookshot subject/hang/flight status, and MG_ROD camera/cast status; global HUD/meter status and 2D item reticles remain P1/2D-packet work |
-| "Which player owns this prompt/object interaction?" | future `interaction_owner` | Planned for talk/check/pickup/howl prompts; knob/shutter door prompt side selection is active-player aware but still actor-local |
+| "Which player owns this prompt/object interaction?" | `dusk::coop::interaction_owner` | Initial implementation selects active-player prompt owners for knob/shutter door side fields; broader talk/check/pickup/howl prompts remain next |
 | "Which player requested this accepted event/demo?" | `dusk::coop::event_owner` | Initial implementation derives from event `Pt1`; message input, ALINK door-demo staff consumption, and knob/shutter door demos use it so P2-started scripted interactions do not animate or move P1 |
 | "Which player is retained by this training sequence?" | future `training_owner` | Planned for Hidden Skills / `NPC_KN` |
 | "Which player owns camera/HUD/message/story/save state?" | camera/HUD/story-specific APIs | Partially implemented for split-screen camera only |
@@ -127,7 +127,8 @@ to the requesting player slot.
   hookshot, and iron ball subject mode. Route through slot camera ownership rather than global
   player-status bits.
 - **Interaction owner:** prompt-driven actions such as talk, check, pickup, howl, and object use.
-  Keep it separate from enemy targeting and item owner lookup.
+  Keep it separate from enemy targeting, item owner lookup, and accepted event ownership. Prompt
+  code should return the selected slot/actor before the event manager accepts an order.
 - **Event owner:** accepted event/demo ownership after the event manager chooses an order. Derive
   from `dComIfGp_event_getPt1()` where possible so scripted interaction placement, input, and
   animation follow the requesting player. Do not use it for raw prompt eligibility before an event is

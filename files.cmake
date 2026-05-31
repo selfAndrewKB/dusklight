@@ -1423,6 +1423,7 @@ set(DUSK_FILES
         include/dusk/coop/debug_overlay.h
         include/dusk/coop/enemy_targeting.h
         include/dusk/coop/event_owner.h
+        include/dusk/coop/interaction_owner.h
         include/dusk/coop/gibdo_state_probe.h
         include/dusk/coop/input.h
         include/dusk/coop/player_attention.h
@@ -1448,6 +1449,7 @@ set(DUSK_FILES
         src/dusk/coop/debug_overlay.cpp
         src/dusk/coop/enemy_targeting.cpp
         src/dusk/coop/event_owner.cpp
+        src/dusk/coop/interaction_owner.cpp
         src/dusk/coop/gibdo_state_probe.cpp
         src/dusk/coop/player_query.cpp
         src/dusk/coop/player_slots.cpp

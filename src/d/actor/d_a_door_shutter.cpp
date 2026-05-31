@@ -15,7 +15,7 @@
 #include "d/d_map_path_dmap.h"
 #if TARGET_PC
 #include "dusk/coop/event_owner.h"
-#include "dusk/coop/player_query.h"
+#include "dusk/coop/interaction_owner.h"
 #endif
 #include "dusk/coop/render_visibility.h"
 #include "SSystem/SComponent/c_math.h"
@@ -220,12 +220,19 @@ void daDoor20_c::setEventPrm() {
 #if TARGET_PC
         // Co-op: choose the shared door prompt side from the active player before event
         // ids, lock messages, and stop-side checks are derived from field_0x68c.
-        if (!checkArea(getSize2X(), 12100.0f, 62500.0f)) {
+        const bool chooseSideFromAngle = door_param2_c::getFRoomNo(this) == door_param2_c::getBRoomNo(this);
+        dusk::coop::interaction_owner::PromptOwnerResult owner =
+            dusk::coop::interaction_owner::selectProjectedPrompt(
+                current.pos, field_0x680, current.angle.y, field_0x68c, chooseSideFromAngle,
+                getSize2X(), 12100.0f, 62500.0f);
+        if (!owner.found) {
             return;
         }
+        field_0x68c = owner.side;
+        player = static_cast<daPy_py_c*>(owner.actor);
 #endif
         if (door_param2_c::getKind(this) == 9) {
-            if (daPy_py_c::checkNowWolf()) {
+            if (player->checkWolf()) {
                 return;
             }
             int iStack_48;
@@ -256,7 +263,7 @@ void daDoor20_c::setEventPrm() {
                 }
             }
         } else {
-            if (daPy_py_c::checkNowWolf()) {
+            if (player->checkWolf()) {
                 if (!player->checkMidnaRide() || !daMidna_c::checkMidnaRealBody()) {
                     return;
                 }
@@ -279,7 +286,7 @@ void daDoor20_c::setEventPrm() {
             }
             if (chkMakeKey()) {
                 if (field_0x5f0) {
-                    if (daPy_py_c::checkNowWolf()) {
+                    if (player->checkWolf()) {
                         if (dComIfGs_getKeyNum() == 0) {
                             return;
                         }
@@ -1777,49 +1784,15 @@ void daDoor20_c::initOpenDemo(int param_1) {
 
 int daDoor20_c::checkArea(f32 param_1, f32 param_2, f32 param_3) {
 #if TARGET_PC
-    int bestSide = field_0x68c;
-    f32 bestDist = param_3;
-    bool found = false;
-
-    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* player) {
-        cXyz pos = player->attention_info.position;
-        pos.y = player->current.pos.y;
-        cXyz delta = pos - current.pos;
-        f32 dist = delta.abs2XZ();
-        if (dist > param_3) {
-            return;
-        }
-
-        delta.normalize();
-        f32 projected = delta.inprodXZ(field_0x680);
-        projected = projected * (dist * projected);
-        if (projected > param_2 || dist - projected > param_1) {
-            return;
-        }
-
-        int side = field_0x68c;
-        if (door_param2_c::getFRoomNo(this) == door_param2_c::getBRoomNo(this)) {
-            cSGlobe globe(player->current.pos - current.pos);
-            cSAngle angle;
-            angle = globe.U() - current.angle.y;
-            side = angle.Abs() < 0x4000 ? 0 : 1;
-        }
-
-        s16 facing = current.angle.y;
-        if (side == 1) {
-            facing += 0x7fff;
-        }
-        if (abs(static_cast<s16>(facing - player->current.angle.y)) >= 0x5000 && (!found || dist < bestDist)) {
-            found = true;
-            bestDist = dist;
-            bestSide = side;
-        }
-    });
-
-    if (found) {
+    const bool chooseSideFromAngle = door_param2_c::getFRoomNo(this) == door_param2_c::getBRoomNo(this);
+    dusk::coop::interaction_owner::PromptOwnerResult owner =
+        dusk::coop::interaction_owner::selectProjectedPrompt(
+            current.pos, field_0x680, current.angle.y, field_0x68c, chooseSideFromAngle,
+            param_1, param_2, param_3);
+    if (owner.found) {
         // Co-op: shutter-door prompt condition is shared on the door actor; choose the nearest
         // active player who satisfies the vanilla door area/facing test.
-        field_0x68c = bestSide;
+        field_0x68c = owner.side;
         return 1;
     }
     return 0;
