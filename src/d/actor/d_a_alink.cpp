@@ -372,16 +372,6 @@ void coopLogModelDataOwner(const char* phase, daAlink_c* player) {
 #endif
 
 #if TARGET_PC
-static int daAlink_getSightCameraId(daAlink_c* i_player) {
-    dusk::coop::PlayerSlot slot = dusk::coop::getSlotForActor(i_player);
-    if (slot == dusk::coop::PlayerSlot::Invalid) {
-        slot = dusk::coop::PlayerSlot::Primary;
-    }
-
-    int camera_id = dComIfGp_getPlayerCameraID(static_cast<int>(slot));
-    return camera_id >= 0 ? camera_id : 0;
-}
-
 static void daAlink_setOwnerCameraStatus0(daAlink_c* i_player, u32 i_flag) {
     // Co-op: climb/hang/ladder camera hints belong to the ALINK actor changing state.
     dusk::coop::player_camera_status::setStatus0ForPlayer(i_player, i_flag);
@@ -20256,14 +20246,9 @@ int daAlink_c::draw() {
 #if PLATFORM_GCN || TARGET_PC
 #if TARGET_PC
         if (dusk::coop::camera::isSplitScreenEnabled()) {
-            int camera_id = daAlink_getSightCameraId(this);
-            camera_process_class* camera = dComIfGp_getCamera(camera_id);
-            dDlst_window_c* window = dComIfGp_getWindow(dComIfGp_getCameraWinID(camera_id));
-            if (camera != NULL && window != NULL) {
-                // Co-op: Link draw submission is shared, so queue the reticle through this
-                // Link's camera instead of the last draw-list viewport.
-                mSight.setSightForView(&camera->view, window->getViewPort());
-            }
+            // Co-op: Link draw submission is shared, so queue the reticle through this
+            // Link's UI viewport instead of the last draw-list viewport.
+            mSight.setSightForPlayer(dusk::coop::getSlotForActor(this));
         } else {
             mSight.setSight();
         }

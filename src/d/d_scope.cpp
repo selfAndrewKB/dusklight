@@ -9,9 +9,9 @@
 #include "m_Do/m_Do_graphic.h"
 #include "JSystem/J2DGraph/J2DOrthoGraph.h"
 #if TARGET_PC
-#include "d/d_drawlist.h"
 #include "dusk/coop/camera.h"
 #include "dusk/coop/player_camera_status.h"
+#include "dusk/coop/ui_owner.h"
 #endif
 
 typedef void (dScope_c::*initFunc)();
@@ -149,24 +149,13 @@ int dScope_c::_execute(u32) {
 void dScope_c::draw() {
     dComIfGp_getCurrentGrafPort()->setup2D();
 #if TARGET_PC
-    f32 saved_viewport[6];
-    u32 saved_scissor[4];
+    dusk::coop::ui_owner::ViewportState viewport_state;
     bool restore_viewport = false;
     if (dusk::coop::camera::isSplitScreenEnabled()) {
-        int camera_id = dComIfGp_getPlayerCameraID(field_0x8d);
-        if (camera_id < 0) {
-            camera_id = 0;
-        }
-
         // Co-op: scope is a view overlay, so draw it into the owner's split viewport
         // instead of the shared meter pass's P1 HUD viewport, then restore HUD state.
-        GXGetViewportv(saved_viewport);
-        GXGetScissor(&saved_scissor[0], &saved_scissor[1], &saved_scissor[2], &saved_scissor[3]);
-        restore_viewport = true;
-        view_port_class* view_port = dComIfGp_getWindow(dComIfGp_getCameraWinID(camera_id))->getViewPort();
-        GXSetViewport(view_port->x_orig, view_port->y_orig, view_port->width, view_port->height,
-                      view_port->near_z, view_port->far_z);
-        GXSetScissor(view_port->x_orig, view_port->y_orig, view_port->width, view_port->height);
+        restore_viewport = dusk::coop::ui_owner::beginViewport(
+            static_cast<dusk::coop::PlayerSlot>(field_0x8d), &viewport_state);
     }
 #endif
     f32 temp_f1 = mScale;
@@ -210,9 +199,7 @@ void dScope_c::draw() {
                      false, false, false);
 #if TARGET_PC
     if (restore_viewport) {
-        GXSetViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3],
-                      saved_viewport[4], saved_viewport[5]);
-        GXSetScissor(saved_scissor[0], saved_scissor[1], saved_scissor[2], saved_scissor[3]);
+        dusk::coop::ui_owner::endViewport(viewport_state);
     }
 #endif
 }

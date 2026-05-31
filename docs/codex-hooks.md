@@ -31,6 +31,8 @@ The hooks are guardrails, not a replacement for judgment. They exist to preserve
 - Remind defender/collision-owner edits that damage-owner, nearest player, selected target, and P1 globals do not answer "who did my attack touch?"; route enemy-attack guard/block/defender-state checks through `dusk::coop::defender_owner`.
 - Remind caught/stun-owner edits that targeting and damage ownership do not answer "which player is retained by this effect?"; route scream/stun/grab/carry/hang release ownership through a retained owner API such as `dusk::coop::caught_stun_owner`, and name local pointer caches explicitly, such as `localPlayerActor` or `affectedLocalActors`.
 - Remind independent-player-control edits that raw P2 input is not enough; route ALINK lock-on, button status, item camera state, world prompts, and retained training state through the matching ownership family (`player_attention`, `player_button_status`, `player_camera_status`, `interaction_owner`, or `training_owner`) instead of borrowing P1 global attention/status.
+- Remind UI/item edits to keep durable slot-local X/Y assignment in `player_item_selection`, meter prompt presentation in `hud_owner`, and transient viewport-local UI context in `ui_owner`. Hawkeye scope, ALINK live reticles, boomerang lock markers, and fishing forced-wheel entry use `ui_owner`; fishing line/bobber geometry remains world-render ownership.
+- Remind interaction/event edits that singular authored sequences are not automatically player-owned. Keep howling stones P1/global in V1 and route future opt-in fullscreen collapse plus additional-player hiding through the planned `event_presentation` family rather than disabling split-screen capability or duplicating global minigame state.
 - Remind attention/status work that clean P2 input does not prove independent P2 state; capture shared `dComIfGp`/attention facts before changing shield or lock-on behavior.
 - Remind plan/doc edits to reconcile plan lifecycle: exactly one current active co-op plan in `AGENTS.md`, completed evidence docs pointing forward, and stale `current`/`active`/`next`/`todo` language cleaned up when a milestone changes state.
 - After supported edit/check tools run, add focused review context for C++ edits, original/decomp edits, docs-map drift, new source files that may need `files.cmake`, fmt/MSVC logging hazards, and real `git diff --check` whitespace failures.
@@ -49,6 +51,8 @@ The hooks are guardrails, not a replacement for judgment. They exist to preserve
   - Also reminds enemy/collision edits that defender contact belongs to `defender_owner`, not damage-owner, targeting, or primary-player state.
   - Also reminds enemy/caught-state edits that retained stun/grab/carry/hang effects need a retained owner slot, not nearest-player or current-target recomputation.
   - Also reminds independent-player-control edits to keep lock-on, button status, item camera state, prompts, and training routed through their specific ownership APIs instead of broad P1 singleton replacement.
+  - Also reminds UI/item edits to separate slot-local item assignment, meter prompt presentation, transient viewport-local overlays, and world-rendered fishing geometry instead of folding them into one broad HUD patch.
+  - Also reminds interaction/event edits to classify singular authored sequences separately and keep howling stones P1/global until the planned `event_presentation` family exists.
   - Also watches plan-map edits and reminds Codex to retire completed plans cleanly instead of leaving stale active-plan breadcrumbs.
 
 ## Limitations

@@ -90,10 +90,13 @@ to the requesting player slot.
 | "Which player owns this item/tool instance?" | item-owner helpers / owner keeps | Partially implemented by item ownership patches |
 | "What is this player slot locked onto or allowed to target?" | `dusk::coop::player_attention` | V1 gives additional ALINK actors their own `dAttention_c`; lock acquisition/status gating, owner target-capability masks, owner camera gameplay, cursor drawing, and actor-observed "am I locked-on?" checks use the same attention owner while P1 remains on global attention for HUD/story compatibility |
 | "What Do/A/R/Z/3D action status should this ALINK consume?" | `dusk::coop::player_button_status` | First pass implemented for ALINK gameplay prompt state; P1 forwards to vanilla globals and additional slots store sidecar values |
-| "Which player's prompt state is this HUD/meter pass presenting?" | `dusk::coop::hud_owner` | First pass implemented for split-screen action prompt and assigned-item HUD presentation; `dMeter2Draw_c` emits a secondary button/item viewport pass and `dMeter2_c` owns a secondary center emphasis prompt, both reading `player_button_status`, while full independent inventory/menu/meter duplication remains deferred |
-| "Which player owns first-person/item camera status?" | `dusk::coop::player_camera_status` over `dusk::coop::camera` | First pass implemented for slot-local status 0/1 bits, camera attention bits, subject zoom/focus, bow/slingshot, Hawkeye, iron ball subject mode, hookshot subject/hang/flight status, and MG_ROD camera/cast status; global HUD/meter status and 2D item reticles remain P1/2D-packet work |
-| "Which player owns this prompt/object interaction?" | `dusk::coop::interaction_owner` | Initial implementation selects active-player prompt owners for knob/shutter door side fields; broader talk/check/pickup/howl prompts remain next |
+| "Which X/Y items has this player assigned?" | `dusk::coop::player_item_selection` | Implemented as runtime sidecar assignments for additional slots with P1 forwarding to vanilla globals; inventory and consumable pools remain shared |
+| "Which player's prompt/item state is this HUD/meter pass presenting?" | `dusk::coop::hud_owner` | Split-screen prompt and assigned-item HUD replay reads the slot-local button state and item snapshots while full independent inventory/menu/meter duplication remains deferred |
+| "Which slot owns this transient overlay, delayed reticle packet, or singular item wheel?" | `dusk::coop::ui_owner` | Implemented for scoped presentation slots, retained singular UI ownership, viewport-local projection/draw helpers, Hawkeye scope, ALINK live reticles, boomerang lock markers, and fishing forced-wheel entry |
+| "Which player owns first-person/item camera status?" | `dusk::coop::player_camera_status` over `dusk::coop::camera` | First pass implemented for slot-local status 0/1 bits, camera attention bits, subject zoom/focus, bow/slingshot, Hawkeye, iron ball subject mode, hookshot subject/hang/flight status, and MG_ROD camera/cast status |
+| "Which player owns this prompt/object interaction?" | `dusk::coop::interaction_owner` | Selects active-player prompt owners for knob/shutter door side fields. Generic ALINK talk/check/pickup and carried-item actions already work through slot-local attention/status; use this API for remaining world actors with their own P1-only eligibility scans. Howling stones intentionally remain P1/global |
 | "Which player requested this accepted event/demo?" | `dusk::coop::event_owner` | Initial implementation derives from event `Pt1`; message input, ALINK door-demo staff consumption, and knob/shutter door demos use it so P2-started scripted interactions do not animate or move P1 |
+| "Should this explicitly classified singular event temporarily present one fullscreen camera and hide additional players?" | future `dusk::coop::event_presentation` | Planned as an opt-in presentation override above the camera sidecar; howling stones remain P1/global and are the first intended consumer |
 | "Which player is retained by this training sequence?" | future `training_owner` | Planned for Hidden Skills / `NPC_KN` |
 | "Which player owns camera/HUD/message/story/save state?" | camera/HUD/story-specific APIs | Partially implemented for split-screen camera only |
 | "Which viewport owns this render pass, post effect, lighting, fog, or culling decision?" | split-screen viewport/render ownership APIs | Initial audit in `coop-split-screen-api-audit.md`; `render_visibility` implemented for known draw-culling paths |
@@ -125,13 +128,19 @@ to the requesting player slot.
 - **Player button status:** Do/A/R/Z/3D action availability consumed by ALINK gameplay. P1 forwards
   to the vanilla meter globals; additional slots keep sidecar prompt state for gameplay and HUD
   presentation.
+- **Player item selection:** runtime X/Y assignment and mix-item indexes for each player slot. P1
+  forwards to vanilla globals; additional slots retain session-local choices while inventory and
+  consumable counts remain shared.
 - **HUD owner:** meter/prompt presentation ownership. It decides which slot's prompt state is being
   drawn for the active HUD viewport, not who is eligible to interact or who accepted an event. Keep
   prompt eligibility in `interaction_owner` and accepted event input in `event_owner`.
+- **UI owner:** transient presentation-slot ownership, retained singular UI ownership, and
+  viewport-local 2D projection/draw setup. Use it for item wheel ownership and viewport overlays,
+  not world-rendered fishing line/bobber geometry.
 - **Player camera status:** first-person and item-aiming states such as bow, slingshot, Hawkeye,
   hookshot, and iron ball subject mode. Route through slot camera ownership rather than global
   player-status bits.
-- **Interaction owner:** prompt-driven actions such as talk, check, pickup, howl, and object use.
+- **Interaction owner:** prompt-driven actions such as talk, check, pickup, and object use.
   Keep it separate from enemy targeting, item owner lookup, and accepted event ownership. Prompt
   code should return the selected slot/actor before the event manager accepts an order.
 - **Event owner:** accepted event/demo ownership after the event manager chooses an order. Derive
@@ -140,6 +149,10 @@ to the requesting player slot.
   accepted; that is `interaction_owner`.
 - **Training owner:** retained instructional/event combat sequences such as Hidden Skills. Once a
   trainer binds to a slot, required move checks and forced placement should follow that slot.
+- **Singular event presentation:** opt-in fullscreen presentation for authored sequences that
+  intentionally remain global. It may collapse split-screen rendering and hide additional players
+  without disabling co-op simulation. Howling stones are the first deferred consumer; do not treat
+  every dialogue or message-camera scene as singular automatically.
 - **Viewport/render ownership:** split-screen render passes, post effects, lighting, fog, HUD
   projection, draw-time visibility culling, and shadows should be owned by viewport/render policy.
   Use `render_visibility` for shared draw-culling decisions, `render_materials` for viewport-owned

@@ -15,13 +15,14 @@ families, and which systems are intentionally deferred.
 | --- | --- | --- |
 | Which player owns this camera, render window, or camera decision? | `camera_owner` / existing `dusk::coop::camera` | Partially implemented as the camera/window/player sidecar |
 | Which viewport is being rendered right now? | `viewport_owner` / render-window context | Partially implemented in the painter loop |
-| Which player-status bits should a camera or camera tag read? | `player_camera_status` | Not implemented; camera 1 currently borrows/clamps unsafe vanilla status reads |
-| Which render state must be installed per viewport? | `viewport_render_state` | Not implemented; lighting/global J3D state is currently contained, not truly per-viewport |
+| Which player-status bits should a camera or camera tag read? | `player_camera_status` | First pass implemented for slot-local camera/action bits, attention bits, item aim, and climb/hang hints |
+| Which render state must be installed per viewport? | `viewport_render_state` / `dusk::coop::render_materials` | Partially implemented through painter-level per-viewport environment/material refresh and line-material refresh |
 | Which fullscreen effect owns this viewport/framebuffer? | `viewport_effect_owner` | Partially implemented through `dusk::coop::render_effects` policy helpers and the central per-window painter replay |
 | Which viewport owns real-shadow submission culling and baked shadow matrices? | `render_shadows` | Partially implemented through `dusk::coop::render_shadows` for shared-list culling bypass and per-viewport real-shadow refresh |
 | Which viewport should camera-facing 3D line/ribbon geometry use? | shared 3D-line material refresh | Implemented for `mDoExt_3DlineMat0_c` and `mDoExt_3DlineMat1_c` during the per-window painter pass |
-| Which player owns HUD, reticles, prompts, and message UI? | `hud_owner` / `ui_owner` | First `hud_owner` pass implemented for action prompts; full inventory/menu/message UI remains deferred |
-| Which player activated an NPC/object/event trigger? | `interaction_owner` / `event_trigger_owner` | Not implemented |
+| Which player owns HUD, reticles, prompts, and message UI? | `hud_owner` / `ui_owner` | `hud_owner` presents slot-local prompts and assigned items; `ui_owner` owns transient overlay viewport context and the singular item wheel. Full inventory/menu/message UI remains deferred |
+| Should an explicitly classified singular event temporarily present one fullscreen camera and hide additional players? | future `event_presentation` | Planned opt-in override above the camera sidecar; howling stones are the first intended consumer |
+| Which player activated an NPC/object/event trigger? | `interaction_owner` / `event_owner` | Initial knob/shutter prompt-side and accepted door-demo proofs implemented; generic ALINK talk/check/pickup actions already flow through slot-local attention/status, while remaining world-actor singleton prompts are audited case by case |
 | Which camera or player should audio listener state follow? | `audio_listener_owner` | Not implemented; audio listener stays camera 0/P1-owned |
 | Should this actor, world chunk, foliage/detail, or background part be draw-culled for local split-screen? | `render_visibility` | Initial PC split-screen bypass implemented for known P1-camera draw-culling paths |
 
@@ -169,47 +170,71 @@ Audit decision:
   conditions ask about the tag's candidate player, not always P1.
 - Do not treat all camera events/cutscenes as solved by this path.
 
-### Global J3D view and lighting containment
+### Global J3D view and lighting refresh
 
 Current behavior:
 
+- The painter installs the active view and refreshes registered kankyo/J3D model materials for each
+  viewport before draw-list replay.
+- Camera-facing 3D line materials are refreshed per viewport alongside those registered models.
 - After camera 1 draw, camera 0's global J3D view is restored so later global lighting/debug code
   does not accidentally inherit P2's camera.
-- This moved the visible lighting influence back from P2 to P1, proving the symptom is caused by
-  global render state ownership.
 
 Audit decision:
 
-- Keep this containment only until `viewport_render_state` exists.
-- The durable fix is to install environment light/fog/global render state per rendered viewport,
-  draw that viewport, then restore a known global baseline.
-- This should be the first serious split-screen rendering correctness pass after draw culling.
+- Keep per-viewport refresh centralized in `render_materials` and the painter loop.
+- Add future material families to that registry rather than scattering actor-local refresh calls.
+- Continue restoring a known global baseline after the split viewport loop.
 
 ### HUD/2D pass
 
 Current behavior:
 
-- Full HUD, menu, map, inventory, and message presentation remain P1/global.
+- Health, rupees, keys, map, pause, save, and message presentation remain P1/global.
 - Action prompt presentation has a first `hud_owner` pass: `dMeter2Draw_c` can replay the button
   and assigned-item panes for secondary split-screen viewports from slot-local
   `player_button_status`, without replaying the whole 2D draw list.
 - The center emphasis prompt is separate from the right-side meter button panes. P2 uses a secondary
   `dMeterButton_c` instance so its state can be updated and drawn in P2's viewport without
   clobbering the P1 prompt packet.
-- Hawkeye, boomerang, and fishing rod presentation fixes already touch viewport-owned item UI and
-  line/effect rendering. Future `ui_owner` work must pull those touched systems into the family
-  instead of leaving them as standalone item patches.
+- `player_item_selection` stores P2's runtime X/Y and mix-item indexes while inventory and
+  consumable pools remain shared. `hud_owner` snapshots those selected items and counts for P2's
+  assigned-item cluster, then restores P1 presentation state.
+- `ui_owner` is the shared viewport-local presentation layer: `hud_owner` delegates its slot stack,
+  the singular fullscreen item wheel retains its opening player slot, fishing forced-wheel entry
+  supplies the rod owner, and Hawkeye scope, ALINK live reticles, and boomerang lock markers use its
+  viewport begin/end and local projection helpers.
+- Fishing line and bobber geometry remain shared world-render ownership. Do not move their
+  camera-facing line-material handling into HUD/UI APIs.
 
 Audit decision:
 
-- Keep full HUD surfaces P1-owned until item/health/weapons ownership is ready.
+- Keep untargeted HUD surfaces P1-owned until their gameplay state has a deliberate ownership model.
 - Prompt presentation belongs to `hud_owner`; prompt eligibility belongs to `interaction_owner`;
   accepted-event input belongs to `event_owner`.
-- Do not broaden prompt presentation by replaying all 2D lists per viewport without rechecking
-  Hawkeye scope/arrow hiding, boomerang reticles/letterbox/lock markers, and fishing rod line
-  rendering.
+- Do not broaden prompt presentation by replaying all 2D lists per viewport. Route transient
+  overlays through `ui_owner`, gameplay camera status through `player_camera_status`, and
+  camera-facing fishing geometry through world-render ownership.
 - Future HUD work should duplicate or partition HUD surfaces by player slot. It should not be
   hidden inside the camera module.
+
+### Singular event presentation
+
+Design note:
+
+- `docs/coop-singular-event-presentation-plan.md`
+
+Audit decision:
+
+- Some authored sequences should temporarily present one fullscreen camera and optionally hide
+  additional local players while their simulation continues.
+- Implement this as an opt-in `event_presentation` override above the camera/window sidecar. Do not
+  call `setSplitScreenEnabled(false)` and do not mutate persistent actor `NODRAW` state as the
+  default hiding mechanism.
+- Keep howling stones P1/global in V1. They are the first intended consumer because their waveform
+  minigame is singular world/message state.
+- Evaluate message-camera scenes, Hidden Skill training, minigames, and cutscenes case by case.
+  Ordinary dialogue must not collapse split-screen automatically.
 
 ## Render Visibility And Culling Decision
 

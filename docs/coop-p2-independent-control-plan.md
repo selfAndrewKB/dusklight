@@ -27,8 +27,9 @@ This is not a global replacement of `dComIfGp_getPlayer(0)`, `daPy_getPlayerActo
 - Hidden Skill code (`NPC_KN`) is P1-heavy: it reads `daPy_getPlayerActorClass()` for cut type,
   side-step, sword state, position, training flags, and forced player placement. The training owner
   should be retained once a lesson starts.
-- Howling-stone/tag entry points still check P1/wolf state directly through
-  `daAlink_getAlinkActorClass()`, `daPy_getPlayerActorClass()`, and `dComIfGp_getPlayer(0)`.
+- Howling stones and howl tags intentionally remain P1/global in V1. Their authored waveform
+  minigame is a candidate for the deferred singular fullscreen `event_presentation` policy, not
+  the next `interaction_owner` conversion.
 
 ## Current Implementation
 
@@ -116,20 +117,40 @@ First pass implemented:
   draw-list. The secondary prompt draws into P2's viewport through `hud_owner` state instead of
   overwriting P1's prompt object.
 
-Known boundary: P2 item assignment and a fully independent meter layout are intentionally deferred.
-This pass is scoped to action prompt visibility plus the existing assigned-item HUD presentation,
-including P2's door A/Open prompt.
+The next item-presentation pass keeps health, rupees, keys, map, pause menus, and save UI global,
+while P2's assigned-item cluster reads slot-local X/Y assignments and shared consumable counts.
 
-Future `ui_owner` / viewport-2D work must revisit the systems we already touched for item
-presentation so they do not remain stranded as bespoke patches:
+### `player_item_selection`
 
-- Hawkeye scope overlay, reticle, and scoped arrow visibility are viewport-owned 2D presentation,
-  not meter prompt state.
-- Boomerang aim reticles, lock markers, thrown-camera focus/letterbox, and wind/effect presentation
-  are a mix of `player_attention`, `player_camera_status`, item actor ownership, and viewport-2D
-  ownership.
-- Fishing rod line/bobber presentation is in-world line/render ownership, while MG_ROD cast/camera
-  state remains `player_camera_status` / item-owner work.
+Owns durable runtime X/Y item assignment for each player slot while inventory and consumable pools
+remain shared campaign state.
+
+First pass implemented:
+
+- P1 forwards to vanilla selected-item and mix-item globals.
+- Additional slots initialize from P1's current assignment when they register, then store selection
+  and mix indexes in a runtime-only sidecar.
+- ALINK item gameplay reads, shared consumable mutations, and HUD item snapshots route through the
+  sidecar so P2 can equip and consume bow, bomb, bottle, bait, slingshot, and related combinations
+  without overwriting P1's X/Y choices.
+- Removed or consumed inventory slots are validated on read so a stale P2 assignment cannot
+  resurrect an item.
+
+### `ui_owner`
+
+Owns transient UI presentation context: the currently presented slot, the retained owner of a
+singular UI surface, and viewport-local projection/draw setup.
+
+First pass implemented:
+
+- `hud_owner` delegates its prompt/item presentation slot stack to `ui_owner`.
+- The item wheel remains one fullscreen vanilla surface, but retains the first active slot whose
+  D-pad opened it. Wheel buttons, sticks, wolf checks, assignment, and mix-item logic follow that
+  retained slot until close.
+- Fishing rod requests use an explicit owner-aware forced-wheel entry point.
+- Hawkeye scope, ALINK live reticles, and boomerang lock markers use shared viewport begin/end and
+  world-point projection helpers. Delayed 2D packets restore GX viewport/scissor state after draw.
+- Fishing line and bobber geometry remain world-render ownership, not HUD presentation.
 
 ### `event_owner`
 
@@ -165,18 +186,18 @@ First pass implemented:
 - Fishing rod camera/status work has a first owner pass: camera actions, cast line momentum, lure
   standby/cast input, and rod-angle reads route through the MG_ROD owner slot.
 
-Full HUD/meter display state remains P1-owned outside the `hud_owner` prompt pass; the camera-status
-sidecar only covers gameplay camera state that the split-screen cameras consume. Hawkeye scope
-overlay and boomerang lock reticles are HUD/2D-packet ownership work, separate from the gameplay
-camera status conversion.
+Full HUD/meter display state remains P1-owned outside the narrow `hud_owner` assigned-item/prompt
+pass; the camera-status sidecar only covers gameplay camera state that the split-screen cameras
+consume. Viewport-local Hawkeye and boomerang overlays now route through `ui_owner`, separately
+from gameplay camera status.
 
 ### `interaction_owner`
 
-Owns "which player is using this prompt or object?" for talk, inspect, pick up, climb/enter, howl,
-and similar action-button interactions.
+Owns "which player is using this prompt or object?" for talk, inspect, pick up, climb/enter, and
+similar action-button interactions.
 
 This is separate from enemy targeting, item ownership, and accepted event ownership. It should be
-used when the world prompt itself is the owner, especially for NPC/object interactions and howl tags.
+used when the world prompt itself is the owner, especially for NPC/object interactions.
 
 First pass:
 
@@ -185,10 +206,15 @@ First pass:
 - Knob and shutter door prompt selection use it, then seed the door's existing shared side field.
 - Shutter prompt setup uses the selected prompt actor for wolf/Midna and lock-message side
   decisions, while accepted door demos continue through `event_owner`.
+- Generic ALINK talk, check, pickup, carried-item place/throw, and dialogue progression already work
+  for P2 through the existing slot-local attention list, `player_button_status`, `event_owner`, and
+  `hud_owner` layers. Do not migrate those paths speculatively when no world-actor singleton bug has
+  been demonstrated.
 
 This keeps the prompt question ("who can use this?") separate from the event question ("who got the
-accepted demo?"). Broader talk/check/pickup prompts should move to the same API instead of adding
-new actor-local active-player scans.
+accepted demo?"). Use `interaction_owner` for world actors that still perform their own P1-only
+eligibility scans or store shared prompt-side state; do not wrap already-correct ALINK paths merely
+for naming symmetry.
 
 ### `training_owner`
 
@@ -211,19 +237,22 @@ trained should not be forced to P1.
    - ALINK Do/A/R/Z/3D prompt writes are slot-owned.
    - ALINK Do/R gameplay reads now use the acting player's prompt owner.
    - Split-screen prompt HUD replay reads slot-local prompt state through `hud_owner`.
-   - Keep force-status, item inventory layout, menus, map, and full meter duplication P1-owned until
-     a later HUD milestone exists.
+   - Slot-local X/Y assignments, item HUD snapshots, and the singular owner-aware wheel now route
+     through `player_item_selection` and `ui_owner`.
+   - Keep force-status, untargeted HUD surfaces, map, pause, and full meter duplication P1-owned
+     until their gameplay state has a deliberate ownership model.
 
-3. Convert first-person/item aiming status.
-   - Bow/slingshot: replace the current secondary status skip with slot-owned camera/status.
-   - Hawkeye: make scope mode a slot-local flag instead of `dComIfGp_checkPlayerStatus0(0, 0x200000)`.
-   - Iron ball and hookshot subject modes: route subject camera/status to the owning slot/camera.
+3. Convert first-person/item aiming status. First pass complete.
+   - Bow/slingshot, Hawkeye, iron ball, and hookshot subject modes route camera/status to the owning
+     slot and camera.
+   - Hawkeye scope, ALINK live reticles, and boomerang lock markers now use `ui_owner` viewport
+     helpers; fishing forced-wheel entry retains the rod owner.
 
 4. Convert basic interaction prompts through `interaction_owner`.
    - Door prompt side selection is the first migrated proof.
-   - Begin with howl tags/stones because they are small and visibly P1-owned.
-   - Then audit talk/check/pickup prompt reads in `setAtnList()`, `orderTalk()`, and normal action
-     entry.
+   - Leave howling stones P1/global; they are a deferred singular-event presentation case.
+   - Keep the validated generic ALINK talk/check/pickup path intact.
+   - Audit remaining world actors case by case when their own P1-only eligibility reads are observed.
 
 5. Convert Hidden Skills through `training_owner`.
    - Bind `NPC_KN` to the player that initiated the lesson.
@@ -236,10 +265,10 @@ trained should not be forced to P1.
 | --- | --- | --- |
 | Attention core | `src/d/d_attention.cpp`, `include/d/d_attention.h` | Scanner reset and broader action prompt/event ownership still need a dedicated pass; knob/shutter door prompt eligibility now checks active players. |
 | ALINK target/guard/status | `src/d/actor/d_a_alink.cpp`, `src/d/actor/d_a_alink_guard.inc` | `checkAttentionLock()`, `setAtnList()`, `checkGuardActionChange()`, `checkNormalAction()`, `checkMoveDoAction()`. |
-| First-person and item aim | `src/d/actor/d_a_alink_bow.inc`, `src/d/actor/d_a_alink_ironball.inc`, hookshot code in ALINK, `src/d/actor/d_a_arrow.cpp` | Bow/slingshot ownership exists, camera/status ownership does not. |
-| Interaction prompts | `src/d/actor/d_a_alink.cpp`, `src/f_op/f_op_actor_mng.cpp`, NPC/object actors with action prompts | Do/R/Z gameplay status is slot-local; knob/shutter door prompt side selection uses `interaction_owner`; event-owner door demos now move the requester; HUD rendering and broader prompt owners still need a dedicated pass. |
+| First-person and item aim | `src/d/actor/d_a_alink_bow.inc`, `src/d/actor/d_a_alink_ironball.inc`, hookshot code in ALINK, `src/d/actor/d_a_arrow.cpp` | Bow/slingshot, Hawkeye, iron ball, hookshot, item cameras, and viewport-local item overlays have a first owner-aware pass. |
+| Interaction prompts | `src/d/actor/d_a_alink.cpp`, `src/f_op/f_op_actor_mng.cpp`, NPC/object actors with action prompts | Generic ALINK talk/check/pickup and carried-item actions are slot-local; knob/shutter door prompt side selection uses `interaction_owner`; event-owner door demos move the requester; HUD prompt rendering is owner-aware. Remaining world-actor singleton prompts should be audited case by case. |
 | Climb/hang camera hints | `src/d/actor/d_a_alink_hang.inc` | Hang, ladder, climb, and roof-hang camera status writes route through `player_camera_status` so P2 climb states do not write into P1's camera row. |
-| Howling/Hidden Skills | `src/d/actor/d_a_tag_howl.cpp`, `src/d/actor/d_a_obj_smw_stone.cpp`, `src/d/actor/d_a_npc_kn.cpp` | Howl entry is P1/wolf-owned; Hidden Skill trainer is P1/training-owned. |
+| Howling/Hidden Skills | `src/d/actor/d_a_tag_howl.cpp`, `src/d/actor/d_a_obj_smw_stone.cpp`, `src/d/actor/d_a_npc_kn.cpp` | Howling intentionally remains P1/global pending singular fullscreen `event_presentation`; Hidden Skill trainer is P1/training-owned. |
 
 ## Test Plan
 

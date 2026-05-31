@@ -5,6 +5,10 @@
 #include "f_op/f_op_actor.h"
 #include "d/d_com_inf_game.h"
 
+#if TARGET_PC
+#include "dusk/coop/player_slots.h"
+#endif
+
 struct ResTIMG;
 
 class daPy_frameCtrl_c : public J3DFrameCtrl {
@@ -38,7 +42,8 @@ public:
 
     void setSight();
 #if TARGET_PC
-    void setSightForView(view_class* i_view, view_port_class* i_viewport);
+    // Co-op: delayed live reticle drawing follows the ALINK slot that submitted it.
+    void setSightForPlayer(dusk::coop::PlayerSlot);
 #endif
     void setSightImage(ResTIMG* i_img);
 
