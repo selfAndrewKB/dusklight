@@ -22,7 +22,10 @@
 #include "d/d_msg_object.h"
 #include "d/d_pane_class.h"
 #include "dusk/coop/camera.h"
+#include "dusk/coop/hud_diagnostics.h"
 #include "dusk/coop/hud_owner.h"
+#include "dusk/coop/player_item_selection.h"
+#include "dusk/coop/ui_owner.h"
 #include "dusk/frame_interpolation.h"
 #include <cstring>
 
@@ -775,9 +778,8 @@ void dMeter2Draw_c::drawCoopSecondaryButtonHud(J2DGrafContext* i_restoreGrafCtx)
         return;
     }
 
-    dDlst_window_c* window = dComIfGp_getWindow(1);
-    view_port_class* viewport = window->getViewPort();
-    if (viewport == NULL) {
+    J2DOrthoGraph p2_graph;
+    if (!dusk::coop::ui_owner::setViewportGraph(dusk::coop::PlayerSlot::Secondary, &p2_graph)) {
         return;
     }
 
@@ -798,6 +800,44 @@ void dMeter2Draw_c::drawCoopSecondaryButtonHud(J2DGrafContext* i_restoreGrafCtx)
     f32 old_pikari_frame = field_0x608;
     u8 old_pikari_type = field_0x759;
 
+    auto recordHudReplay = [this](dusk::coop::hud_diagnostics::ReplayPhase phase,
+                                  dusk::coop::PlayerSlot slot, u8 doStatus) {
+        // Co-op: capture both resolver intent and the shared pane state around P2's HUD replay.
+        dusk::coop::hud_diagnostics::ReplaySnapshot snapshot;
+        snapshot.phase = phase;
+        snapshot.presentationSlot = slot;
+        snapshot.doStatus = doStatus;
+        for (int i = 0; i < 2; i++) {
+            // Co-op: HUD diagnostics must inspect P2 item state without normalizing the live sidecar.
+            const dusk::coop::player_item_selection::ItemSelectionSnapshot item =
+                dusk::coop::player_item_selection::inspectItem(slot, i);
+            snapshot.resolved[i] = {
+                item.selectIndex,
+                item.mixIndex,
+                item.item,
+                item.count,
+                item.maxCount,
+            };
+            snapshot.panes[i] = {
+                mpItemXY[i]->isVisible(),
+                mpItemXYPane[i]->isVisible(),
+                mpItemNumTex[i][2]->isVisible(),
+                mpItemXY[i]->getPanePtr()->getAlpha(),
+                mpItemXY[i]->getAlphaRate(),
+                mpItemXY[i]->getTranslateX(),
+                mpItemXY[i]->getTranslateY(),
+                mpItemXY[i]->getScaleX(),
+                mpItemXY[i]->getScaleY(),
+            };
+        }
+        dusk::coop::hud_diagnostics::recordSnapshot(snapshot);
+    };
+
+    recordHudReplay(dusk::coop::hud_diagnostics::ReplayPhase::BeforeSecondaryApply,
+                    dusk::coop::hud_owner::currentSlot(),
+                    dusk::coop::hud_owner::buttonStatus(
+                        dusk::coop::player_button_status::ButtonStatusKind::Do));
+
     dusk::coop::hud_owner::pushSlot(dusk::coop::PlayerSlot::Secondary);
 
     // Co-op: the meter J2D tree is shared, so apply P2's item panes only for P2's replay.
@@ -817,11 +857,10 @@ void dMeter2Draw_c::drawCoopSecondaryButtonHud(J2DGrafContext* i_restoreGrafCtx)
     mpLifeParent->setAlphaRate(0.0f);
     mpLightDropParent->setAlphaRate(0.0f);
     mpRupeeKeyParent->setAlphaRate(0.0f);
+    recordHudReplay(dusk::coop::hud_diagnostics::ReplayPhase::SecondaryApplied,
+                    dusk::coop::hud_owner::currentSlot(), do_status);
 
-    J2DOrthoGraph p2_graph(viewport->x_orig, viewport->y_orig, viewport->width, viewport->height,
-                           100000.0f, -100000.0f);
-    p2_graph.setOrtho(0.0f, 0.0f, FB_WIDTH, FB_HEIGHT, 100000.0f, -100000.0f);
-    p2_graph.setPort();
+    // Co-op: the P2 graph preserves vanilla widescreen coordinates inside P2's viewport.
     mpScreen->draw(0.0f, 0.0f, &p2_graph);
 
     for (int i = 0; i < 2; i++) {
@@ -844,12 +883,18 @@ void dMeter2Draw_c::drawCoopSecondaryButtonHud(J2DGrafContext* i_restoreGrafCtx)
     dusk::coop::hud_owner::popSlot();
 
     // Co-op: restore P1's item panes before the shared HUD object returns to vanilla updates.
+    dusk::coop::hud_owner::pushSlot(dusk::coop::PlayerSlot::Primary);
     for (int i = 0; i < 2; i++) {
         dusk::coop::hud_owner::ItemPresentation p1_item =
             dusk::coop::hud_owner::itemPresentation(i);
         changeTextureItemXY(i, p1_item.item);
         setItemNum(i, p1_item.count, p1_item.maxCount);
     }
+    dusk::coop::hud_owner::popSlot();
+    recordHudReplay(dusk::coop::hud_diagnostics::ReplayPhase::PrimaryRestored,
+                    dusk::coop::hud_owner::currentSlot(),
+                    dusk::coop::hud_owner::buttonStatus(
+                        dusk::coop::player_button_status::ButtonStatusKind::Do));
 
     restorePaneState(mpButtonParent, button_parent);
     restorePaneState(mpButtonA, button_a);

@@ -6,6 +6,7 @@
 
 class view_class;
 class view_port_class;
+class J2DOrthoGraph;
 
 namespace dusk::coop::ui_owner {
 
@@ -26,6 +27,7 @@ PlayerSlot singularSlot();
 
 bool beginViewport(PlayerSlot slot, ViewportState* state);
 void endViewport(const ViewportState& state);
+bool setViewportGraph(PlayerSlot slot, J2DOrthoGraph* graph);
 bool projectWorldPointLocal(PlayerSlot slot, const cXyz& point, Vec* out);
 
 }  // namespace dusk::coop::ui_owner

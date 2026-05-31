@@ -251,6 +251,7 @@ Reserve these top-level namespaces:
 - `debug.*`: original debug viewer text/shape annotations.
 - `coop.*`: co-op registry, profile flags, slot/peer mapping.
 - `alink.*`: ALINK-specific action, animation, model-data ownership, and probe state.
+- `hud.*`: meter presentation ownership, resolved item state, and shared HUD replay state.
 - `osreport.*`: selected structured OSReport/assertion events if the recorder becomes a sink.
 
 This prevents flat-name drift such as co-op probe flags and attention state competing in the same namespace.
@@ -323,6 +324,7 @@ The smallest useful implementation starts with:
 - `bokoblin.attack`: Bokoblin-local attack-state probe for the intermittent committed-attack loop. It records attack state, animation frame/play speed, target slot, attack-sphere contact facts, guarded-hit outcome, pre-active-window hit timing, and `loop_suspect` events without changing behavior.
 - `gibdo.state`: Gibdo-local wake/chase/attack probe for the P2-first inert-state investigation. It records action/move mode, current BCK, animation progress, selected slot, close-range gates, line-of-sight result, delay counter, scream owner state, and `loop_suspect` events without changing behavior.
 - `young_gohma.state`: Young Gohma-local gate probe for the post-attack idle/drop investigation. It records action/subaction, animation frame/play speed, selected slot, distance, angle diff, range/cone/LOS gate results, final `pl_check` result, attack-collider state, and `loop_suspect` events without changing behavior.
+- `hud.presentation`: P1/P2 item resolver state plus the shared meter tree before P2 replay, after P2 apply, and after the restore pass. Pane translation and scale remain rich `latest.json` context; JSONL emission is driven only by ownership, item/count, visibility, and digit-state changes.
 - `diagnostics.stats`: recorder health in `latest.json`, including per-provider event counts, byte counts, throttles, payload oversize counts, current budget-window counts, and configured provider budgets.
 
 Leave process-tree, heap, OSReport sink, and debug-viewer providers for follow-up unless the first implementation needs them to answer the current ALINK question.

@@ -7,6 +7,14 @@ class daAlink_c;
 
 namespace dusk::coop::player_item_selection {
 
+struct ItemSelectionSnapshot {
+    u8 selectIndex;
+    u8 mixIndex;
+    u8 item;
+    s16 count;
+    int maxCount;
+};
+
 void initializeSlot(PlayerSlot slot);
 void resetSlot(PlayerSlot slot);
 
@@ -20,6 +28,7 @@ s16 getItemNum(PlayerSlot slot, int button);
 int getItemMaxNum(PlayerSlot slot, int button);
 void setItemNum(PlayerSlot slot, int button, s16 value);
 void addItemNum(PlayerSlot slot, int button, s16 delta);
+ItemSelectionSnapshot inspectItem(PlayerSlot slot, int button);
 
 u8 getItemForPlayer(const daAlink_c* player, int button);
 s16 getItemNumForPlayer(const daAlink_c* player, int button);

@@ -12,6 +12,7 @@
 #include "dusk/coop/defender_owner.h"
 #include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/gibdo_state_probe.h"
+#include "dusk/coop/hud_diagnostics.h"
 #include "dusk/coop/input.h"
 #include "dusk/coop/player_attention.h"
 #include "dusk/coop/player_query.h"
@@ -72,7 +73,7 @@ struct ProviderStats {
 };
 
 struct State {
-    bool enabled = false;
+    bool enabled = true;
     bool initialized = false;
     u32 lastFrame = 0;
     std::string sessionId;
@@ -855,6 +856,39 @@ json alinkSecondaryEventKey(const json& data) {
     return eventKey;
 }
 
+json hudPresentationEventKey(const json& data) {
+    json snapshots = json::array();
+    for (const json& snapshot : data.value("snapshots", json::array())) {
+        json items = json::array();
+        for (const json& item : snapshot.value("items", json::array())) {
+            const json pane = item.value("pane", json::object());
+            items.push_back({
+                {"button", item.value("button", "")},
+                {"select_index", item.value("select_index", 0xff)},
+                {"mix_index", item.value("mix_index", 0xff)},
+                {"item", item.value("item", 0xff)},
+                {"count", item.value("count", 0)},
+                {"max_count", item.value("max_count", 0)},
+                {"visible", pane.value("visible", false)},
+                {"texture_visible", pane.value("texture_visible", false)},
+                {"third_digit_visible", pane.value("third_digit_visible", false)},
+            });
+        }
+        snapshots.push_back({
+            {"phase", snapshot.value("phase", "")},
+            {"presentation_slot", snapshot.value("presentation_slot", -1)},
+            {"do_status", snapshot.value("do_status", 0)},
+            {"items", items},
+        });
+    }
+
+    return {
+        {"schema_version", data.value("schema_version", 1)},
+        {"slot_items", data.value("slot_items", json::array())},
+        {"snapshots", snapshots},
+    };
+}
+
 const char* alinkProcName(u16 proc) {
     switch (proc) {
     case daAlink_c::PROC_SERVICE_WAIT:
@@ -989,6 +1023,9 @@ json eventKeyForProvider(const char* provider, const json& data) {
     }
     if (name == "alink.secondary") {
         return alinkSecondaryEventKey(data);
+    }
+    if (name == "hud.presentation") {
+        return hudPresentationEventKey(data);
     }
     return data;
 }
@@ -2033,6 +2070,77 @@ json collectAlinkSecondary() {
     return data;
 }
 
+json collectHudPresentation() {
+    const coop::hud_diagnostics::HudPresentationDebugState& state =
+        coop::hud_diagnostics::getState();
+    json slotItems = json::array();
+    for (int slot = 0; slot < 2; slot++) {
+        json items = json::array();
+        for (int item = 0; item < 2; item++) {
+            const coop::hud_diagnostics::ItemResolverDebug& resolved = state.slotItems[slot][item];
+            items.push_back({
+                {"button", item == 0 ? "x" : "y"},
+                {"select_index", static_cast<unsigned int>(resolved.selectIndex)},
+                {"mix_index", static_cast<unsigned int>(resolved.mixIndex)},
+                {"item", static_cast<unsigned int>(resolved.item)},
+                {"count", static_cast<int>(resolved.count)},
+                {"max_count", resolved.maxCount},
+            });
+        }
+        slotItems.push_back({
+            {"slot", slot},
+            {"items", items},
+        });
+    }
+
+    json snapshots = json::array();
+    for (int i = 0; i < static_cast<int>(coop::hud_diagnostics::ReplayPhase::Count); i++) {
+        const coop::hud_diagnostics::ReplaySnapshot& snapshot = state.snapshots[i];
+        if (!snapshot.valid) {
+            continue;
+        }
+
+        json items = json::array();
+        for (int item = 0; item < 2; item++) {
+            const coop::hud_diagnostics::ItemResolverDebug& resolved = snapshot.resolved[item];
+            const coop::hud_diagnostics::ItemPaneDebug& pane = snapshot.panes[item];
+            items.push_back({
+                {"button", item == 0 ? "x" : "y"},
+                {"select_index", static_cast<unsigned int>(resolved.selectIndex)},
+                {"mix_index", static_cast<unsigned int>(resolved.mixIndex)},
+                {"item", static_cast<unsigned int>(resolved.item)},
+                {"count", static_cast<int>(resolved.count)},
+                {"max_count", resolved.maxCount},
+                {"pane", {
+                    {"visible", pane.visible},
+                    {"texture_visible", pane.textureVisible},
+                    {"alpha", static_cast<unsigned int>(pane.alpha)},
+                    {"alpha_rate", pane.alphaRate},
+                    {"third_digit_visible", pane.thirdDigitVisible},
+                    {"translate", {pane.translateX, pane.translateY}},
+                    {"scale", {pane.scaleX, pane.scaleY}},
+                }},
+            });
+        }
+
+        snapshots.push_back({
+            {"phase", coop::hud_diagnostics::replayPhaseName(snapshot.phase)},
+            {"presentation_slot", snapshot.presentationSlot != coop::PlayerSlot::Invalid
+                                      ? static_cast<int>(snapshot.presentationSlot)
+                                      : -1},
+            {"do_status", static_cast<unsigned int>(snapshot.doStatus)},
+            {"items", items},
+        });
+    }
+
+    return {
+        {"schema_version", 1},
+        {"revision", state.revision},
+        {"slot_items", slotItems},
+        {"snapshots", snapshots},
+    };
+}
+
 Provider s_providers[] = {
     {"scene.current", 1, "cheap", 30, true, 20, 4096, collectSceneCurrent},
     {"render.stats", 1, "cheap", 30, true, 20, 4096, collectRenderStats},
@@ -2053,6 +2161,7 @@ Provider s_providers[] = {
     {"young_gohma.state", 1, "cheap", 1, true, 240, 8192, collectYoungGohmaStateProbe},
     {"coop.probes", 1, "cheap", 30, true, 20, 4096, collectCoopProbes},
     {"alink.secondary", 4, "cheap", 1, true, 120, 8192, collectAlinkSecondary},
+    {"hud.presentation", 1, "cheap", 1, true, 120, 8192, collectHudPresentation},
 };
 
 const Provider* findProvider(const char* name) {

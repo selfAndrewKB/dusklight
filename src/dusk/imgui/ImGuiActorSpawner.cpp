@@ -7,6 +7,7 @@
 #include "dusk/coop/alink_probes.h"
 #include "dusk/coop/camera.h"
 #include "dusk/coop/debug_overlay.h"
+#include "dusk/coop/hud_diagnostics.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/diagnostics.h"
 #include "dusk/hotkeys.h"
@@ -189,6 +190,10 @@ void ImGuiMenuTools::ShowActorSpawner() {
     bool enemyActorLabelOverlayEnabled = dusk::coop::debug_overlay::isEnemyActorLabelOverlayEnabled();
     if (ImGui::Checkbox("Show enemy actor labels", &enemyActorLabelOverlayEnabled)) {
         dusk::coop::debug_overlay::setEnemyActorLabelOverlayEnabled(enemyActorLabelOverlayEnabled);
+    }
+    bool hudDiagnosticsOverlayEnabled = dusk::coop::hud_diagnostics::isOverlayEnabled();
+    if (ImGui::Checkbox("Show HUD replay diagnostics", &hudDiagnosticsOverlayEnabled)) {
+        dusk::coop::hud_diagnostics::setOverlayEnabled(hudDiagnosticsOverlayEnabled);
     }
     ImGui::TextDisabled("Hotkey: %s toggles enemy target overlay",
                         dusk::hotkeys::COOP_TOGGLE_ENEMY_TARGET_OVERLAY);

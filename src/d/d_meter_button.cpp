@@ -22,6 +22,7 @@
 #if TARGET_PC
 #include "dusk/coop/camera.h"
 #include "dusk/coop/player_button_status.h"
+#include "dusk/coop/ui_owner.h"
 #include "dusk/string.hpp"
 #endif
 
@@ -302,12 +303,10 @@ void dMeterButton_c::draw() {
     const bool secondary_prompt =
         dusk::coop::camera::isSplitScreenEnabled() && mCoopHudSlot == dusk::coop::PlayerSlot::Secondary;
     if (secondary_prompt) {
-        // Co-op: draw P2's center prompt packet inside P2's split-screen viewport.
-        view_port_class* viewport = dComIfGp_getWindow(1)->getViewPort();
-        coop_graf.place(viewport->x_orig, viewport->y_orig, viewport->width, viewport->height);
-        coop_graf.setOrtho(0.0f, 0.0f, FB_WIDTH, FB_HEIGHT, 100000.0f, -100000.0f);
-        coop_graf.setPort();
-        graf_ctx = &coop_graf;
+        // Co-op: preserve vanilla widescreen prompt coordinates while presenting them in P2's viewport.
+        if (dusk::coop::ui_owner::setViewportGraph(dusk::coop::PlayerSlot::Secondary, &coop_graf)) {
+            graf_ctx = &coop_graf;
+        }
     }
 #endif
     graf_ctx->setup2D();

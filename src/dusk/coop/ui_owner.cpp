@@ -1,8 +1,11 @@
 #include "dusk/coop/ui_owner.h"
 
+#include "JSystem/J2DGraph/J2DOrthoGraph.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_camera.h"
 #include "d/d_drawlist.h"
+#include "f_op/f_op_camera_mng.h"
+#include "m_Do/m_Do_graphic.h"
 #include "m_Do/m_Do_lib.h"
 
 namespace dusk::coop::ui_owner {
@@ -98,6 +101,24 @@ void endViewport(const ViewportState& state) {
     GXSetViewport(state.viewport[0], state.viewport[1], state.viewport[2], state.viewport[3],
                   state.viewport[4], state.viewport[5]);
     GXSetScissor(state.scissor[0], state.scissor[1], state.scissor[2], state.scissor[3]);
+}
+
+bool setViewportGraph(PlayerSlot slot, J2DOrthoGraph* graph) {
+    if (graph == NULL) {
+        return false;
+    }
+
+    view_port_class* viewport = viewportForSlot(slot);
+    if (viewport == NULL) {
+        return false;
+    }
+
+    graph->place(viewport->x_orig, viewport->y_orig, viewport->width, viewport->height);
+    graph->setOrtho(mDoGph_gInf_c::getMinXF(), mDoGph_gInf_c::getMinYF(),
+                    mDoGph_gInf_c::getWidthF(), mDoGph_gInf_c::getHeightF(), 100000.0f,
+                    -100000.0f);
+    graph->setPort();
+    return true;
 }
 
 bool projectWorldPointLocal(PlayerSlot slot, const cXyz& point, Vec* out) {

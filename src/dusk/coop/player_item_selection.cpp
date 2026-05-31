@@ -58,9 +58,41 @@ SlotSelection& getSecondarySelection(PlayerSlot slot) {
     return selection;
 }
 
-u8 getBombBagSlot(PlayerSlot slot, int button) {
-    u8 itemSlot = getSelectItemIndex(slot, button);
-    u8 mixSlot = getMixItemIndex(slot, button);
+u8 getSelectItemIndexForResolve(PlayerSlot slot, int button, bool initialize) {
+    if (!isSecondarySlot(slot)) {
+        return dComIfGs_getSelectItemIndex(button);
+    }
+    if (!isValidButton(button)) {
+        return 0xff;
+    }
+
+    SlotSelection& selection = s_selection[slotIndex(slot)];
+    if (!selection.initialized) {
+        return initialize ? getSecondarySelection(slot).selectItemIndex[button]
+                          : dComIfGs_getSelectItemIndex(button);
+    }
+    return selection.selectItemIndex[button];
+}
+
+u8 getMixItemIndexForResolve(PlayerSlot slot, int button, bool initialize) {
+    if (!isSecondarySlot(slot)) {
+        return dComIfGs_getMixItemIndex(button);
+    }
+    if (!isValidButton(button)) {
+        return 0xff;
+    }
+
+    SlotSelection& selection = s_selection[slotIndex(slot)];
+    if (!selection.initialized) {
+        return initialize ? getSecondarySelection(slot).mixItemIndex[button]
+                          : dComIfGs_getMixItemIndex(button);
+    }
+    return selection.mixItemIndex[button];
+}
+
+u8 getBombBagSlotForResolve(PlayerSlot slot, int button, bool initialize) {
+    u8 itemSlot = getSelectItemIndexForResolve(slot, button, initialize);
+    u8 mixSlot = getMixItemIndexForResolve(slot, button, initialize);
 
     if (itemSlot >= SLOT_15 && itemSlot < SLOT_18) {
         return itemSlot - SLOT_15;
@@ -69,6 +101,112 @@ u8 getBombBagSlot(PlayerSlot slot, int button) {
         return mixSlot - SLOT_15;
     }
     return 0xff;
+}
+
+u8 resolveItem(PlayerSlot slot, int button, bool sanitize) {
+    if (!isSecondarySlot(slot)) {
+        return dComIfGp_getSelectItem(button);
+    }
+    if (!isValidButton(button)) {
+        return dItemNo_NONE_e;
+    }
+
+    u8 itemSlot = getSelectItemIndexForResolve(slot, button, sanitize);
+    if (button == SELECT_ITEM_DOWN) {
+        return itemSlot;
+    }
+    if (itemSlot == 0xff) {
+        return dItemNo_NONE_e;
+    }
+
+    u8 item = dComIfGs_getItem(itemSlot, false);
+    if (item == dItemNo_NONE_e) {
+        if (sanitize) {
+            setSelectItemIndex(slot, button, 0xff);
+        }
+        return item;
+    }
+
+    u8 mixSlot = getMixItemIndexForResolve(slot, button, sanitize);
+    if ((button == SELECT_ITEM_X || button == SELECT_ITEM_Y) && mixSlot != 0xff) {
+        u8 mixItem = dComIfGs_getItem(mixSlot, false);
+        if (mixItem == dItemNo_NONE_e) {
+            if (sanitize) {
+                setMixItemIndex(slot, button, 0xff);
+            }
+            return item;
+        }
+
+        if (mixItem == dItemNo_BOW_e) {
+            mixItem = item;
+            item = dItemNo_BOW_e;
+        } else if (mixItem == dItemNo_FISHING_ROD_1_e) {
+            mixItem = item;
+            item = dItemNo_FISHING_ROD_1_e;
+        }
+
+        if (item == dItemNo_BOW_e) {
+            switch (mixItem) {
+            case dItemNo_NORMAL_BOMB_e:
+            case dItemNo_WATER_BOMB_e:
+            case dItemNo_POKE_BOMB_e:
+                return dItemNo_BOMB_ARROW_e;
+            case dItemNo_HAWK_EYE_e:
+                return dItemNo_HAWK_ARROW_e;
+            }
+        } else if (item == dItemNo_FISHING_ROD_1_e) {
+            switch (mixItem) {
+            case dItemNo_BEE_CHILD_e:
+                return dItemNo_BEE_ROD_e;
+            case dItemNo_WORM_e:
+                return dItemNo_WORM_ROD_e;
+            case dItemNo_ZORAS_JEWEL_e:
+                return dItemNo_JEWEL_ROD_e;
+            }
+        }
+    }
+
+    return item;
+}
+
+s16 resolveItemNum(PlayerSlot slot, int button, u8 item, bool initialize) {
+    if (!isSecondarySlot(slot)) {
+        return dComIfGp_getSelectItemNum(button);
+    }
+
+    if (item == dItemNo_NORMAL_BOMB_e || item == dItemNo_WATER_BOMB_e ||
+        item == dItemNo_POKE_BOMB_e || item == dItemNo_BOMB_ARROW_e)
+    {
+        u8 bombBagSlot = getBombBagSlotForResolve(slot, button, initialize);
+        return bombBagSlot != 0xff ? dComIfGs_getBombNum(bombBagSlot) : 0;
+    }
+    if (item == dItemNo_PACHINKO_e) {
+        return dComIfGs_getPachinkoNum();
+    }
+    if (item == dItemNo_BEE_CHILD_e) {
+        u8 itemSlot = getSelectItemIndexForResolve(slot, button, initialize);
+        return itemSlot >= SLOT_11 && itemSlot < SLOT_15 ? dComIfGs_getBottleNum(itemSlot - SLOT_11)
+                                                         : 0;
+    }
+    return 0;
+}
+
+int resolveItemMaxNum(PlayerSlot slot, u8 item) {
+    if (item == dItemNo_BOMB_BAG_LV1_e) {
+        return 1;
+    }
+    if (item == dItemNo_NORMAL_BOMB_e || item == dItemNo_WATER_BOMB_e ||
+        item == dItemNo_POKE_BOMB_e || item == dItemNo_BOMB_ARROW_e)
+    {
+        return dComIfGs_getBombMax(item);
+    }
+    if (item == dItemNo_PACHINKO_e) {
+        return dComIfGs_getPachinkoMax();
+    }
+    if (item == dItemNo_BEE_CHILD_e) {
+        return dComIfGs_getBottleMax();
+    }
+    return 0;
 }
 
 }  // namespace
@@ -145,64 +283,7 @@ void setMixItemIndex(PlayerSlot slot, int button, u8 itemSlot) {
 }
 
 u8 getItem(PlayerSlot slot, int button) {
-    if (!isSecondarySlot(slot)) {
-        return dComIfGp_getSelectItem(button);
-    }
-    if (!isValidButton(button)) {
-        return dItemNo_NONE_e;
-    }
-
-    u8 itemSlot = getSelectItemIndex(slot, button);
-    if (button == SELECT_ITEM_DOWN) {
-        return itemSlot;
-    }
-    if (itemSlot == 0xff) {
-        return dItemNo_NONE_e;
-    }
-
-    u8 item = dComIfGs_getItem(itemSlot, false);
-    if (item == dItemNo_NONE_e) {
-        setSelectItemIndex(slot, button, 0xff);
-        return item;
-    }
-
-    if ((button == SELECT_ITEM_X || button == SELECT_ITEM_Y) && getMixItemIndex(slot, button) != 0xff) {
-        u8 mixItem = dComIfGs_getItem(getMixItemIndex(slot, button), false);
-        if (mixItem == dItemNo_NONE_e) {
-            setMixItemIndex(slot, button, 0xff);
-            return item;
-        }
-
-        if (mixItem == dItemNo_BOW_e) {
-            mixItem = item;
-            item = dItemNo_BOW_e;
-        } else if (mixItem == dItemNo_FISHING_ROD_1_e) {
-            mixItem = item;
-            item = dItemNo_FISHING_ROD_1_e;
-        }
-
-        if (item == dItemNo_BOW_e) {
-            switch (mixItem) {
-            case dItemNo_NORMAL_BOMB_e:
-            case dItemNo_WATER_BOMB_e:
-            case dItemNo_POKE_BOMB_e:
-                return dItemNo_BOMB_ARROW_e;
-            case dItemNo_HAWK_EYE_e:
-                return dItemNo_HAWK_ARROW_e;
-            }
-        } else if (item == dItemNo_FISHING_ROD_1_e) {
-            switch (mixItem) {
-            case dItemNo_BEE_CHILD_e:
-                return dItemNo_BEE_ROD_e;
-            case dItemNo_WORM_e:
-                return dItemNo_WORM_ROD_e;
-            case dItemNo_ZORAS_JEWEL_e:
-                return dItemNo_JEWEL_ROD_e;
-            }
-        }
-    }
-
-    return item;
+    return resolveItem(slot, button, true);
 }
 
 s16 getItemNum(PlayerSlot slot, int button) {
@@ -210,22 +291,7 @@ s16 getItemNum(PlayerSlot slot, int button) {
         return dComIfGp_getSelectItemNum(button);
     }
 
-    u8 item = getItem(slot, button);
-    if (item == dItemNo_NORMAL_BOMB_e || item == dItemNo_WATER_BOMB_e ||
-        item == dItemNo_POKE_BOMB_e || item == dItemNo_BOMB_ARROW_e)
-    {
-        u8 bombBagSlot = getBombBagSlot(slot, button);
-        return bombBagSlot != 0xff ? dComIfGs_getBombNum(bombBagSlot) : 0;
-    }
-    if (item == dItemNo_PACHINKO_e) {
-        return dComIfGs_getPachinkoNum();
-    }
-    if (item == dItemNo_BEE_CHILD_e) {
-        u8 itemSlot = getSelectItemIndex(slot, button);
-        return itemSlot >= SLOT_11 && itemSlot < SLOT_15 ? dComIfGs_getBottleNum(itemSlot - SLOT_11)
-                                                         : 0;
-    }
-    return 0;
+    return resolveItemNum(slot, button, getItem(slot, button), true);
 }
 
 int getItemMaxNum(PlayerSlot slot, int button) {
@@ -233,22 +299,7 @@ int getItemMaxNum(PlayerSlot slot, int button) {
         return dComIfGp_getSelectItemMaxNum(button);
     }
 
-    u8 item = getItem(slot, button);
-    if (item == dItemNo_BOMB_BAG_LV1_e) {
-        return 1;
-    }
-    if (item == dItemNo_NORMAL_BOMB_e || item == dItemNo_WATER_BOMB_e ||
-        item == dItemNo_POKE_BOMB_e || item == dItemNo_BOMB_ARROW_e)
-    {
-        return dComIfGs_getBombMax(item);
-    }
-    if (item == dItemNo_PACHINKO_e) {
-        return dComIfGs_getPachinkoMax();
-    }
-    if (item == dItemNo_BEE_CHILD_e) {
-        return dComIfGs_getBottleMax();
-    }
-    return 0;
+    return resolveItemMaxNum(slot, getItem(slot, button));
 }
 
 void setItemNum(PlayerSlot slot, int button, s16 value) {
@@ -261,7 +312,7 @@ void setItemNum(PlayerSlot slot, int button, s16 value) {
     if (item == dItemNo_NORMAL_BOMB_e || item == dItemNo_WATER_BOMB_e ||
         item == dItemNo_POKE_BOMB_e || item == dItemNo_BOMB_ARROW_e)
     {
-        u8 bombBagSlot = getBombBagSlot(slot, button);
+        u8 bombBagSlot = getBombBagSlotForResolve(slot, button, true);
         if (bombBagSlot != 0xff) {
             dComIfGs_setBombNum(bombBagSlot, value > dComIfGs_getBombMax(item)
                                                  ? dComIfGs_getBombMax(item)
@@ -288,7 +339,7 @@ void addItemNum(PlayerSlot slot, int button, s16 delta) {
     if (item == dItemNo_NORMAL_BOMB_e || item == dItemNo_WATER_BOMB_e ||
         item == dItemNo_POKE_BOMB_e || item == dItemNo_BOMB_ARROW_e)
     {
-        u8 bombBagSlot = getBombBagSlot(slot, button);
+        u8 bombBagSlot = getBombBagSlotForResolve(slot, button, true);
         if (bombBagSlot != 0xff) {
             dComIfGp_setItemBombNumCount(bombBagSlot, delta);
         }
@@ -300,6 +351,17 @@ void addItemNum(PlayerSlot slot, int button, s16 delta) {
             dComIfGs_addBottleNum(itemSlot - SLOT_11, delta);
         }
     }
+}
+
+ItemSelectionSnapshot inspectItem(PlayerSlot slot, int button) {
+    u8 item = resolveItem(slot, button, false);
+    return {
+        getSelectItemIndexForResolve(slot, button, false),
+        getMixItemIndexForResolve(slot, button, false),
+        item,
+        resolveItemNum(slot, button, item, false),
+        isSecondarySlot(slot) ? resolveItemMaxNum(slot, item) : dComIfGp_getSelectItemMaxNum(button),
+    };
 }
 
 u8 getItemForPlayer(const daAlink_c* player, int button) {
