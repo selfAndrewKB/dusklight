@@ -89,8 +89,47 @@ First pass implemented:
   not consume P1's prompt state after setting their own.
 - Message progression reads A/B input from the event owner, so P2-started dialogue can advance from
   P2's controller.
-- Force-status fields, item button HUD state, and actual P2 meter rendering remain future
-  `hud_owner`/UI work.
+- Force-status fields and full item/inventory HUD layout remain future UI work. Action prompt
+  presentation has a first owner pass through `hud_owner`.
+
+### `hud_owner`
+
+Owns "which player slot is this HUD/meter draw pass presenting?"
+
+This is presentation-only. It must not decide who can use a prompt and must not decide who accepted
+an event. Prompt eligibility remains `interaction_owner`; accepted event/demo input remains
+`event_owner`; gameplay prompt state remains `player_button_status`.
+
+First pass implemented:
+
+- `dusk::coop::hud_owner` tracks the current HUD slot while meter prompt presentation is drawn for
+  a split-screen viewport.
+- P1 continues to read the vanilla global meter state when split screen is off and during P1's HUD
+  pass.
+- Secondary HUD prompt passes read Do/A/R/Z/3D status and Do/A/R/Z flags from
+  `player_button_status`, then refresh only the meter button panes before drawing.
+- `dMeter2Draw_c` draws a secondary button/item HUD pass into the P2 split-screen viewport,
+  including the shared assigned-item cluster and slot-local A/Do prompt text. Menu, pause, map, and
+  full inventory presentation remain P1/global for this first pass.
+- `dMeter2_c` owns a separate secondary `dMeterButton_c` emphasis prompt for P2's center action
+  prompt, because the native emphasis prompt is stateful and is consumed later through the 2D
+  draw-list. The secondary prompt draws into P2's viewport through `hud_owner` state instead of
+  overwriting P1's prompt object.
+
+Known boundary: P2 item assignment and a fully independent meter layout are intentionally deferred.
+This pass is scoped to action prompt visibility plus the existing assigned-item HUD presentation,
+including P2's door A/Open prompt.
+
+Future `ui_owner` / viewport-2D work must revisit the systems we already touched for item
+presentation so they do not remain stranded as bespoke patches:
+
+- Hawkeye scope overlay, reticle, and scoped arrow visibility are viewport-owned 2D presentation,
+  not meter prompt state.
+- Boomerang aim reticles, lock markers, thrown-camera focus/letterbox, and wind/effect presentation
+  are a mix of `player_attention`, `player_camera_status`, item actor ownership, and viewport-2D
+  ownership.
+- Fishing rod line/bobber presentation is in-world line/render ownership, while MG_ROD cast/camera
+  state remains `player_camera_status` / item-owner work.
 
 ### `event_owner`
 
@@ -126,9 +165,10 @@ First pass implemented:
 - Fishing rod camera/status work has a first owner pass: camera actions, cast line momentum, lure
   standby/cast input, and rod-angle reads route through the MG_ROD owner slot.
 
-Global HUD/meter display state remains P1-owned for now; the sidecar only covers gameplay camera
-status that the split-screen cameras consume. Hawkeye scope overlay and boomerang lock reticles are
-still HUD/2D-packet ownership work, separate from the gameplay camera status conversion.
+Full HUD/meter display state remains P1-owned outside the `hud_owner` prompt pass; the camera-status
+sidecar only covers gameplay camera state that the split-screen cameras consume. Hawkeye scope
+overlay and boomerang lock reticles are HUD/2D-packet ownership work, separate from the gameplay
+camera status conversion.
 
 ### `interaction_owner`
 
@@ -167,10 +207,12 @@ trained should not be forced to P1.
    - Route `setAtnList()` through the same owner so P2 can have `mTargetedActor` again.
    - Route owner-camera lock-on reads through the same attention owner.
 
-2. Add per-slot action/R/Z status reads for ALINK gameplay. First pass complete.
+2. Add per-slot action/R/Z status reads for ALINK gameplay and prompt HUD presentation. First pass complete.
    - ALINK Do/A/R/Z/3D prompt writes are slot-owned.
    - ALINK Do/R gameplay reads now use the acting player's prompt owner.
-   - Keep force-status, item HUD, and meter rendering P1-owned until a HUD milestone exists.
+   - Split-screen prompt HUD replay reads slot-local prompt state through `hud_owner`.
+   - Keep force-status, item inventory layout, menus, map, and full meter duplication P1-owned until
+     a later HUD milestone exists.
 
 3. Convert first-person/item aiming status.
    - Bow/slingshot: replace the current secondary status skip with slot-owned camera/status.

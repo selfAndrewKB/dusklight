@@ -25,6 +25,8 @@
 #include <cstring>
 
 #if TARGET_PC
+#include "dusk/coop/camera.h"
+#include "dusk/coop/player_button_status.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/memory.h"
 #include "dusk/settings.h"
@@ -34,6 +36,37 @@
 namespace {
 
 dScope_c* s_scopeContents[dusk::coop::kPlayerSlotCount] = {};
+
+// Co-op: center prompt packets are for deliberate world actions; locomotion prompts stay in HUD.
+bool shouldDrawCoopCenterDoPrompt(u8 status, u8 flag) {
+    if ((flag & BUTTON_STATUS_FLAG_EMPHASIS) || (flag & BUTTON_STATUS_FLAG_CONTINUATION)) {
+        return true;
+    }
+
+    switch (status) {
+    case BUTTON_STATUS_OPEN:
+    case BUTTON_STATUS_ENTER:
+    case BUTTON_STATUS_CHECK:
+    case BUTTON_STATUS_PICK_UP:
+    case BUTTON_STATUS_THROW:
+    case BUTTON_STATUS_PLACE:
+    case BUTTON_STATUS_GRAB:
+    case BUTTON_STATUS_GET_ON:
+    case BUTTON_STATUS_READ:
+    case BUTTON_STATUS_LOOK:
+    case BUTTON_STATUS_SPEAK:
+    case BUTTON_STATUS_LIFT:
+    case BUTTON_STATUS_PICK:
+    case BUTTON_STATUS_TAKE:
+    case BUTTON_STATUS_PULL_DOWN:
+    case BUTTON_STATUS_PET:
+    case BUTTON_STATUS_LISTEN:
+    case BUTTON_STATUS_UNK_128:  // Co-op: traced sign "Check" prompts resolve through this status.
+        return true;
+    default:
+        return false;
+    }
+}
 
 bool isScopeOwnerActive(int playerId) {
     if (playerId < 0 || playerId >= dusk::coop::kPlayerSlotCount) {
@@ -327,6 +360,10 @@ int dMeter2_c::_create() {
     mpSubContents = NULL;
     mpSubSubContents = NULL;
     mpEmpButton = NULL;
+#if TARGET_PC
+    // Co-op: P2's center prompt needs independent fade state from P1's prompt packet.
+    mpCoopEmpButton = NULL;
+#endif
 
     mpHeap->getTotalFreeSize();
     field_0x11c = NULL;
@@ -441,6 +478,13 @@ int dMeter2_c::_draw() {
         dComIfGd_set2DOpaTop(mpEmpButton);
     }
 
+#if TARGET_PC
+    // Co-op: draw P2's center prompt in the same 2D phase as the vanilla prompt.
+    if (mpCoopEmpButton != NULL) {
+        dComIfGd_set2DOpaTop(mpCoopEmpButton);
+    }
+#endif
+
     return 1;
 }
 
@@ -483,6 +527,13 @@ int dMeter2_c::_delete() {
         mpSubSubContents = NULL;
     }
 
+#if TARGET_PC
+    if (mpCoopEmpButton != NULL) {
+        JKR_DELETE(mpCoopEmpButton);
+        mpCoopEmpButton = NULL;
+    }
+#endif
+
     mpHeap->getTotalFreeSize();
     if (field_0x11c != NULL) {
         JKR_DELETE(field_0x11c);
@@ -500,6 +551,14 @@ int dMeter2_c::_delete() {
 }
 
 int dMeter2_c::emphasisButtonDelete() {
+#if TARGET_PC
+    if (mpCoopEmpButton != NULL) {
+        mpCoopEmpButton->hideAll();
+        JKR_DELETE(mpCoopEmpButton);
+        mpCoopEmpButton = NULL;
+    }
+#endif
+
     if (mpEmpButton != NULL) {
         JKRExpHeap* heap = dComIfGp_getSubHeap2D(8);
         mpEmpButton->hideAll();
@@ -2442,10 +2501,84 @@ void dMeter2_c::move2DContents() {
         }
     }
 
+#if TARGET_PC
+    moveCoopSecondary2DContents();
+#endif
+
     if (field_0x108 != NULL) {
         mDoExt_setCurrentHeap(field_0x108);
     }
 }
+
+#if TARGET_PC
+void dMeter2_c::moveCoopSecondary2DContents() {
+    if (!dusk::coop::camera::isSplitScreenEnabled()) {
+        if (mpCoopEmpButton != NULL) {
+            mpCoopEmpButton->_execute(mStatus, false, false, false, false, false, false, false,
+                                      false, false, false, false, false, false, false, false,
+                                      false, false, false, false, false, false, false);
+            // Co-op: if split-screen shuts off, let P2's prompt fade closed before freeing its heap.
+            if (mpCoopEmpButton->isClose()) {
+                JKR_DELETE(mpCoopEmpButton);
+                mpCoopEmpButton = NULL;
+                if (mpEmpButton == NULL && dComIfGp_getSubHeap2D(8) != NULL) {
+                    dComIfGp_getSubHeap2D(8)->freeAll();
+                    dComIfGp_offHeapLockFlag(8);
+                }
+            }
+        }
+        return;
+    }
+
+    const dusk::coop::PlayerSlot slot = dusk::coop::PlayerSlot::Secondary;
+    const u8 do_status = dusk::coop::player_button_status::getStatus(
+        slot, dusk::coop::player_button_status::ButtonStatusKind::Do);
+    const u8 do_flag = dusk::coop::player_button_status::getFlag(
+        slot, dusk::coop::player_button_status::ButtonStatusKind::Do);
+    char* action_string = mpMeterDraw->getActionString(do_status, 0, NULL);
+    const bool has_text = *action_string != 0;
+    const bool allowed = shouldDrawCoopCenterDoPrompt(do_status, do_flag);
+    // Co-op: keep movement-only actions like Roll in the normal HUD cluster.
+    const bool draw_a = do_status != 0 && has_text && allowed;
+
+    if (draw_a && mpCoopEmpButton == NULL &&
+        (dComIfGp_isHeapLockFlag() == 0 || dComIfGp_isHeapLockFlag() == 5))
+    {
+        // Co-op: claim the vanilla prompt subheap before asking for it; getSubHeap2D(8)
+        // returns NULL until the heap lock has associated flag 8 with a free subheap.
+        dComIfGp_setHeapLockFlag(8);
+
+        JKRExpHeap* prompt_heap = dComIfGp_getSubHeap2D(8);
+        if (prompt_heap != NULL) {
+            if (field_0x108 == NULL) {
+                field_0x108 = mDoExt_setCurrentHeap(prompt_heap);
+            }
+
+            mpCoopEmpButton = JKR_NEW dMeterButton_c();
+            mpCoopEmpButton->setCoopHudSlot(slot);
+        }
+    }
+
+    if (mpCoopEmpButton != NULL) {
+        if (draw_a && mpCoopEmpButton->isSetButton(0)) {
+            mpCoopEmpButton->setString(action_string, 0, 0, 0);
+        }
+
+        mpCoopEmpButton->_execute(mStatus, draw_a, false, false, false, false, false, false, false,
+                                  false, false, false, false, false, false, false, false, false,
+                                  false, false, false, false, false);
+
+        if (!draw_a && mpCoopEmpButton->isClose()) {
+            JKR_DELETE(mpCoopEmpButton);
+            mpCoopEmpButton = NULL;
+            if (mpEmpButton == NULL && dComIfGp_getSubHeap2D(8) != NULL) {
+                dComIfGp_getSubHeap2D(8)->freeAll();
+                dComIfGp_offHeapLockFlag(8);
+            }
+        }
+    }
+}
+#endif
 
 void dMeter2_c::checkSubContents() {
     if (mStatus & 0x80) {
@@ -2604,14 +2737,24 @@ void dMeter2_c::check2DContents() {
         {
             JKR_DELETE(mpEmpButton);
             mpEmpButton = NULL;
+#if TARGET_PC
+            // Co-op: P2's prompt packet can still own the shared prompt subheap.
+            if (mpCoopEmpButton == NULL) {
+                dComIfGp_getSubHeap2D(8)->freeAll();
+                dComIfGp_offHeapLockFlag(8);
+            }
+#else
             dComIfGp_getSubHeap2D(8)->freeAll();
+#endif
 
             if (field_0x108 != NULL) {
                 mDoExt_setCurrentHeap(field_0x108);
                 field_0x108 = NULL;
             }
 
+#if !TARGET_PC
             dComIfGp_offHeapLockFlag(8);
+#endif
         }
     }
 }

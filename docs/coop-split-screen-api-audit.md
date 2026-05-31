@@ -20,7 +20,7 @@ families, and which systems are intentionally deferred.
 | Which fullscreen effect owns this viewport/framebuffer? | `viewport_effect_owner` | Partially implemented through `dusk::coop::render_effects` policy helpers and the central per-window painter replay |
 | Which viewport owns real-shadow submission culling and baked shadow matrices? | `render_shadows` | Partially implemented through `dusk::coop::render_shadows` for shared-list culling bypass and per-viewport real-shadow refresh |
 | Which viewport should camera-facing 3D line/ribbon geometry use? | shared 3D-line material refresh | Implemented for `mDoExt_3DlineMat0_c` and `mDoExt_3DlineMat1_c` during the per-window painter pass |
-| Which player owns HUD, reticles, prompts, and message UI? | `hud_owner` / `ui_owner` | Not implemented; HUD is constrained to P1's viewport |
+| Which player owns HUD, reticles, prompts, and message UI? | `hud_owner` / `ui_owner` | First `hud_owner` pass implemented for action prompts; full inventory/menu/message UI remains deferred |
 | Which player activated an NPC/object/event trigger? | `interaction_owner` / `event_trigger_owner` | Not implemented |
 | Which camera or player should audio listener state follow? | `audio_listener_owner` | Not implemented; audio listener stays camera 0/P1-owned |
 | Should this actor, world chunk, foliage/detail, or background part be draw-culled for local split-screen? | `render_visibility` | Initial PC split-screen bypass implemented for known P1-camera draw-culling paths |
@@ -71,7 +71,8 @@ File:
 Current behavior:
 
 - Normal 3D draw loops active render windows.
-- HUD/2D remains P1-constrained.
+- Action prompt HUD presentation is per viewport through `hud_owner` inside `dMeter2Draw_c`; full
+  HUD/menu/message presentation remains P1/global.
 - The late world/effect draw-list tail now runs per active render window after that window's
   view/viewport/render state is installed. Fullscreen framebuffer captures/filters inside that
   tail remain gated during split-screen until they have explicit viewport framebuffer ownership.
@@ -188,12 +189,25 @@ Audit decision:
 
 Current behavior:
 
-- HUD is constrained to P1's viewport.
+- Full HUD, menu, map, inventory, and message presentation remain P1/global.
+- Action prompt presentation has a first `hud_owner` pass: `dMeter2Draw_c` can replay the button
+  and assigned-item panes for secondary split-screen viewports from slot-local
+  `player_button_status`, without replaying the whole 2D draw list.
+- The center emphasis prompt is separate from the right-side meter button panes. P2 uses a secondary
+  `dMeterButton_c` instance so its state can be updated and drawn in P2's viewport without
+  clobbering the P1 prompt packet.
+- Hawkeye, boomerang, and fishing rod presentation fixes already touch viewport-owned item UI and
+  line/effect rendering. Future `ui_owner` work must pull those touched systems into the family
+  instead of leaving them as standalone item patches.
 
 Audit decision:
 
-- Keep for now. It is intentionally P1-owned until the HUD item/health/weapons ownership work is
-  ready.
+- Keep full HUD surfaces P1-owned until item/health/weapons ownership is ready.
+- Prompt presentation belongs to `hud_owner`; prompt eligibility belongs to `interaction_owner`;
+  accepted-event input belongs to `event_owner`.
+- Do not broaden prompt presentation by replaying all 2D lists per viewport without rechecking
+  Hawkeye scope/arrow hiding, boomerang reticles/letterbox/lock markers, and fishing rod line
+  rendering.
 - Future HUD work should duplicate or partition HUD surfaces by player slot. It should not be
   hidden inside the camera module.
 

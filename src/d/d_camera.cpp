@@ -264,7 +264,8 @@ inline static dDlst_window_c* get_window(camera_class* i_camera) {
 
 inline static fopAc_ac_c* get_boomerang_actor(fopAc_ac_c* i_actor) {
     if (is_player(i_actor)) {
-        return static_cast<daAlink_c*>(i_actor)->getThrowBoomerangActor();
+        // Co-op: query the viewport-owned ALINK keep instead of the global player helper.
+        return static_cast<daAlink_c*>(i_actor)->getBoomerangActor();
     } else {
         return NULL;
     }
@@ -1794,7 +1795,19 @@ s32 dCamera_c::nextMode(s32 i_curMode) {
     dAttention_c* attn = attentionForCameraPlayer(mpPlayerActor);
     s32 next_mode = i_curMode;
     cXyz player_pos = positionOf(mpPlayerActor);
-    daAlink_c* link = (daAlink_c*)mpPlayerActor;
+    daAlink_c* link = camera_player_link(mpPlayerActor);
+#if TARGET_PC
+    const bool owner_boomerang_focus = check_owner_action(mPadID, 0x400000);
+    const bool owner_boomerang_keep = link->checkBoomerangAtnKeep();
+    fopAc_ac_c* owner_boomerang = get_boomerang_actor(mpPlayerActor);
+    if (owner_boomerang_focus || owner_boomerang_keep) {
+        // Co-op: a camera already in thrown-boomerang focus must keep its owner's boomerang.
+        if (owner_boomerang != NULL) {
+            mpLockonTarget = owner_boomerang;
+            mLockOnActorID = -1;
+        }
+    }
+#endif
     if (!dComIfGp_evmng_cameraPlay()) {
         if (mBG.field_0x0.field_0x58 > player_pos.y) {
             field_0x223 = 0;
@@ -4798,7 +4811,20 @@ bool dCamera_c::lockonCamera(s32 param_0) {
     LockOnData* lockon = (LockOnData*)mWork;
 
     dAttention_c* attention = attentionForCameraPlayer(mpPlayerActor);
-    daAlink_c* player = (daAlink_c*)mpPlayerActor;
+    daAlink_c* player = camera_player_link(mpPlayerActor);
+#if TARGET_PC
+    const bool owner_boomerang_focus = check_owner_action(mPadID, 0x400000);
+    const bool owner_boomerang_keep = player->checkBoomerangAtnKeep();
+    fopAc_ac_c* owner_boomerang = get_boomerang_actor(mpPlayerActor);
+    if (owner_boomerang_focus || owner_boomerang_keep) {
+        // Co-op: lock-on camera math consumes mpLockonTarget every frame, so keep thrown
+        // boomerang focus pinned to the camera owner's item actor.
+        if (owner_boomerang != NULL) {
+            mpLockonTarget = owner_boomerang;
+            mLockOnActorID = fpcM_ERROR_PROCESS_ID_e;
+        }
+    }
+#endif
 
     if (dComIfGp_evmng_cameraPlay()) {
         fopAc_ac_c* target = getEvActor("Target");

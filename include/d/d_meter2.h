@@ -66,6 +66,10 @@ public:
     void moveTouchSubMenu();
     void moveSubContents();
     void move2DContents();
+#if TARGET_PC
+    // Co-op: P2 owns a separate center prompt packet so P1/P2 fade state does not collide.
+    void moveCoopSecondary2DContents();
+#endif
     void checkSubContents();
     void check2DContents();
     void moveBombNum();
@@ -109,6 +113,9 @@ private:
     /* 0x110 */ dMeterSub_c* mpSubContents;
     /* 0x114 */ dMeterString_c* mpSubSubContents;
     /* 0x118 */ dMeterButton_c* mpEmpButton;
+#if TARGET_PC
+    dMeterButton_c* mpCoopEmpButton;
+#endif
     /* 0x11C */ dMeterHaihai_c* field_0x11c;  // type is a guess for now
     /* 0x120 */ dMeterMap_c* mpMap;
     /* 0x124 */ u32 mStatus;

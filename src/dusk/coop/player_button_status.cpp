@@ -57,6 +57,34 @@ u8 getPrimaryStatus(ButtonStatusKind kind) {
     return 0;
 }
 
+u8 getPrimaryFlag(ButtonStatusKind kind) {
+    u8 flag = 0;
+    switch (kind) {
+    case ButtonStatusKind::Do:
+        flag |= dComIfGp_isDoSetFlag(1) ? 1 : 0;
+        flag |= dComIfGp_isDoSetFlag(2) ? 2 : 0;
+        flag |= dComIfGp_isDoSetFlag(4) ? 4 : 0;
+        return flag;
+    case ButtonStatusKind::A:
+        flag |= dComIfGp_isASetFlag(1) ? 1 : 0;
+        flag |= dComIfGp_isASetFlag(2) ? 2 : 0;
+        flag |= dComIfGp_isASetFlag(4) ? 4 : 0;
+        return flag;
+    case ButtonStatusKind::R:
+        flag |= dComIfGp_isRSetFlag(1) ? 1 : 0;
+        flag |= dComIfGp_isRSetFlag(2) ? 2 : 0;
+        flag |= dComIfGp_isRSetFlag(4) ? 4 : 0;
+        return flag;
+    case ButtonStatusKind::Z:
+        flag |= dComIfGp_isZSetFlag(1) ? 1 : 0;
+        flag |= dComIfGp_isZSetFlag(2) ? 2 : 0;
+        flag |= dComIfGp_isZSetFlag(4) ? 4 : 0;
+        return flag;
+    }
+
+    return 0;
+}
+
 void setPrimaryStatus(ButtonStatusKind kind, u8 status, u8 flag) {
     switch (kind) {
     case ButtonStatusKind::Do:
@@ -85,6 +113,22 @@ u8 getSecondaryStatus(PlayerSlot slot, ButtonStatusKind kind) {
         return status.rStatus;
     case ButtonStatusKind::Z:
         return status.zStatus;
+    }
+
+    return 0;
+}
+
+u8 getSecondaryFlag(PlayerSlot slot, ButtonStatusKind kind) {
+    const SlotButtonStatus& status = s_status[slotIndex(slot)];
+    switch (kind) {
+    case ButtonStatusKind::Do:
+        return status.doFlag;
+    case ButtonStatusKind::A:
+        return status.aFlag;
+    case ButtonStatusKind::R:
+        return status.rFlag;
+    case ButtonStatusKind::Z:
+        return status.zFlag;
     }
 
     return 0;
@@ -122,6 +166,14 @@ u8 getStatus(PlayerSlot slot, ButtonStatusKind kind) {
     return getSecondaryStatus(slot, kind);
 }
 
+u8 getFlag(PlayerSlot slot, ButtonStatusKind kind) {
+    if (!isSecondarySlot(slot)) {
+        return getPrimaryFlag(kind);
+    }
+
+    return getSecondaryFlag(slot, kind);
+}
+
 void setStatus(PlayerSlot slot, ButtonStatusKind kind, u8 status, u8 flag) {
     if (!isSecondarySlot(slot)) {
         setPrimaryStatus(kind, status, flag);
@@ -133,6 +185,10 @@ void setStatus(PlayerSlot slot, ButtonStatusKind kind, u8 status, u8 flag) {
 
 u8 getStatusForPlayer(const daAlink_c* player, ButtonStatusKind kind) {
     return getStatus(slotForPlayer(player), kind);
+}
+
+u8 getFlagForPlayer(const daAlink_c* player, ButtonStatusKind kind) {
+    return getFlag(slotForPlayer(player), kind);
 }
 
 void setStatusForPlayer(const daAlink_c* player, ButtonStatusKind kind, u8 status, u8 flag) {

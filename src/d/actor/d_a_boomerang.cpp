@@ -20,10 +20,18 @@
 
 // Co-op: boomerang actors must return to the ALINK slot that owns their actor keep, not always global P1.
 static daAlink_c* daBoomerang_getOwner(daBoomerang_c* i_boomerang) {
+    const fpc_ProcID boomerang_id = fopAcM_GetID(i_boomerang);
     for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
         fopAc_ac_c* actor = dusk::coop::getPlayer(static_cast<dusk::coop::PlayerSlot>(i));
         daAlink_c* player = static_cast<daAlink_c*>(actor);
-        if (player != NULL && player->getBoomerangActor() == i_boomerang) {
+        if (player == NULL) {
+            continue;
+        }
+
+        daPy_actorKeep_c* throw_keep = player->getThrowBoomerangAcKeep();
+        if ((throw_keep->getActor() == i_boomerang || throw_keep->getID() == boomerang_id) ||
+            player->getItemID() == boomerang_id)
+        {
             return player;
         }
     }

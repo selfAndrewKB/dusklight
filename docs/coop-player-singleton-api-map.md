@@ -89,7 +89,8 @@ to the requesting player slot.
 | "Which player is caught, stunned, grabbed, carried, swallowed, or retained by this actor?" | `dusk::coop::caught_stun_owner` / future caught-grab helpers | Initial implementation for Gibdo scream stun |
 | "Which player owns this item/tool instance?" | item-owner helpers / owner keeps | Partially implemented by item ownership patches |
 | "What is this player slot locked onto or allowed to target?" | `dusk::coop::player_attention` | V1 gives additional ALINK actors their own `dAttention_c`; lock acquisition/status gating, owner target-capability masks, owner camera gameplay, cursor drawing, and actor-observed "am I locked-on?" checks use the same attention owner while P1 remains on global attention for HUD/story compatibility |
-| "What Do/R/Z/R action status should this ALINK consume?" | `dusk::coop::player_button_status` | First pass implemented for ALINK gameplay Do/A/R/Z/3D prompt state; global meter/HUD rendering remains P1-owned |
+| "What Do/A/R/Z/3D action status should this ALINK consume?" | `dusk::coop::player_button_status` | First pass implemented for ALINK gameplay prompt state; P1 forwards to vanilla globals and additional slots store sidecar values |
+| "Which player's prompt state is this HUD/meter pass presenting?" | `dusk::coop::hud_owner` | First pass implemented for split-screen action prompt and assigned-item HUD presentation; `dMeter2Draw_c` emits a secondary button/item viewport pass and `dMeter2_c` owns a secondary center emphasis prompt, both reading `player_button_status`, while full independent inventory/menu/meter duplication remains deferred |
 | "Which player owns first-person/item camera status?" | `dusk::coop::player_camera_status` over `dusk::coop::camera` | First pass implemented for slot-local status 0/1 bits, camera attention bits, subject zoom/focus, bow/slingshot, Hawkeye, iron ball subject mode, hookshot subject/hang/flight status, and MG_ROD camera/cast status; global HUD/meter status and 2D item reticles remain P1/2D-packet work |
 | "Which player owns this prompt/object interaction?" | `dusk::coop::interaction_owner` | Initial implementation selects active-player prompt owners for knob/shutter door side fields; broader talk/check/pickup/howl prompts remain next |
 | "Which player requested this accepted event/demo?" | `dusk::coop::event_owner` | Initial implementation derives from event `Pt1`; message input, ALINK door-demo staff consumption, and knob/shutter door demos use it so P2-started scripted interactions do not animate or move P1 |
@@ -121,8 +122,12 @@ to the requesting player slot.
   wolf-bite ownership remains deferred caught/grab work.
 - **Player attention:** ALINK lock-on, target actor, attention truth/release, and slot-local prompt
   candidates. Do not let P2 consume P1's `dAttention_c::Lockon()` as its own gameplay lock state.
-- **Player button status:** Do/R/Z/R action availability consumed by ALINK gameplay. Global meter
-  status may stay P1-owned until HUD work expands, but P2 action checks need a slot-local answer.
+- **Player button status:** Do/A/R/Z/3D action availability consumed by ALINK gameplay. P1 forwards
+  to the vanilla meter globals; additional slots keep sidecar prompt state for gameplay and HUD
+  presentation.
+- **HUD owner:** meter/prompt presentation ownership. It decides which slot's prompt state is being
+  drawn for the active HUD viewport, not who is eligible to interact or who accepted an event. Keep
+  prompt eligibility in `interaction_owner` and accepted event input in `event_owner`.
 - **Player camera status:** first-person and item-aiming states such as bow, slingshot, Hawkeye,
   hookshot, and iron ball subject mode. Route through slot camera ownership rather than global
   player-status bits.

@@ -15,9 +15,11 @@ enum class ButtonStatusKind {
 };
 
 u8 getStatus(PlayerSlot slot, ButtonStatusKind kind);
+u8 getFlag(PlayerSlot slot, ButtonStatusKind kind);
 void setStatus(PlayerSlot slot, ButtonStatusKind kind, u8 status, u8 flag);
 
 u8 getStatusForPlayer(const daAlink_c* player, ButtonStatusKind kind);
+u8 getFlagForPlayer(const daAlink_c* player, ButtonStatusKind kind);
 void setStatusForPlayer(const daAlink_c* player, ButtonStatusKind kind, u8 status, u8 flag);
 
 u8 get3DStatus(PlayerSlot slot);

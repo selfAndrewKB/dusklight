@@ -4,6 +4,9 @@
 #include "JSystem/J2DGraph/J2DScreen.h"
 #include "JSystem/J2DGraph/J2DTextBox.h"
 #include "d/d_drawlist.h"
+#if TARGET_PC
+#include "dusk/coop/player_slots.h"
+#endif
 
 class CPaneMgr;
 class dMsgString_c;
@@ -129,6 +132,10 @@ public:
     void setAlphaIconAnimeMax();
     bool isClose();
     void setString(char*, u8, u8, u8);
+#if TARGET_PC
+    // Co-op: secondary prompt packets evaluate button flags for their owning HUD slot.
+    void setCoopHudSlot(dusk::coop::PlayerSlot slot) { mCoopHudSlot = slot; }
+#endif
     void hideAll();
     f32 getCenterPosCalc(u8, char*, int);
     void trans_button(int, f32);
@@ -347,6 +354,7 @@ public:
 #ifdef TARGET_PC
     bool mWasListen[2];
     bool mWasRepeat[2];
+    dusk::coop::PlayerSlot mCoopHudSlot;
 #endif
 };
 

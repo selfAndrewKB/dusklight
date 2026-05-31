@@ -7,6 +7,7 @@
 
 #include "d/d_meter_button.h"
 #include "JSystem/J2DGraph/J2DGrafContext.h"
+#include "JSystem/J2DGraph/J2DOrthoGraph.h"
 #include "d/actor/d_a_player.h"
 #include "d/d_meter2.h"
 #include "d/d_meter2_draw.h"
@@ -19,6 +20,8 @@
 #include "dusk/frame_interpolation.h"
 #include <cstring>
 #if TARGET_PC
+#include "dusk/coop/camera.h"
+#include "dusk/coop/player_button_status.h"
 #include "dusk/string.hpp"
 #endif
 
@@ -28,7 +31,52 @@
 #define STR_BUF_LEN 512
 #endif
 
+#if TARGET_PC
+namespace {
+
+// Co-op: prompt packets may present P2-owned button state while vanilla globals remain P1-owned.
+u8 coopDoFlagFor(const dMeterButton_c* button) {
+    return dusk::coop::player_button_status::getFlag(
+        button->mCoopHudSlot, dusk::coop::player_button_status::ButtonStatusKind::Do);
+}
+
+u8 coopAFlagFor(const dMeterButton_c* button) {
+    return dusk::coop::player_button_status::getFlag(
+        button->mCoopHudSlot, dusk::coop::player_button_status::ButtonStatusKind::A);
+}
+
+u8 coopRFlagFor(const dMeterButton_c* button) {
+    return dusk::coop::player_button_status::getFlag(
+        button->mCoopHudSlot, dusk::coop::player_button_status::ButtonStatusKind::R);
+}
+
+u8 coopZFlagFor(const dMeterButton_c* button) {
+    return dusk::coop::player_button_status::getFlag(
+        button->mCoopHudSlot, dusk::coop::player_button_status::ButtonStatusKind::Z);
+}
+
+u8 coopDoStatusFor(const dMeterButton_c* button) {
+    return dusk::coop::player_button_status::getStatus(
+        button->mCoopHudSlot, dusk::coop::player_button_status::ButtonStatusKind::Do);
+}
+
+u8 coopAStatusFor(const dMeterButton_c* button) {
+    return dusk::coop::player_button_status::getStatus(
+        button->mCoopHudSlot, dusk::coop::player_button_status::ButtonStatusKind::A);
+}
+
+u8 coop3DDirectionFor(const dMeterButton_c* button) {
+    return dusk::coop::player_button_status::get3DDirection(button->mCoopHudSlot);
+}
+
+}  // namespace
+#endif
+
 dMeterButton_c::dMeterButton_c() {
+#if TARGET_PC
+    // Co-op: vanilla prompt packets remain P1-owned unless a secondary packet opts in.
+    mCoopHudSlot = dusk::coop::PlayerSlot::Primary;
+#endif
     _create();
 }
 
@@ -143,7 +191,12 @@ int dMeterButton_c::_execute(u32 i_flags, bool i_drawA, bool i_drawB, bool i_dra
     }
 
     if (i_draw3D) {
+#if TARGET_PC
+        // Co-op: 3D prompt arrows follow the HUD slot being presented.
+        u8 dir_3D = coop3DDirectionFor(this);
+#else
         u8 dir_3D = dComIfGp_get3DDirection();
+#endif
 
         if (dir_3D & DIR_LEFT_e) {
             if (!mpButtonScreen->search(MULTI_CHAR('yaji_l_n'))->isVisible()) {
@@ -244,6 +297,19 @@ int dMeterButton_c::_execute(u32 i_flags, bool i_drawA, bool i_drawB, bool i_dra
 
 void dMeterButton_c::draw() {
     J2DGrafContext* graf_ctx = dComIfGp_getCurrentGrafPort();
+#if TARGET_PC
+    J2DOrthoGraph coop_graf;
+    const bool secondary_prompt =
+        dusk::coop::camera::isSplitScreenEnabled() && mCoopHudSlot == dusk::coop::PlayerSlot::Secondary;
+    if (secondary_prompt) {
+        // Co-op: draw P2's center prompt packet inside P2's split-screen viewport.
+        view_port_class* viewport = dComIfGp_getWindow(1)->getViewPort();
+        coop_graf.place(viewport->x_orig, viewport->y_orig, viewport->width, viewport->height);
+        coop_graf.setOrtho(0.0f, 0.0f, FB_WIDTH, FB_HEIGHT, 100000.0f, -100000.0f);
+        coop_graf.setPort();
+        graf_ctx = &coop_graf;
+    }
+#endif
     graf_ctx->setup2D();
 
     mpButtonScreen->draw(0.0f, 0.0f, graf_ctx);
@@ -275,7 +341,17 @@ void dMeterButton_c::draw() {
         bool var_r22 = 0;
         bool var_r23 = 0;
 
-        if (field_0x4be[i] == BUTTON_A_e && dComIfGp_isDoSetFlag(4)) {
+#if TARGET_PC
+        const u8 do_flag = coopDoFlagFor(this);
+        const u8 do_status = coopDoStatusFor(this);
+        const u8 a_status = coopAStatusFor(this);
+#else
+        const u8 do_flag = dComIfGp_isDoSetFlag(4) ? 4 : 0;
+        const u8 do_status = dComIfGp_getDoStatus();
+        const u8 a_status = dComIfGp_getAStatus();
+#endif
+
+        if (field_0x4be[i] == BUTTON_A_e && (do_flag & 4)) {
             var_r23 = 1;
 
             if (field_0x4b8[i] == 0 && field_0x4bc[i] == 0) {
@@ -311,10 +387,9 @@ void dMeterButton_c::draw() {
             f32 temp_f0 = (g_drawHIO.mEmpButton.mRepeatHitScale - 1.0f) * var_f2 + 1.0f;
             mpButtonA->scale(mButtonAScale * temp_f0, mButtonAScale * temp_f0);
         } else if ((field_0x4be[i] == BUTTON_A_e &&
-                    (dComIfGp_getDoStatus() == 0x3B || dComIfGp_getDoStatus() == 0x3F ||
-                     dComIfGp_getDoStatus() == 0x40) &&
+                    (do_status == 0x3B || do_status == 0x3F || do_status == 0x40) &&
                     dMeter2Info_isBlinkButton(1)) ||
-                   (field_0x4be[i] == BUTTON_B_e && dComIfGp_getAStatus() == 0x3A &&
+                   (field_0x4be[i] == BUTTON_B_e && a_status == 0x3A &&
                     dMeter2Info_isBlinkButton(2)))
         {
             var_r22 = 1;
@@ -439,6 +514,16 @@ void dMeterButton_c::draw() {
     }
 
     dMeter2Info_resetBlinkButton();
+#if TARGET_PC
+    if (secondary_prompt) {
+        dComIfGp_getCurrentGrafPort()->setPort();
+        view_port_class* primary_viewport = dComIfGp_getWindow(0)->getViewPort();
+        GXSetViewport(primary_viewport->x_orig, primary_viewport->y_orig, primary_viewport->width,
+                      primary_viewport->height, primary_viewport->near_z, primary_viewport->far_z);
+        GXSetScissor(primary_viewport->x_orig, primary_viewport->y_orig, primary_viewport->width,
+                     primary_viewport->height);
+    }
+#endif
 }
 
 int dMeterButton_c::_delete() {
@@ -1983,10 +2068,22 @@ void dMeterButton_c::setAlphaButtonAAnimeMin() {
 }
 
 bool dMeterButton_c::isFastSet(int param_0) {
-    if ((dComIfGp_isDoSetFlag(1) && field_0x4be[param_0] == BUTTON_A_e) ||
-        (dComIfGp_isASetFlag(1) && field_0x4be[param_0] == BUTTON_B_e) ||
-        (dComIfGp_isRSetFlag(1) && field_0x4be[param_0] == BUTTON_R_e) ||
-        (dComIfGp_isZSetFlag(1) && field_0x4be[param_0] == BUTTON_Z_e) ||
+#if TARGET_PC
+    const u8 do_flag = coopDoFlagFor(this);
+    const u8 a_flag = coopAFlagFor(this);
+    const u8 r_flag = coopRFlagFor(this);
+    const u8 z_flag = coopZFlagFor(this);
+#else
+    const u8 do_flag = dComIfGp_isDoSetFlag(1) ? 1 : 0;
+    const u8 a_flag = dComIfGp_isASetFlag(1) ? 1 : 0;
+    const u8 r_flag = dComIfGp_isRSetFlag(1) ? 1 : 0;
+    const u8 z_flag = dComIfGp_isZSetFlag(1) ? 1 : 0;
+#endif
+
+    if (((do_flag & 1) && field_0x4be[param_0] == BUTTON_A_e) ||
+        ((a_flag & 1) && field_0x4be[param_0] == BUTTON_B_e) ||
+        ((r_flag & 1) && field_0x4be[param_0] == BUTTON_R_e) ||
+        ((z_flag & 1) && field_0x4be[param_0] == BUTTON_Z_e) ||
         (dComIfGp_is3DSetFlag(1) && field_0x4be[param_0] == BUTTON_3D_e) ||
         (dComIfGp_isCStickSetFlag(1) && field_0x4be[param_0] == BUTTON_C_e) ||
         (dComIfGp_isSButtonSetFlag(1) && field_0x4be[param_0] == BUTTON_S_e) ||
@@ -1995,16 +2092,16 @@ bool dMeterButton_c::isFastSet(int param_0) {
         (dComIfGp_isNunSetFlag(1) && field_0x4be[param_0] == BUTTON_NUN_e) ||
         (dComIfGp_isRemoConSetFlag(1) && field_0x4be[param_0] == BUTTON_REMO_e) ||
         (dComIfGp_isRemoConSetFlag(1) && field_0x4be[param_0] == BUTTON_REMO2_e) ||
-        ((dComIfGp_isASetFlag(1) || dComIfGp_isRemoConSetFlag(1)) &&
+        (((a_flag & 1) || dComIfGp_isRemoConSetFlag(1)) &&
          field_0x4be[param_0] == BUTTON_AR_e) ||
-        ((dComIfGp_isDoSetFlag(1) || dComIfGp_is3DSetFlag(1)) &&
+        (((do_flag & 1) || dComIfGp_is3DSetFlag(1)) &&
          field_0x4be[param_0] == BUTTON_3DB_e) ||
         ((dComIfGp_isRemoConSetFlag(1) || dComIfGp_isNunSetFlag(1)) &&
          field_0x4be[param_0] == BUTTON_NURE_e) ||
         ((dComIfGp_isRemoConSetFlag(1) || dComIfGp_isNunSetFlag(1)) &&
          field_0x4be[param_0] == BUTTON_REEL_e) ||
         (dComIfGp_isNunSetFlag(1) && field_0x4be[param_0] == BUTTON_REEL2_e) ||
-        ((dComIfGp_isDoSetFlag(1) || dComIfGp_isASetFlag(1)) &&
+        (((do_flag & 1) || (a_flag & 1)) &&
          field_0x4be[param_0] == BUTTON_AB_e) ||
         (dComIfGp_isNunSetFlag(1) && field_0x4be[param_0] == BUTTON_TATE_e) ||
         (dComIfGp_isNunZSetFlag(1) && field_0x4be[param_0] == BUTTON_NUNZ_e) ||
@@ -2019,7 +2116,12 @@ bool dMeterButton_c::isFastSet(int param_0) {
 
 void dMeterButton_c::setAlphaButtonAAnimeMax() {
     if (mpButtonA->getAlphaRate() != 1.0f) {
-        if (dComIfGp_isDoSetFlag(1)) {
+#if TARGET_PC
+        const bool fast_set = (coopDoFlagFor(this) & 1) != 0;
+#else
+        const bool fast_set = dComIfGp_isDoSetFlag(1);
+#endif
+        if (fast_set) {
             mpButtonA->setAlphaRate(1.0f);
             mpButtonA->alphaAnimeStart(5);
         } else {
@@ -2055,7 +2157,12 @@ void dMeterButton_c::setAlphaButtonBAnimeMin() {
 
 void dMeterButton_c::setAlphaButtonBAnimeMax() {
     if (mpButtonB->getAlphaRate() != 1.0f) {
-        if (dComIfGp_isASetFlag(1)) {
+#if TARGET_PC
+        const bool fast_set = (coopAFlagFor(this) & 1) != 0;
+#else
+        const bool fast_set = dComIfGp_isASetFlag(1);
+#endif
+        if (fast_set) {
             mpButtonB->setAlphaRate(1.0f);
             mpButtonB->alphaAnimeStart(5);
         } else {
@@ -2091,7 +2198,12 @@ void dMeterButton_c::setAlphaButtonRAnimeMin() {
 
 void dMeterButton_c::setAlphaButtonRAnimeMax() {
     if (mpButtonR->getAlphaRate() != 1.0f) {
-        if (dComIfGp_isRSetFlag(1)) {
+#if TARGET_PC
+        const bool fast_set = (coopRFlagFor(this) & 1) != 0;
+#else
+        const bool fast_set = dComIfGp_isRSetFlag(1);
+#endif
+        if (fast_set) {
             mpButtonR->setAlphaRate(1.0f);
             mpButtonR->alphaAnimeStart(5);
         } else {
@@ -2127,7 +2239,12 @@ void dMeterButton_c::setAlphaButtonZAnimeMin() {
 
 void dMeterButton_c::setAlphaButtonZAnimeMax() {
     if (mpButtonZ->getAlphaRate() != 1.0f) {
-        if (dComIfGp_isZSetFlag(1)) {
+#if TARGET_PC
+        const bool fast_set = (coopZFlagFor(this) & 1) != 0;
+#else
+        const bool fast_set = dComIfGp_isZSetFlag(1);
+#endif
+        if (fast_set) {
             mpButtonZ->setAlphaRate(1.0f);
             mpButtonZ->alphaAnimeStart(5);
         } else {
