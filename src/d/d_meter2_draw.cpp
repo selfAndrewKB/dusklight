@@ -800,6 +800,14 @@ void dMeter2Draw_c::drawCoopSecondaryButtonHud(J2DGrafContext* i_restoreGrafCtx)
 
     dusk::coop::hud_owner::pushSlot(dusk::coop::PlayerSlot::Secondary);
 
+    // Co-op: the meter J2D tree is shared, so apply P2's item panes only for P2's replay.
+    dusk::coop::hud_owner::ItemPresentation p2_items[2];
+    for (int i = 0; i < 2; i++) {
+        p2_items[i] = dusk::coop::hud_owner::itemPresentation(i);
+        changeTextureItemXY(i, p2_items[i].item);
+        setItemNum(i, p2_items[i].count, p2_items[i].maxCount);
+    }
+
     const u8 do_status = dusk::coop::hud_owner::buttonStatus(
         dusk::coop::player_button_status::ButtonStatusKind::Do);
     mpButtonParent->setAlphaRate(g_drawHIO.mParentAlpha * g_drawHIO.mMainHUDButtonsAlpha);
@@ -834,6 +842,14 @@ void dMeter2Draw_c::drawCoopSecondaryButtonHud(J2DGrafContext* i_restoreGrafCtx)
     }
 
     dusk::coop::hud_owner::popSlot();
+
+    // Co-op: restore P1's item panes before the shared HUD object returns to vanilla updates.
+    for (int i = 0; i < 2; i++) {
+        dusk::coop::hud_owner::ItemPresentation p1_item =
+            dusk::coop::hud_owner::itemPresentation(i);
+        changeTextureItemXY(i, p1_item.item);
+        setItemNum(i, p1_item.count, p1_item.maxCount);
+    }
 
     restorePaneState(mpButtonParent, button_parent);
     restorePaneState(mpButtonA, button_a);

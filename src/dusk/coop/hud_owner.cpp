@@ -1,6 +1,7 @@
 #include "dusk/coop/hud_owner.h"
 
 #include "dusk/coop/camera.h"
+#include "dusk/coop/player_item_selection.h"
 #include "dusk/coop/ui_owner.h"
 
 namespace dusk::coop::hud_owner {
@@ -43,6 +44,15 @@ u8 threeDStatus() {
 
 u8 threeDDirection() {
     return player_button_status::get3DDirection(currentSlot());
+}
+
+ItemPresentation itemPresentation(int button) {
+    PlayerSlot slot = currentSlot();
+    return {
+        player_item_selection::getItem(slot, button),
+        player_item_selection::getItemNum(slot, button),
+        player_item_selection::getItemMaxNum(slot, button),
+    };
 }
 
 }  // namespace dusk::coop::hud_owner

@@ -6,6 +6,12 @@
 
 namespace dusk::coop::hud_owner {
 
+struct ItemPresentation {
+    u8 item;
+    s16 count;
+    int maxCount;
+};
+
 PlayerSlot currentSlot();
 void pushSlot(PlayerSlot slot);
 void popSlot();
@@ -15,5 +21,6 @@ u8 buttonStatus(player_button_status::ButtonStatusKind kind);
 u8 buttonFlag(player_button_status::ButtonStatusKind kind);
 u8 threeDStatus();
 u8 threeDDirection();
+ItemPresentation itemPresentation(int button);
 
 }  // namespace dusk::coop::hud_owner
