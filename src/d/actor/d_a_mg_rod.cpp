@@ -1322,7 +1322,8 @@ static int lure_standby(dmg_rod_class* i_this) {
         camera->mCamera.Start();
         camera->mCamera.SetTrimSize(0);
 
-        dMw_onMenuRing();
+        // Co-op: the forced fishing wheel belongs to the rod's retained ALINK owner.
+        dMw_onMenuRingForPlayer(dmg_rod_getOwner(i_this));
         player->seStartOnlyReverb(Z2SE_AL_ROD_TAKEOUT);
         i_this->timers[1] = 30;
         i_this->input_cooldown = 5;
@@ -1357,7 +1358,7 @@ static void lure_cast(dmg_rod_class* i_this) {
         camera->mCamera.Start();
         camera->mCamera.SetTrimSize(0);
 
-        dMw_onMenuRing();
+        dMw_onMenuRingForPlayer(dmg_rod_getOwner(i_this));
         return;
     }
 
@@ -5759,7 +5760,7 @@ static void play_camera_u(dmg_rod_class* i_this) {
         camera->mCamera.Start();
         camera->mCamera.SetTrimSize(0);
 
-        dMw_onMenuRing();
+        dMw_onMenuRingForPlayer(dmg_rod_getOwner(i_this));
     }
 
     if (i_this->play_cam_mode != 0) {
@@ -6129,7 +6130,7 @@ static int dmg_rod_IsDelete(dmg_rod_class* i_this) {
         camera->mCamera.Reset(i_this->play_cam_center, i_this->play_cam_eye, i_this->play_cam_fovy, 0);
         camera->mCamera.Start();
         camera->mCamera.SetTrimSize(0);
-        dMw_onMenuRing();
+        dMw_onMenuRingForPlayer(dmg_rod_getOwner(i_this));
     }
 
     return 1;

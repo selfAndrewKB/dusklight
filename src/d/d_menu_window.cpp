@@ -27,6 +27,8 @@
 #include "m_Do/m_Do_controller_pad.h"
 
 #ifdef TARGET_PC
+#include "dusk/coop/player_slots.h"
+#include "dusk/coop/ui_owner.h"
 #include "dusk/frame_interpolation.h"
 #endif
 
@@ -142,15 +144,27 @@ private:
 };
 
 BOOL dMw_UP_TRIGGER() {
+#if TARGET_PC
+    return mDoCPd_c::getTrigUp(dusk::coop::ui_owner::currentPad()) != 0;
+#else
     return mDoCPd_c::getTrigUp(PAD_1) != 0;
+#endif
 }
 
 BOOL dMw_DOWN_TRIGGER() {
+#if TARGET_PC
+    return mDoCPd_c::getTrigDown(dusk::coop::ui_owner::currentPad()) != 0;
+#else
     return mDoCPd_c::getTrigDown(PAD_1) != 0;
+#endif
 }
 
 BOOL dMw_LEFT_TRIGGER() {
+#if TARGET_PC
+    if (mDoCPd_c::getTrigLeft(dusk::coop::ui_owner::currentPad()) && !dMw_UP_TRIGGER()) {
+#else
     if (mDoCPd_c::getTrigLeft(PAD_1) && !dMw_UP_TRIGGER()) {
+#endif
         return true;
     } else {
         return false;
@@ -158,7 +172,11 @@ BOOL dMw_LEFT_TRIGGER() {
 }
 
 BOOL dMw_RIGHT_TRIGGER() {
+#if TARGET_PC
+    if (mDoCPd_c::getTrigRight(dusk::coop::ui_owner::currentPad()) && !dMw_UP_TRIGGER()) {
+#else
     if (mDoCPd_c::getTrigRight(PAD_1) && !dMw_UP_TRIGGER()) {
+#endif
         return true;
     } else {
         return false;
@@ -166,15 +184,27 @@ BOOL dMw_RIGHT_TRIGGER() {
 }
 
 BOOL dMw_A_TRIGGER() {
+#if TARGET_PC
+    return mDoCPd_c::getTrigA(dusk::coop::ui_owner::currentPad()) != 0;
+#else
     return mDoCPd_c::getTrigA(PAD_1) != 0;
+#endif
 }
 
 BOOL dMw_B_TRIGGER() {
+#if TARGET_PC
+    return mDoCPd_c::getTrigB(dusk::coop::ui_owner::currentPad()) != 0;
+#else
     return mDoCPd_c::getTrigB(PAD_1) != 0;
+#endif
 }
 
 BOOL dMw_Z_TRIGGER() {
+#if TARGET_PC
+    return mDoCPd_c::getTrigZ(dusk::coop::ui_owner::currentPad()) != 0;
+#else
     return mDoCPd_c::getTrigZ(PAD_1) != 0;
+#endif
 }
 
 BOOL dMw_START_TRIGGER() {
@@ -202,11 +232,22 @@ void dMw_onMenuRing() {
     }
 }
 
+#if TARGET_PC
+void dMw_onMenuRingForPlayer(const fopAc_ac_c* i_player) {
+    // Co-op: fishing can force the singular item wheel, so retain the requesting ALINK slot.
+    dusk::coop::ui_owner::retainSingularSlot(dusk::coop::getSlotForActor(i_player));
+    dMw_onMenuRing();
+}
+#endif
+
 void dMw_offMenuRing() {
     dMw_c* menu_window = dMeter2Info_getMenuWindowClass();
     if (menu_window != NULL) {
         menu_window->offShowFlag();
     }
+#if TARGET_PC
+    dusk::coop::ui_owner::clearSingularSlot();
+#endif
 }
 
 static BOOL dMw_isMenuRing() {
@@ -547,6 +588,24 @@ void dMw_c::insect_close_init(u8) {
 }
 
 void dMw_c::key_wait_proc() {
+#if TARGET_PC
+    dusk::coop::PlayerSlot ring_owner = dusk::coop::PlayerSlot::Invalid;
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        dusk::coop::PlayerSlot slot = static_cast<dusk::coop::PlayerSlot>(i);
+        // Co-op: P1 keeps vanilla menu availability before player-slot registration finishes.
+        if (slot != dusk::coop::PlayerSlot::Primary && dusk::coop::getPlayer(slot) == NULL) {
+            continue;
+        }
+
+        int pad = dusk::coop::getPadForSlot(slot);
+        if (mDoCPd_c::getTrigUp(pad) || mDoCPd_c::getTrigDown(pad)) {
+            ring_owner = slot;
+            break;
+        }
+    }
+    bool ring_owner_triggered = ring_owner != dusk::coop::PlayerSlot::Invalid;
+#endif
+
     if (field_0x14B != 0) {
         switch (field_0x14B) {
         case 1:
@@ -650,12 +709,32 @@ void dMw_c::key_wait_proc() {
                 mMenuProc = DMAP_OPEN;
                 dMw_dmap_create();
             }
-        } else if ((((dMw_UP_TRIGGER() || dMw_DOWN_TRIGGER()) && !dMw_LEFT_TRIGGER() && !dMw_RIGHT_TRIGGER()) || dMeter2Info_isMenuInForce(2) || dMeter2Info_isTouchKeyCheck(2)) &&
+        // Co-op: evaluate ring-opening direction against the detected owner before retaining it.
+        } else if ((((
+#if TARGET_PC
+                        ring_owner_triggered
+#else
+                        dMw_UP_TRIGGER() || dMw_DOWN_TRIGGER()
+#endif
+                       )
+#if TARGET_PC
+                       && !mDoCPd_c::getTrigLeft(dusk::coop::getPadForSlot(ring_owner))
+                       && !mDoCPd_c::getTrigRight(dusk::coop::getPadForSlot(ring_owner))
+#else
+                       && !dMw_LEFT_TRIGGER() && !dMw_RIGHT_TRIGGER()
+#endif
+                      ) || dMeter2Info_isMenuInForce(2) || dMeter2Info_isTouchKeyCheck(2)) &&
                    dMeter2Info_isWindowAccept(2) &&
                    (dMeter2Info_getMapStatus() == 0 || dMeter2Info_getMapStatus() == 1) &&
                    dMeter2Info_isItemOpenCheck() &&
                    !dComIfGp_isEnableNextStage())
         {
+#if TARGET_PC
+            // Co-op: the item wheel remains singular, but its opening pad owns it until close.
+            if (ring_owner_triggered) {
+                dusk::coop::ui_owner::retainSingularSlot(ring_owner);
+            }
+#endif
             dMsgObject_setKillMessageFlag();
 
             if (dComIfGp_isHeapLockFlag() == 5) {
@@ -1082,6 +1161,11 @@ void dMw_c::dMw_ring_create(u8 i_origin) {
     markMemSize();
     dComIfGp_setHeapLockFlag(1);
 
+#if TARGET_PC
+    // Co-op: the retained singular wheel owner supplies both menu sticks until the wheel closes.
+    mpStick->setPad(dusk::coop::ui_owner::currentPad());
+    mpCStick->setPad(dusk::coop::ui_owner::currentPad());
+#endif
     mpMenuRing = JKR_NEW dMenu_Ring_c(mpHeap, mpStick, mpCStick, i_origin);
     JUT_ASSERT(2038, mpMenuRing != NULL);
     mpMenuRing->_create();
@@ -1111,6 +1195,12 @@ bool dMw_c::dMw_ring_delete() {
     }
 
     checkMemSize();
+#if TARGET_PC
+    // Co-op: do not let a closed wheel leave later singular UI reads bound to P2.
+    mpStick->setPad(PAD_1);
+    mpCStick->setPad(PAD_1);
+    dusk::coop::ui_owner::clearSingularSlot();
+#endif
     return true;
 }
 

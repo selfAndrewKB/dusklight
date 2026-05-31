@@ -9,6 +9,8 @@
 
 struct CSTControl;
 class STControl;
+// Co-op: forced item-wheel entry points retain their requesting ALINK actor.
+class fopAc_ac_c;
 class dMenu_Collect_c;
 class dMenu_Dmap_c;
 class dMenu_Fishing_c;
@@ -33,6 +35,9 @@ BOOL dMw_RIGHT_TRIGGER();
 void dMw_onPauseWindow();
 void dMw_offPauseWindow();
 void dMw_onMenuRing();
+#if TARGET_PC
+void dMw_onMenuRingForPlayer(const fopAc_ac_c*);
+#endif
 void dMw_offMenuRing();
 
 class dDlst_MENU_CAPTURE_c;
