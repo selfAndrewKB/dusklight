@@ -883,9 +883,10 @@ json hudPresentationEventKey(const json& data) {
     }
 
     return {
-        {"schema_version", data.value("schema_version", 1)},
+        {"schema_version", data.value("schema_version", 2)},
         {"slot_items", data.value("slot_items", json::array())},
         {"snapshots", snapshots},
+        {"ring_admission", data.value("ring_admission", json::object())},
     };
 }
 
@@ -2133,11 +2134,27 @@ json collectHudPresentation() {
         });
     }
 
+    const coop::hud_diagnostics::HudPresentationDebugState::RingAdmissionDebug& ring =
+        state.ringAdmission;
+    json ringAdmission = {
+        {"valid", ring.valid},
+        {"phase", coop::hud_diagnostics::ringAdmissionPhaseName(ring.phase)},
+        {"owner_slot", ring.owner != coop::PlayerSlot::Invalid ? static_cast<int>(ring.owner) : -1},
+        {"heap_lock", static_cast<unsigned int>(ring.heapLock)},
+        {"sub_heap_locks", {static_cast<unsigned int>(ring.subHeapLocks[0]),
+                            static_cast<unsigned int>(ring.subHeapLocks[1])}},
+        {"primary_prompt", ring.primaryPrompt},
+        {"secondary_prompt", ring.secondaryPrompt},
+        {"message_status", static_cast<unsigned int>(ring.messageStatus)},
+        {"floating_message_visible", ring.floatingMessageVisible},
+    };
+
     return {
-        {"schema_version", 1},
+        {"schema_version", 2},
         {"revision", state.revision},
         {"slot_items", slotItems},
         {"snapshots", snapshots},
+        {"ring_admission", ringAdmission},
     };
 }
 
@@ -2161,7 +2178,7 @@ Provider s_providers[] = {
     {"young_gohma.state", 1, "cheap", 1, true, 240, 8192, collectYoungGohmaStateProbe},
     {"coop.probes", 1, "cheap", 30, true, 20, 4096, collectCoopProbes},
     {"alink.secondary", 4, "cheap", 1, true, 120, 8192, collectAlinkSecondary},
-    {"hud.presentation", 1, "cheap", 1, true, 120, 8192, collectHudPresentation},
+    {"hud.presentation", 2, "cheap", 1, true, 120, 8192, collectHudPresentation},
 };
 
 const Provider* findProvider(const char* name) {

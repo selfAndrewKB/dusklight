@@ -12,6 +12,12 @@ enum class ReplayPhase {
     Count,
 };
 
+enum class RingAdmissionPhase {
+    Request,
+    PromptCleanup,
+    Create,
+};
+
 struct ItemResolverDebug {
     u8 selectIndex = 0xff;
     u8 mixIndex = 0xff;
@@ -45,9 +51,22 @@ struct HudPresentationDebugState {
     unsigned int revision = 0;
     ItemResolverDebug slotItems[2][2];
     ReplaySnapshot snapshots[static_cast<int>(ReplayPhase::Count)];
+    struct RingAdmissionDebug {
+        bool valid = false;
+        RingAdmissionPhase phase = RingAdmissionPhase::Request;
+        PlayerSlot owner = PlayerSlot::Invalid;
+        u8 heapLock = 0;
+        u8 subHeapLocks[2] = {};
+        bool primaryPrompt = false;
+        bool secondaryPrompt = false;
+        u8 messageStatus = 0;
+        bool floatingMessageVisible = false;
+    } ringAdmission;
 };
 
 void recordSnapshot(const ReplaySnapshot& snapshot);
+void recordRingAdmission(RingAdmissionPhase phase, PlayerSlot owner, bool primaryPrompt,
+                         bool secondaryPrompt);
 const HudPresentationDebugState& getState();
 
 bool isOverlayEnabled();
@@ -55,5 +74,6 @@ void setOverlayEnabled(bool enabled);
 void drawTextOverlay();
 
 const char* replayPhaseName(ReplayPhase phase);
+const char* ringAdmissionPhaseName(RingAdmissionPhase phase);
 
 }  // namespace dusk::coop::hud_diagnostics

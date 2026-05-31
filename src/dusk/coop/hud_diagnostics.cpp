@@ -1,6 +1,9 @@
 #include "dusk/coop/hud_diagnostics.h"
 
+#include "d/d_com_inf_game.h"
+#include "d/d_meter2_info.h"
 #include "dusk/coop/player_item_selection.h"
+#include "dusk/logging.h"
 #include "imgui.h"
 
 #include <cstdio>
@@ -10,6 +13,7 @@ namespace {
 
 HudPresentationDebugState s_state;
 bool s_overlayEnabled = true;
+aurora::Module HudDiagnosticsLog("dusk::coop.hud");
 
 int slotIndex(PlayerSlot slot) {
     return slot != PlayerSlot::Invalid ? static_cast<int>(slot) : -1;
@@ -53,6 +57,30 @@ void recordSnapshot(const ReplaySnapshot& snapshot) {
     s_state.revision++;
 }
 
+void recordRingAdmission(RingAdmissionPhase phase, PlayerSlot owner, bool primaryPrompt,
+                         bool secondaryPrompt) {
+    s_state.ringAdmission = {
+        true,
+        phase,
+        owner,
+        dComIfGp_isHeapLockFlag(),
+        {dComIfGp_getSubHeapLockFlag(0), dComIfGp_getSubHeapLockFlag(1)},
+        primaryPrompt,
+        secondaryPrompt,
+        dComIfGp_getMesgStatus(),
+        dMeter2Info_isFloatingMessageVisible(),
+    };
+    const HudPresentationDebugState::RingAdmissionDebug& ring = s_state.ringAdmission;
+    HudDiagnosticsLog.info(
+        "ring admission {} owner {} heap {} sub {}/{} prompt {}/{} msg {} float {}",
+        ringAdmissionPhaseName(ring.phase), slotIndex(ring.owner),
+        static_cast<unsigned int>(ring.heapLock), static_cast<unsigned int>(ring.subHeapLocks[0]),
+        static_cast<unsigned int>(ring.subHeapLocks[1]), ring.primaryPrompt ? 1 : 0,
+        ring.secondaryPrompt ? 1 : 0, static_cast<unsigned int>(ring.messageStatus),
+        ring.floatingMessageVisible ? 1 : 0);
+    s_state.revision++;
+}
+
 const HudPresentationDebugState& getState() {
     return s_state;
 }
@@ -78,6 +106,19 @@ const char* replayPhaseName(ReplayPhase phase) {
     }
 }
 
+const char* ringAdmissionPhaseName(RingAdmissionPhase phase) {
+    switch (phase) {
+    case RingAdmissionPhase::Request:
+        return "request";
+    case RingAdmissionPhase::PromptCleanup:
+        return "prompt-cleanup";
+    case RingAdmissionPhase::Create:
+        return "create";
+    default:
+        return "invalid";
+    }
+}
+
 void drawTextOverlay() {
     if (!isOverlayEnabled() || s_state.revision == 0 || ImGui::GetCurrentContext() == nullptr) {
         return;
@@ -94,6 +135,19 @@ void drawTextOverlay() {
     char line[256];
     std::snprintf(line, sizeof(line), "co-op HUD replay diagnostics rev %u", s_state.revision);
     drawLine(drawList, y, titleColor, line);
+
+    if (s_state.ringAdmission.valid) {
+        const HudPresentationDebugState::RingAdmissionDebug& ring = s_state.ringAdmission;
+        std::snprintf(line, sizeof(line),
+                      "ring %s owner=P%d heap=%u sub=%u/%u prompt=%d/%d msg=%u float=%d",
+                      ringAdmissionPhaseName(ring.phase), slotIndex(ring.owner) + 1,
+                      static_cast<unsigned int>(ring.heapLock),
+                      static_cast<unsigned int>(ring.subHeapLocks[0]),
+                      static_cast<unsigned int>(ring.subHeapLocks[1]), ring.primaryPrompt ? 1 : 0,
+                      ring.secondaryPrompt ? 1 : 0, static_cast<unsigned int>(ring.messageStatus),
+                      ring.floatingMessageVisible ? 1 : 0);
+        drawLine(drawList, y, textColor, line);
+    }
 
     for (int slot = 0; slot < 2; slot++) {
         std::snprintf(line, sizeof(line), "P%d resolver", slot + 1);

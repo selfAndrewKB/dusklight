@@ -552,13 +552,36 @@ int dMeter2_c::_delete() {
 
 int dMeter2_c::emphasisButtonDelete() {
 #if TARGET_PC
+    bool deleted_button = false;
+
     if (mpCoopEmpButton != NULL) {
         mpCoopEmpButton->hideAll();
         JKR_DELETE(mpCoopEmpButton);
         mpCoopEmpButton = NULL;
+        deleted_button = true;
     }
-#endif
 
+    if (mpEmpButton != NULL) {
+        mpEmpButton->hideAll();
+        JKR_DELETE(mpEmpButton);
+        mpEmpButton = NULL;
+        deleted_button = true;
+    }
+
+    // Co-op: P2 can own the prompt subheap without a P1 prompt packet. Release that shared
+    // transient heap before the singular item wheel claims the parent 2D heap.
+    if (deleted_button) {
+        JKRExpHeap* heap = dComIfGp_getSubHeap2D(8);
+        if (heap != NULL) {
+            if (field_0x108 != NULL) {
+                mDoExt_setCurrentHeap(field_0x108);
+                field_0x108 = NULL;
+            }
+            heap->freeAll();
+            dComIfGp_offHeapLockFlag(8);
+        }
+    }
+#else
     if (mpEmpButton != NULL) {
         JKRExpHeap* heap = dComIfGp_getSubHeap2D(8);
         mpEmpButton->hideAll();
@@ -570,6 +593,7 @@ int dMeter2_c::emphasisButtonDelete() {
             dComIfGp_offHeapLockFlag(8);
         }
     }
+#endif
 
     return 1;
 }

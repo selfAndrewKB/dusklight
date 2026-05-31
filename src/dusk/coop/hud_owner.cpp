@@ -1,5 +1,7 @@
 #include "dusk/coop/hud_owner.h"
 
+#include "d/d_com_inf_game.h"
+#include "d/d_item_data.h"
 #include "dusk/coop/camera.h"
 #include "dusk/coop/player_item_selection.h"
 #include "dusk/coop/ui_owner.h"
@@ -10,6 +12,18 @@ namespace {
 bool isSecondarySlot(PlayerSlot slot) {
     return slot != PlayerSlot::Invalid && slot != PlayerSlot::Primary &&
            static_cast<unsigned int>(slot) < kPlayerSlotCount;
+}
+
+bool usesArrowCounter(u8 item) {
+    return item == dItemNo_BOW_e || item == dItemNo_LIGHT_ARROW_e ||
+           item == dItemNo_ARROW_LV1_e || item == dItemNo_ARROW_LV2_e ||
+           item == dItemNo_ARROW_LV3_e || item == dItemNo_HAWK_ARROW_e;
+}
+
+bool usesSelectionCounter(u8 item) {
+    return item == dItemNo_BOMB_BAG_LV1_e || item == dItemNo_NORMAL_BOMB_e ||
+           item == dItemNo_WATER_BOMB_e || item == dItemNo_POKE_BOMB_e ||
+           item == dItemNo_PACHINKO_e || item == dItemNo_BEE_CHILD_e;
 }
 
 }  // namespace
@@ -48,11 +62,30 @@ u8 threeDDirection() {
 
 ItemPresentation itemPresentation(int button) {
     PlayerSlot slot = currentSlot();
-    return {
-        player_item_selection::getItem(slot, button),
-        player_item_selection::getItemNum(slot, button),
-        player_item_selection::getItemMaxNum(slot, button),
-    };
+    u8 item = player_item_selection::getItem(slot, button);
+    ItemPresentation presentation = {item, 0, 0, false};
+
+    if (usesArrowCounter(item)) {
+        presentation.count = dComIfGs_getArrowNum();
+        presentation.maxCount = dComIfGs_getArrowMax();
+        presentation.showCount = true;
+    } else if (item == dItemNo_BOMB_ARROW_e) {
+        presentation.count = player_item_selection::getItemNum(slot, button);
+        presentation.maxCount = player_item_selection::getItemMaxNum(slot, button);
+        if (presentation.count > dComIfGs_getArrowNum()) {
+            presentation.count = dComIfGs_getArrowNum();
+        }
+        if (presentation.maxCount < dComIfGs_getArrowMax()) {
+            presentation.maxCount = dComIfGs_getArrowMax();
+        }
+        presentation.showCount = true;
+    } else if (usesSelectionCounter(item)) {
+        presentation.count = player_item_selection::getItemNum(slot, button);
+        presentation.maxCount = player_item_selection::getItemMaxNum(slot, button);
+        presentation.showCount = true;
+    }
+
+    return presentation;
 }
 
 }  // namespace dusk::coop::hud_owner

@@ -10,6 +10,7 @@ struct ItemPresentation {
     u8 item;
     s16 count;
     int maxCount;
+    bool showCount;
 };
 
 PlayerSlot currentSlot();

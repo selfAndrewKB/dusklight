@@ -27,6 +27,7 @@
 #include "m_Do/m_Do_controller_pad.h"
 
 #ifdef TARGET_PC
+#include "dusk/coop/hud_diagnostics.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/coop/ui_owner.h"
 #include "dusk/frame_interpolation.h"
@@ -604,6 +605,13 @@ void dMw_c::key_wait_proc() {
         }
     }
     bool ring_owner_triggered = ring_owner != dusk::coop::PlayerSlot::Invalid;
+    bool ring_owner_scope_ready =
+        !ring_owner_triggered ||
+        !dComIfGp_checkCameraAttentionStatus(
+            dComIfGp_getPlayerCameraID(static_cast<int>(ring_owner)), 8);
+    bool primary_menu_scope_ready = !dComIfGp_checkCameraAttentionStatus(0, 8);
+    bool ring_owner_down_triggered =
+        ring_owner_triggered && mDoCPd_c::getTrigDown(dusk::coop::getPadForSlot(ring_owner));
 #endif
 
     if (field_0x14B != 0) {
@@ -634,7 +642,12 @@ void dMw_c::key_wait_proc() {
         dComIfGp_getMesgStatus() == 0 &&
         dCam_getBody()->Mode() != 7 &&
         dCam_getBody()->Mode() != 8 &&
+#if TARGET_PC
+        // Co-op: retain vanilla P1 menu gating, but let an unscoped P2 request its singular wheel.
+        (primary_menu_scope_ready || (ring_owner_triggered && ring_owner_scope_ready)) &&
+#else
         !dComIfGp_checkCameraAttentionStatus(0, 8) &&
+#endif
         !dComIfGp_isPauseFlag() &&
         isPauseWindow() &&
         isPauseReady() &&
@@ -727,6 +740,9 @@ void dMw_c::key_wait_proc() {
                    dMeter2Info_isWindowAccept(2) &&
                    (dMeter2Info_getMapStatus() == 0 || dMeter2Info_getMapStatus() == 1) &&
                    dMeter2Info_isItemOpenCheck() &&
+#if TARGET_PC
+                   ring_owner_scope_ready &&
+#endif
                    !dComIfGp_isEnableNextStage())
         {
 #if TARGET_PC
@@ -734,14 +750,35 @@ void dMw_c::key_wait_proc() {
             if (ring_owner_triggered) {
                 dusk::coop::ui_owner::retainSingularSlot(ring_owner);
             }
+            // Co-op: capture the transient 2D heap owners around singular-wheel admission so
+            // recovery-state menu failures can be classified without changing vanilla timing.
+            dMeter2_c* meter = dMeter2Info_getMeterClass();
+            dusk::coop::hud_diagnostics::recordRingAdmission(
+                dusk::coop::hud_diagnostics::RingAdmissionPhase::Request,
+                dusk::coop::ui_owner::singularSlot(),
+                meter != NULL && meter->hasPrimaryEmphasisButton(),
+                meter != NULL && meter->hasSecondaryEmphasisButton());
 #endif
             dMsgObject_setKillMessageFlag();
 
             if (dComIfGp_isHeapLockFlag() == 5) {
                 dMeter2Info_getMeterClass()->emphasisButtonDelete();
             }
+#if TARGET_PC
+            dusk::coop::hud_diagnostics::recordRingAdmission(
+                dusk::coop::hud_diagnostics::RingAdmissionPhase::PromptCleanup,
+                dusk::coop::ui_owner::singularSlot(),
+                meter != NULL && meter->hasPrimaryEmphasisButton(),
+                meter != NULL && meter->hasSecondaryEmphasisButton());
+#endif
 
-            if (dMw_DOWN_TRIGGER()) {
+            if (
+#if TARGET_PC
+                ring_owner_down_triggered
+#else
+                dMw_DOWN_TRIGGER()
+#endif
+            ) {
                 field_0x14B = 1;
                 dMw_ring_create(2);
             } else {
@@ -1165,6 +1202,13 @@ void dMw_c::dMw_ring_create(u8 i_origin) {
     // Co-op: the retained singular wheel owner supplies both menu sticks until the wheel closes.
     mpStick->setPad(dusk::coop::ui_owner::currentPad());
     mpCStick->setPad(dusk::coop::ui_owner::currentPad());
+    // Co-op: leave a durable final admission snapshot immediately before wheel allocations begin.
+    dMeter2_c* meter = dMeter2Info_getMeterClass();
+    dusk::coop::hud_diagnostics::recordRingAdmission(
+        dusk::coop::hud_diagnostics::RingAdmissionPhase::Create,
+        dusk::coop::ui_owner::singularSlot(),
+        meter != NULL && meter->hasPrimaryEmphasisButton(),
+        meter != NULL && meter->hasSecondaryEmphasisButton());
 #endif
     mpMenuRing = JKR_NEW dMenu_Ring_c(mpHeap, mpStick, mpCStick, i_origin);
     JUT_ASSERT(2038, mpMenuRing != NULL);

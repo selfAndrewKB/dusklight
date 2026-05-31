@@ -845,7 +845,12 @@ void dMeter2Draw_c::drawCoopSecondaryButtonHud(J2DGrafContext* i_restoreGrafCtx)
     for (int i = 0; i < 2; i++) {
         p2_items[i] = dusk::coop::hud_owner::itemPresentation(i);
         changeTextureItemXY(i, p2_items[i].item);
-        setItemNum(i, p2_items[i].count, p2_items[i].maxCount);
+        if (p2_items[i].showCount) {
+            setItemNum(i, p2_items[i].count, p2_items[i].maxCount);
+            drawItemNum(i, 1.0f);
+        } else {
+            drawItemNum(i, 0.0f);
+        }
     }
 
     const u8 do_status = dusk::coop::hud_owner::buttonStatus(
@@ -888,7 +893,12 @@ void dMeter2Draw_c::drawCoopSecondaryButtonHud(J2DGrafContext* i_restoreGrafCtx)
         dusk::coop::hud_owner::ItemPresentation p1_item =
             dusk::coop::hud_owner::itemPresentation(i);
         changeTextureItemXY(i, p1_item.item);
-        setItemNum(i, p1_item.count, p1_item.maxCount);
+        if (p1_item.showCount) {
+            setItemNum(i, p1_item.count, p1_item.maxCount);
+            drawItemNum(i, 1.0f);
+        } else {
+            drawItemNum(i, 0.0f);
+        }
     }
     dusk::coop::hud_owner::popSlot();
     recordHudReplay(dusk::coop::hud_diagnostics::ReplayPhase::PrimaryRestored,

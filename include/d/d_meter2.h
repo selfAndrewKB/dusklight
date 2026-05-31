@@ -69,6 +69,9 @@ public:
 #if TARGET_PC
     // Co-op: P2 owns a separate center prompt packet so P1/P2 fade state does not collide.
     void moveCoopSecondary2DContents();
+    // Co-op: diagnostics inspect prompt lifetime without exposing mutable meter packets.
+    bool hasPrimaryEmphasisButton() const { return mpEmpButton != NULL; }
+    bool hasSecondaryEmphasisButton() const { return mpCoopEmpButton != NULL; }
 #endif
     void checkSubContents();
     void check2DContents();
