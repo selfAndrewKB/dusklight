@@ -93,6 +93,10 @@ Audit decision:
   framebuffer. Split-screen refreshes that framebuffer texture from the active viewport immediately
   before projection particles draw; this is separate from the later indirect-screen draw list, which
   remains disabled in split-screen because it contains mixed fullscreen weather/effect packets.
+- Refractive water surfaces are submitted through the invisible draw lists and sample the same
+  framebuffer texture. Split-screen refreshes that capture from the active viewport immediately
+  before each invisible-list replay, including the alternate blur ordering, so water does not sample
+  a stale image from another camera.
 
 ### Real-shadow ownership
 

@@ -24,6 +24,14 @@ bool shouldDrawViewportTrim() {
     return true;
 }
 
+bool shouldRefreshInvisibleListFramebuffer() {
+#if TARGET_PC
+    return dusk::coop::camera::isSplitScreenEnabled();
+#else
+    return false;
+#endif
+}
+
 bool shouldRefreshProjectionParticleFramebuffer() {
 #if TARGET_PC
     return dusk::coop::camera::isSplitScreenEnabled();

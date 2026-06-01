@@ -2478,6 +2478,12 @@ int mDoGph_Painter() {
                 if (!(DEBUG && g_kankyoHIO.navy.field_0x30d != 0 &&
                       dKy_darkworld_check() == TRUE)) {
                     if (g_env_light.is_blure == 0) {
+                        if (dusk::coop::render_effects::shouldRefreshInvisibleListFramebuffer()) {
+                            // Co-op: refractive water lives in the invisible lists and samples
+                            // the framebuffer. Refresh from this viewport before replaying it.
+                            retry_captue_frame(&camera_p->view, view_port,
+                                               dComIfGp_getCameraZoomForcus(camera_id));
+                        }
                         GX_DEBUG_GROUP(dComIfGd_drawOpaListInvisible);
                         GX_DEBUG_GROUP(dComIfGd_drawXluListInvisible);
                     }
@@ -2573,6 +2579,12 @@ int mDoGph_Painter() {
                 if (!(DEBUG && g_kankyoHIO.navy.field_0x30d != 0 &&
                       dKy_darkworld_check() == TRUE)) {
                     if (g_env_light.is_blure == 1) {
+                        if (dusk::coop::render_effects::shouldRefreshInvisibleListFramebuffer()) {
+                            // Co-op: the blur branch replays the same framebuffer-backed
+                            // refraction lists later in the tail, after its viewport is active.
+                            retry_captue_frame(&camera_p->view, view_port,
+                                               dComIfGp_getCameraZoomForcus(camera_id));
+                        }
                         GX_DEBUG_GROUP(dComIfGd_drawOpaListInvisible);
                         GX_DEBUG_GROUP(dComIfGd_drawXluListInvisible);
                     }
