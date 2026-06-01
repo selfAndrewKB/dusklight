@@ -56,6 +56,7 @@
 #include "dusk/action_bindings.h"
 #include "dusk/coop/alink_probes.h"
 #include "dusk/coop/camera.h"
+#include "dusk/coop/horse_owner.h"
 #include "dusk/coop/input.h"
 #include "dusk/coop/player_attention.h"
 #include "dusk/coop/player_button_status.h"
@@ -9852,7 +9853,8 @@ void daAlink_c::setPlayerPosAndAngle(const cXyz* i_pos, s16 i_angle, BOOL param_
         }
 
         if (checkHorseRide()) {
-            daHorse_c* horse = dComIfGp_getHorseActor();
+            // Co-op: live rider repositioning must move the retained slot-assigned Epona.
+            daHorse_c* horse = daAlink_getHorseForRider(this);
             horse->setHorsePosAndAngle(&current.pos, shape_angle.y);
         } else if (checkSpinnerRide()) {
             fopAc_ac_c* rideActor = mRideAcKeep.getActor();
@@ -9992,7 +9994,7 @@ void daAlink_c::setStickData() {
                 mDemo.setMoveAngle(getSceneExitMoveAngle());
 
                 if (checkHorseRide()) {
-                    dComIfGp_getHorseActor()->changeDemoMoveAngle(mDemo.getMoveAngle());
+                    daAlink_getHorseForRider(this)->changeDemoMoveAngle(mDemo.getMoveAngle());
                 }
             } else {
                 mStickValue = 0.0f;
@@ -14518,7 +14520,7 @@ int daAlink_c::checkSceneChange(int i_exitID) {
                 exit_speed = 15.0f;
                 demo_stick = 0.6f;
             } else {
-                exit_speed = dComIfGp_getHorseActor()->getNormalMaxSpeedF();
+                exit_speed = daAlink_getHorseForRider(this)->getNormalMaxSpeedF();
                 demo_stick = 1.0f;
             }
         } else if (checkWolf()) {
@@ -14606,7 +14608,7 @@ int daAlink_c::checkSceneChange(int i_exitID) {
 
                     mDemo.setMoveAngle(getSceneExitMoveAngle());
                     if (is_horse_ride) {
-                        daHorse_c* horse = dComIfGp_getHorseActor();
+                        daHorse_c* horse = daAlink_getHorseForRider(this);
                         horse->changeOriginalDemo();
                         horse->changeDemoMode(6, 0);
                         horse->changeDemoMoveAngle(mDemo.getMoveAngle());
@@ -14933,7 +14935,7 @@ BOOL daAlink_c::setItemActor() {
 
     if (checkBombItem(mEquipItem)) {
         if (checkHorseRide()) {
-            if (dComIfGp_getHorseActor()->checkNoBombProc()
+            if (daAlink_getHorseForRider(this)->checkNoBombProc()
                 #if PLATFORM_GCN
                 && (mProcID != PROC_HORSE_TURN || !checkModeFlg(MODE_DISABLE_ITEMS))
                 #endif
@@ -18530,8 +18532,9 @@ int daAlink_c::execute() {
         *mCcStts.GetCCMoveP() = field_0x372c * var_f26;
     }
 
-    if (checkHorseRide() && checkBoarSingleBattle() && dComIfGp_getHorseActor() != NULL) {
-        shape_angle.y = dComIfGp_getHorseActor()->shape_angle.y;
+    daHorse_c* riddenHorse = checkHorseRide() ? daAlink_getHorseForRider(this) : NULL;
+    if (riddenHorse != NULL && checkBoarSingleBattle()) {
+        shape_angle.y = riddenHorse->shape_angle.y;
         current.angle.y = shape_angle.y;
     } else if (checkMagneBootsOn()) {
         shape_angle.y = field_0x3118;
@@ -19981,7 +19984,7 @@ void daAlink_c::shadowDraw() {
 
         u32 shadowID;
         if (checkHorseRide()) {
-            shadowID = ((daHorse_c*)dComIfGp_getHorseActor())->getShadowID();
+            shadowID = daAlink_getHorseForRider(this)->getShadowID();
             if (shadowID != 0) {
                 dComIfGd_addRealShadow(shadowID, mpLinkModel);
             }

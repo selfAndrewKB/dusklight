@@ -1425,6 +1425,7 @@ set(DUSK_FILES
         include/dusk/coop/event_owner.h
         include/dusk/coop/hud_owner.h
         include/dusk/coop/hud_diagnostics.h
+        include/dusk/coop/horse_owner.h
         include/dusk/coop/interaction_owner.h
         include/dusk/coop/gibdo_state_probe.h
         include/dusk/coop/input.h
@@ -1455,6 +1456,7 @@ set(DUSK_FILES
         src/dusk/coop/event_owner.cpp
         src/dusk/coop/hud_owner.cpp
         src/dusk/coop/hud_diagnostics.cpp
+        src/dusk/coop/horse_owner.cpp
         src/dusk/coop/interaction_owner.cpp
         src/dusk/coop/gibdo_state_probe.cpp
         src/dusk/coop/player_query.cpp

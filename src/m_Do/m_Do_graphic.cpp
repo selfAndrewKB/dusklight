@@ -58,6 +58,7 @@
 #include "d/actor/d_a_horse.h"
 #include "dusk/coop/camera.h"
 #include "dusk/coop/debug_overlay.h"
+#include "dusk/coop/horse_owner.h"
 #include "dusk/coop/player_attention.h"
 #include "dusk/dusk.h"
 #include "dusk/endian.h"
@@ -2377,10 +2378,9 @@ int mDoGph_Painter() {
 
 #if TARGET_PC
             if (dusk::frame_interp::is_enabled()) {
-                // FRAME INTERP NOTE: Currently only recalculating points for Epona's reins. Need a more global solution.
-                if (daHorse_c* horse = dComIfGp_getHorseActor()) {
-                    horse->lerpControlPoints(dusk::frame_interp::get_interpolation_step());
-                }
+                // Co-op: every registered Epona owns an independent rein simulation snapshot.
+                dusk::coop::horse_owner::lerpRegisteredHorseReins(
+                    dusk::frame_interp::get_interpolation_step());
                 g_dComIfG_gameInfo.drawlist.refresh3DlineMats(camera_p->view.lookat.eye);
             }
 #endif

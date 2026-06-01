@@ -32,6 +32,23 @@ static fopAc_ac_c* daAlink_searchCoach(fopAc_ac_c* i_actor, void* i_data) {
     return NULL;
 }
 
+static daHorse_c* daAlink_getHorseForRider(daAlink_c* player) {
+#if TARGET_PC
+    // Co-op: live horseback behavior follows the retained ride actor, then the slot-assigned horse.
+    if (player != NULL && player->checkHorseRide()) {
+        fopAc_ac_c* rideActor = player->getRideActor();
+        if (rideActor != NULL && fopAcM_GetName(rideActor) == fpcNm_HORSE_e) {
+            return (daHorse_c*)rideActor;
+        }
+    }
+
+    return dusk::coop::horse_owner::getHorseForPlayer(player);
+#else
+    UNUSED(player);
+    return dComIfGp_getHorseActor();
+#endif
+}
+
 BOOL daAlink_c::checkHorseZeldaBowMode() {
     if (dComIfGp_getHorseActor() == NULL) {
         return false;
@@ -178,15 +195,16 @@ int daAlink_c::initForceRideBoar() {
 void daAlink_c::initForceRideHorse() {
     commonInitForceRideRein();
     mRideStatus = RIDETYPE_HORSE;
-    mRideAcKeep.setData(dComIfGp_getHorseActor());
+    daHorse_c* horse = daAlink_getHorseForRider(this);
+    mRideAcKeep.setData(horse);
     field_0x384c = (cXyz*)&l_horseBaseAnime;
-    dComIfGp_getHorseActor()->onRideFlg();
+    horse->onRideFlg();
     mZ2Link.setRiding(true);
 }
 
 void daAlink_c::rideGetOff() {
     if (checkHorseRide()) {
-        daHorse_c* horse_p = dComIfGp_getHorseActor();
+        daHorse_c* horse_p = daAlink_getHorseForRider(this);
         if (horse_p != NULL) {
             horse_p->offRideFlg();
         }
@@ -337,7 +355,7 @@ BOOL daAlink_c::checkHorseNotGrab() const {
 }
 
 void daAlink_c::setHorseStirrup() {
-    daHorse_c* horse = dComIfGp_getHorseActor();
+    daHorse_c* horse = daAlink_getHorseForRider(this);
     if (horse == NULL || (!checkHorseRide() && (mProcID != PROC_TOOL_DEMO || field_0x2fab == 0))) {
         return;
     }
@@ -373,7 +391,7 @@ void daAlink_c::changeBoarRunRide() {
 }
 
 int daAlink_c::setSyncHorsePos() {
-    daHorse_c* horse_p = dComIfGp_getHorseActor();
+    daHorse_c* horse_p = daAlink_getHorseForRider(this);
 
     if (horse_p == NULL) {
         if (mProcID == PROC_DEAD || mProcID == PROC_GET_ITEM) {
@@ -528,7 +546,7 @@ BOOL daAlink_c::setSyncRidePos() {
 }
 
 void daAlink_c::setHorseTurnAnime() {
-    daHorse_c* horse = dComIfGp_getHorseActor();
+    daHorse_c* horse = daAlink_getHorseForRider(this);
     u16 anm_idx = horse->getAnmIdx(0);
 
     daAlink_ANM anm;
@@ -559,10 +577,15 @@ void daAlink_c::setHorseTurnAnime() {
 }
 
 void daAlink_c::getBaseHorseAnime(daAlink_c::daAlink_ANM* i_anmList) {
-    daHorse_c* horse = dComIfGp_getHorseActor();
+    daHorse_c* horse = daAlink_getHorseForRider(this);
 
     if (checkHorseNoUpperAnime() || checkUpperHorseLieAnime()) {
+#if TARGET_PC
+        // Co-op: horseback subject mode belongs to this ALINK slot.
+        if (!dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x2000)) {
+#else
         if (!dComIfGp_checkPlayerStatus0(0, 0x2000)) {
+#endif
             if (checkShieldGet()) {
                 setRStatus(BUTTON_STATUS_DEFEND);
             } else {
@@ -623,7 +646,7 @@ void daAlink_c::getBaseHorseAnime(daAlink_c::daAlink_ANM* i_anmList) {
 }
 
 int daAlink_c::checkHorseSpecialProc() {
-    daHorse_c* horse_p = dComIfGp_getHorseActor();
+    daHorse_c* horse_p = daAlink_getHorseForRider(this);
 
     if (!checkHorseRide()) {
         return 0;
@@ -658,7 +681,7 @@ BOOL daAlink_c::checkHorseServiceWaitAnime() {
 }
 
 int daAlink_c::setSyncHorse(int param_0) {
-    daHorse_c* horse_p = dComIfGp_getHorseActor();
+    daHorse_c* horse_p = daAlink_getHorseForRider(this);
     daPy_frameCtrl_c* framectrl1 = &mUnderFrameCtrl[0];
     daPy_frameCtrl_c* framectrl2 = &mUnderFrameCtrl[2];
 
@@ -902,7 +925,7 @@ int daAlink_c::setSyncBoar(int param_0) {
 
 int daAlink_c::setSyncRide(int param_0) {
     if (param_0 && mMidnaTalkDelayTimer == 0 && getDoStatus() == BUTTON_STATUS_NONE &&
-        (!checkHorseRide() || dComIfGp_getHorseActor()->getAnmIdx(0) != 7))
+        (!checkHorseRide() || daAlink_getHorseForRider(this)->getAnmIdx(0) != 7))
     {
         param_0 = TRUE;
     } else {
@@ -937,7 +960,7 @@ int daAlink_c::setSyncRide(int param_0) {
 }
 
 void daAlink_c::setBaseHorseAnimeFrame() {
-    daHorse_c* horse = dComIfGp_getHorseActor();
+    daHorse_c* horse = daAlink_getHorseForRider(this);
     BOOL var_r27 = FALSE;
 
     f32 anm_frame;
@@ -998,7 +1021,7 @@ void daAlink_c::setBaseBoarAnime() {
 
 void daAlink_c::setBaseRideAnime() {
     if (checkHorseRide()) {
-        daHorse_c* horse_p = dComIfGp_getHorseActor();
+        daHorse_c* horse_p = daAlink_getHorseForRider(this);
         daAlink_ANM anmList[3];
         getBaseHorseAnime(anmList);
         setDoubleAnime(horse_p->getBlendRate(), 1.0f, 1.0f, anmList[0], anmList[1], 10,
@@ -1010,7 +1033,7 @@ void daAlink_c::setBaseRideAnime() {
 }
 
 bool daAlink_c::checkHorseSwordUpSpped() {
-    daHorse_c* horse_p = dComIfGp_getHorseActor();
+    daHorse_c* horse_p = daAlink_getHorseForRider(this);
     return horse_p->speedF > horse_p->getLashMaxSpeedF() * 0.89999998f;
 }
 
@@ -1195,8 +1218,8 @@ int daAlink_c::checkNextActionHorse() {
         return procHorseComebackInit();
     }
 
-    if (mProcID == PROC_HORSE_JUMP && dComIfGp_getHorseActor() != NULL &&
-        dComIfGp_getHorseActor()->checkJump())
+    daHorse_c* horse = daAlink_getHorseForRider(this);
+    if (mProcID == PROC_HORSE_JUMP && horse != NULL && horse->checkJump())
     {
         return 1;
     }
@@ -1209,12 +1232,13 @@ int daAlink_c::checkNextActionHorse() {
 }
 
 BOOL daAlink_c::checkHorseGetOff() {
-    return (checkHorseRide() && dComIfGp_getHorseActor() != NULL && ((daHorse_c*)dComIfGp_getHorseActor())->checkGetOff()) ||
+    daHorse_c* horse = daAlink_getHorseForRider(this);
+    return (checkHorseRide() && horse != NULL && horse->checkGetOff()) ||
            (checkBoarRide() && ((e_wb_class*)mRideAcKeep.getActor()) != NULL && ((e_wb_class*)mRideAcKeep.getActor())->checkGetOff());
 }
 
 int daAlink_c::checkHorseGetOffAndSetDoStatus() {
-    daHorse_c* horse = dComIfGp_getHorseActor();
+    daHorse_c* horse = daAlink_getHorseForRider(this);
     int off_direction = DIR_FORWARD;
     BOOL isGetOff = checkHorseGetOff();
 
@@ -1247,7 +1271,7 @@ int daAlink_c::checkHorseGetOffAndSetDoStatus() {
 }
 
 int daAlink_c::setHorseGetOff(int param_0) {
-    daHorse_c* horse_p = dComIfGp_getHorseActor();
+    daHorse_c* horse_p = daAlink_getHorseForRider(this);
 
     if (getDoStatus() == BUTTON_STATUS_DISMOUNT && doTrigger()) {
         if ((checkHorseRide() && horse_p->checkEnemySearch()) || checkHorseLieAnime()) {
@@ -1743,7 +1767,7 @@ int daAlink_c::procHorseTurnInit() {
 }
 
 int daAlink_c::procHorseTurn() {
-    daHorse_c* horse = dComIfGp_getHorseActor();
+    daHorse_c* horse = daAlink_getHorseForRider(this);
     if (!setSyncRidePos()) {
         return 1;
     }
@@ -1836,7 +1860,7 @@ int daAlink_c::procHorseJumpInit() {
 }
 
 int daAlink_c::procHorseJump() {
-    daHorse_c* horse_p = dComIfGp_getHorseActor();
+    daHorse_c* horse_p = daAlink_getHorseForRider(this);
 
     if (!setSyncRidePos()) {
         return 1;
@@ -1866,7 +1890,7 @@ int daAlink_c::procHorseLandInit() {
 }
 
 int daAlink_c::procHorseLand() {
-    daHorse_c* horse_p = dComIfGp_getHorseActor();
+    daHorse_c* horse_p = daAlink_getHorseForRider(this);
 
     if (!setSyncRidePos()) {
         return 1;
@@ -2489,7 +2513,12 @@ int daAlink_c::procHorseHookshotSubjectInit() {
     setHookshotReadyMaterial();
     #endif
 
+#if TARGET_PC
+    // Co-op: horseback hookshot camera state belongs to the acting ALINK slot.
+    dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x4000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x4000);
+#endif
     return 1;
 }
 
@@ -2527,7 +2556,12 @@ int daAlink_c::procHorseHookshotMoveInit() {
     setSyncRidePos();
     setBaseRideAnime();
     initHookshotUpperAnimeSpeed(0);
+#if TARGET_PC
+    // Co-op: horseback hookshot camera state belongs to the acting ALINK slot.
+    dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x4000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x4000);
+#endif
     return 1;
 }
 
@@ -2571,7 +2605,7 @@ int daAlink_c::procHorseBottleDrinkInit(u16 i_itemNo) {
     setBaseRideAnime();
 
     if (checkHorseRide()) {
-        daHorse_c* horse = dComIfGp_getHorseActor();
+        daHorse_c* horse = daAlink_getHorseForRider(this);
         horse->changeOriginalDemo();
         horse->changeDemoMode(0xE, 0);
     } else {
@@ -2583,7 +2617,12 @@ int daAlink_c::procHorseBottleDrinkInit(u16 i_itemNo) {
 
     keepItemData();
     setBottleModel(i_itemNo);
+#if TARGET_PC
+    // Co-op: horseback bottle camera state belongs to the acting ALINK slot.
+    dusk::coop::player_camera_status::setStatus1ForPlayer(this, 0x2000);
+#else
     dComIfGp_setPlayerStatus1(0, 0x2000);
+#endif
 
     field_0x319c = 1;
     dCam_getBody()->StartEventCamera(0x12, fopAcM_GetID(this), "Type", 1, &field_0x319c, nullptr);
@@ -2592,8 +2631,6 @@ int daAlink_c::procHorseBottleDrinkInit(u16 i_itemNo) {
 }
 
 int daAlink_c::procHorseBottleDrink() {
-    daHorse_c* horse = dComIfGp_getHorseActor();
-
     if (!setSyncRidePos()) {
         resetUpperAnime(UPPER_2, 3.0f);
         returnKeepItemData();
@@ -2624,7 +2661,7 @@ int daAlink_c::procHorseKandelaarPourInit() {
     field_0x3478 = mRideAcKeep.getActor()->speedF;
 
     if (checkHorseRide()) {
-        daHorse_c* horse = dComIfGp_getHorseActor();
+        daHorse_c* horse = daAlink_getHorseForRider(this);
         horse->changeOriginalDemo();
         horse->changeDemoMode(1, 0);
     } else {
@@ -2640,8 +2677,9 @@ int daAlink_c::procHorseKandelaarPour() {
     if (!setSyncRidePos()) {
         mRideAcKeep.getActor()->speedF = field_0x3478;
     
-        if (checkHorseRide() && dComIfGp_getHorseActor() != NULL) {
-            dComIfGp_getHorseActor()->cancelOriginalDemo();
+        daHorse_c* horse = daAlink_getHorseForRider(this);
+        if (checkHorseRide() && horse != NULL) {
+            horse->cancelOriginalDemo();
         }
     
         resetUpperAnime(UPPER_2, 3.0f);
@@ -2654,7 +2692,7 @@ int daAlink_c::procHorseKandelaarPour() {
 
     if (commonKandelaarPour(1) && checkHorseRide()) {
         mRideAcKeep.getActor()->speedF = field_0x3478;
-        dComIfGp_getHorseActor()->cancelOriginalDemo();
+        daAlink_getHorseForRider(this)->cancelOriginalDemo();
     }
 
     return 1;
@@ -2713,7 +2751,7 @@ int daAlink_c::procHorseRunInit() {
 }
 
 int daAlink_c::procHorseRun() {
-    daHorse_c* horse = dComIfGp_getHorseActor();
+    daHorse_c* horse = daAlink_getHorseForRider(this);
     if (!setSyncHorsePos()) {
         mDoAud_changeSubBgmStatus(1);
         return 1;

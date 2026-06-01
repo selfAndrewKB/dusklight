@@ -91,6 +91,7 @@ to the requesting player slot.
 | "What is this player slot locked onto or allowed to target?" | `dusk::coop::player_attention` | V1 gives additional ALINK actors their own `dAttention_c`; lock acquisition/status gating, owner target-capability masks, owner camera gameplay, cursor drawing, and actor-observed "am I locked-on?" checks use the same attention owner while P1 remains on global attention for HUD/story compatibility |
 | "What Do/A/R/Z/3D action status should this ALINK consume?" | `dusk::coop::player_button_status` | First pass implemented for ALINK gameplay prompt state; P1 forwards to vanilla globals and additional slots store sidecar values |
 | "Which X/Y items has this player assigned?" | `dusk::coop::player_item_selection` | Implemented as runtime sidecar assignments for additional slots with P1 forwarding to vanilla globals; inventory and consumable pools remain shared |
+| "Which runtime Epona belongs to this player slot or rider?" | `dusk::coop::horse_owner` | First clone-lifecycle checkpoint implemented: authored Epona remains canonical for story/save compatibility and additional slots receive slot-assigned runtime clones; mounted ALINK, camera, collision, and world-tag routing remain active work |
 | "Which player's prompt/item state is this HUD/meter pass presenting?" | `dusk::coop::hud_owner` | Split-screen prompt and assigned-item HUD replay reads the slot-local button state and item snapshots while full independent inventory/menu/meter duplication remains deferred |
 | "Which slot owns this transient overlay, delayed reticle packet, or singular item wheel?" | `dusk::coop::ui_owner` | Implemented for scoped presentation slots, retained singular UI ownership, viewport-local projection/draw helpers, Hawkeye scope, ALINK live reticles, boomerang lock markers, and fishing forced-wheel entry |
 | "Which player owns first-person/item camera status?" | `dusk::coop::player_camera_status` over `dusk::coop::camera` | First pass implemented for slot-local status 0/1 bits, camera attention bits, subject zoom/focus, bow/slingshot, Hawkeye, iron ball subject mode, hookshot subject/hang/flight status, and MG_ROD camera/cast status |
@@ -131,6 +132,12 @@ to the requesting player slot.
 - **Player item selection:** runtime X/Y assignment and mix-item indexes for each player slot. P1
   forwards to vanilla globals; additional slots retain session-local choices while inventory and
   consumable counts remain shared.
+- **Horse owner:** slot-assigned runtime Epona identity. Keep the authored horse canonical for
+  story/save paths, then ask `horse_owner` for rider-local movement, call, camera, rein, render, and
+  clone-lifecycle questions. Runtime clones also localize mutable BCK wrappers, and horse model
+  evaluation rebinds the actor-local matrix calculator before using shared model data. Physical
+  background checks need the initiating horse actor, not a guess from the canonical horse and not
+  an iteration over every registered horse.
 - **HUD owner:** meter/prompt presentation ownership. It decides which slot's prompt state is being
   drawn for the active HUD viewport, not who is eligible to interact or who accepted an event. Keep
   prompt eligibility in `interaction_owner` and accepted event input in `event_owner`.

@@ -2,6 +2,7 @@
 
 #include "aurora/gfx.h"
 #include "d/actor/d_a_alink.h"
+#include "d/actor/d_a_horse.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_item.h"
 #include "dusk/coop/alink_probes.h"
@@ -13,6 +14,7 @@
 #include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/gibdo_state_probe.h"
 #include "dusk/coop/hud_diagnostics.h"
+#include "dusk/coop/horse_owner.h"
 #include "dusk/coop/input.h"
 #include "dusk/coop/player_attention.h"
 #include "dusk/coop/player_query.h"
@@ -456,6 +458,43 @@ json playerStatusEventKey(const json& data) {
         {"attention_lock", data.value("attention_lock", false)},
         {"secondary_attention_lock", data.value("secondary_attention_lock", false)},
         {"secondary_proc", data.value("secondary_proc", 0)},
+    };
+}
+
+json horseOwnerActorIdentityEventData(const json& data) {
+    json eventData = actorIdentityEventData(data);
+    eventData.erase("attention_flags");
+    return eventData;
+}
+
+json horseOwnerEventKey(const json& data) {
+    json slots = json::array();
+    if (data.contains("slots") && data["slots"].is_array()) {
+        for (const json& slot : data["slots"]) {
+            slots.push_back({
+                {"slot", slot.value("slot", -1)},
+                {"horse", horseOwnerActorIdentityEventData(slot.value("horse", json::object()))},
+                {"player", horseOwnerActorIdentityEventData(slot.value("player", json::object()))},
+                {"retained_ride_actor",
+                 horseOwnerActorIdentityEventData(
+                     slot.value("retained_ride_actor", json::object()))},
+                {"canonical", slot.value("canonical", false)},
+                {"runtime_clone", slot.value("runtime_clone", false)},
+                {"spawn_pending", slot.value("spawn_pending", false)},
+                {"pending_spawn_id", slot.value("pending_spawn_id", 0u)},
+                {"riding", slot.value("riding", false)},
+                {"localized_animation_count", slot.value("localized_animation_count", 0)},
+                {"owner_mismatch", slot.value("owner_mismatch", false)},
+                {"retained_horse_mismatch", slot.value("retained_horse_mismatch", false)},
+            });
+        }
+    }
+
+    return {
+        {"schema_version", data.value("schema_version", 1)},
+        {"canonical_horse", data.value("canonical_horse", "0x0")},
+        {"duplicate_retained_horse", data.value("duplicate_retained_horse", false)},
+        {"slots", slots},
     };
 }
 
@@ -952,6 +991,9 @@ json eventKeyForProvider(const char* provider, const json& data) {
     if (name == "player.slots") {
         return playerSlotsEventKey(data);
     }
+    if (name == "horse.owner") {
+        return horseOwnerEventKey(data);
+    }
     if (name == "input.pad") {
         return inputPadEventKey(data);
     }
@@ -1293,6 +1335,88 @@ json attentionListSummary(dAttList_c* entries, int capacity) {
         list.push_back(entry);
     }
     return list;
+}
+
+json collectHorseOwner() {
+    json slots = json::array();
+    daHorse_c* retainedHorses[coop::kPlayerSlotCount] = {};
+    bool duplicateRetainedHorse = false;
+    for (int i = 0; i < coop::kPlayerSlotCount; i++) {
+        const coop::PlayerSlot slot = static_cast<coop::PlayerSlot>(i);
+        daHorse_c* horse = coop::horse_owner::getHorse(slot);
+        daAlink_c* player = static_cast<daAlink_c*>(coop::getPlayer(slot));
+        fopAc_ac_c* rideActor = player != nullptr ? player->getRideActor() : nullptr;
+        daHorse_c* retainedHorse =
+            rideActor != nullptr && fopAcM_GetName(rideActor) == fpcNm_HORSE_e
+                ? static_cast<daHorse_c*>(rideActor)
+                : nullptr;
+        retainedHorses[i] = retainedHorse;
+        for (int previous = 0; previous < i; previous++) {
+            if (retainedHorse != nullptr && retainedHorse == retainedHorses[previous]) {
+                duplicateRetainedHorse = true;
+            }
+        }
+        const fpc_ProcID pendingSpawnId = coop::horse_owner::getPendingHorseSpawnId(slot);
+        const coop::horse_owner::HorseReinSimulationState* reins =
+            coop::horse_owner::getReinSimulationState(horse);
+
+        json slotData = {
+            {"slot", i},
+            {"horse", actorSummary(horse)},
+            {"player", actorSummary(player)},
+            {"retained_ride_actor", actorSummary(rideActor)},
+            {"canonical", coop::horse_owner::isCanonicalHorse(horse)},
+            {"runtime_clone", coop::horse_owner::isAdditionalHorse(horse)},
+            {"spawn_pending", pendingSpawnId != fpcM_ERROR_PROCESS_ID_e},
+            {"pending_spawn_id", static_cast<unsigned int>(pendingSpawnId)},
+            {"owner_mismatch", horse != nullptr &&
+                                   coop::horse_owner::getPlayerForHorse(horse) != player},
+            {"retained_horse_mismatch", retainedHorse != nullptr && retainedHorse != horse},
+        };
+
+        if (horse != nullptr) {
+            slotData["speed_f"] = horse->speedF;
+            slotData["process"] = static_cast<unsigned int>(horse->getProcID());
+            slotData["riding"] = horse->isRidden();
+            slotData["lash_count"] = static_cast<int>(horse->getLashCount());
+            slotData["rein_point_count"] = horse->getReinPointCount();
+            slotData["localized_animation_count"] =
+                coop::horse_owner::getLocalizedAnimationCount(horse);
+            slotData["animations"] = json::array({
+                {
+                    {"index", static_cast<unsigned int>(horse->getAnmIdx(0))},
+                    {"frame", horse->getAnmFrame(0)},
+                    {"frame_max", horse->getAnmFrameMax(0)},
+                },
+                {
+                    {"index", static_cast<unsigned int>(horse->getAnmIdx(1))},
+                    {"frame", horse->getAnmFrame(1)},
+                    {"frame_max", horse->getAnmFrameMax(1)},
+                },
+                {
+                    {"index", static_cast<unsigned int>(horse->getAnmIdx(2))},
+                    {"frame", horse->getAnmFrame(2)},
+                    {"frame_max", horse->getAnmFrameMax(2)},
+                },
+            });
+        }
+        if (reins != nullptr) {
+            slotData["rein_interp"] = {
+                {"previous_valid", reins->previousValid},
+                {"current_valid", reins->currentValid},
+                {"previous_count", reins->previousCount},
+                {"current_count", reins->currentCount},
+            };
+        }
+        slots.push_back(slotData);
+    }
+
+    return {
+        {"schema_version", 1},
+        {"canonical_horse", ptrString(reinterpret_cast<uintptr_t>(dComIfGp_getHorseActor()))},
+        {"duplicate_retained_horse", duplicateRetainedHorse},
+        {"slots", slots},
+    };
 }
 
 json attentionObjectSummary(dAttention_c* attention, int slot) {
@@ -2164,6 +2288,7 @@ Provider s_providers[] = {
     {"render.windows", 1, "cheap", 1, true, 20, 8192, collectRenderWindows},
     {"camera.state", 1, "cheap", 1, true, 20, 8192, collectCameraState},
     {"player.slots", 1, "cheap", 1, true, 120, 8192, collectPlayerSlots},
+    {"horse.owner", 1, "cheap", 1, true, 120, 12288, collectHorseOwner},
     {"input.pad", 1, "cheap", 1, true, 120, 4096, collectInputPad},
     {"attention.state", 2, "medium", 5, true, 60, 32768, collectAttentionState},
     {"player.status", 1, "cheap", 1, true, 120, 8192, collectPlayerStatus},

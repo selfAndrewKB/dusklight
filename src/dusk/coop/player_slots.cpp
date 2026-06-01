@@ -1,6 +1,7 @@
 #include "dusk/coop/player_slots.h"
 
 #include "dusk/coop/camera.h"
+#include "dusk/coop/horse_owner.h"
 #include "dusk/coop/player_item_selection.h"
 #include "dusk/logging.h"
 #include "d/actor/d_a_alink.h"
@@ -61,6 +62,10 @@ void registerPlayer(PlayerSlot slot, fopAc_ac_c* actor) {
         camera::syncSecondaryPlayerAssignment();
         camera::ensureSecondaryCamera();
     }
+
+    if (slot != PlayerSlot::Primary) {
+        horse_owner::ensureHorseForSlot(slot);
+    }
 }
 
 void unregisterPlayer(PlayerSlot slot, const fopAc_ac_c* actor) {
@@ -71,6 +76,10 @@ void unregisterPlayer(PlayerSlot slot, const fopAc_ac_c* actor) {
     const int index = slotIndex(slot);
     fopAc_ac_c*& registered_actor = s_players[index];
     if (registered_actor == actor) {
+        if (slot != PlayerSlot::Primary) {
+            horse_owner::releaseHorseForSlot(slot);
+        }
+
         registered_actor = nullptr;
         CoopLog.debug("unregistered player slot {} actor 0x{:x}", index,
                       reinterpret_cast<uintptr_t>(actor));

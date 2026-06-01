@@ -30,6 +30,7 @@
 
 #if TARGET_PC
 #include "dusk/coop/camera.h"
+#include "dusk/coop/horse_owner.h"
 #include "dusk/coop/player_attention.h"
 #include "dusk/coop/player_camera_status.h"
 #include "dusk/frame_interpolation.h"
@@ -70,6 +71,27 @@ inline static daAlink_c* camera_player_link(fopAc_ac_c* actor) {
     return daAlink_getAlinkActorClass();
 }
 
+static daHorse_c* horseForCameraPlayer(fopAc_ac_c* actor) {
+#if TARGET_PC
+    // Co-op: horseback camera state follows this viewport's retained or slot-assigned Epona.
+    if (actor != NULL && is_player(actor)) {
+        daAlink_c* player = (daAlink_c*)actor;
+        fopAc_ac_c* rideActor = player->getRideActor();
+        if (player->checkHorseRide() && rideActor != NULL &&
+            fopAcM_GetName(rideActor) == fpcNm_HORSE_e)
+        {
+            return (daHorse_c*)rideActor;
+        }
+
+        return dusk::coop::horse_owner::getHorseForPlayer(player);
+    }
+#else
+    UNUSED(actor);
+#endif
+
+    return dComIfGp_getHorseActor();
+}
+
 static dAttention_c* attentionForCameraPlayer(fopAc_ac_c* actor) {
 #if TARGET_PC
     // Co-op: camera 1 must consume the same slot-local attention state as its ALINK owner.
@@ -86,8 +108,10 @@ static void hideActor(fopAc_ac_c* actor) {
         dComIfGp_onCameraAttentionStatus(0, 2);
         daPy_py_c* player = (daPy_py_c*)actor;
         if (player->checkHorseRide()) {
-            daHorse_c* horse = dComIfGp_getHorseActor();
-            fopAcM_OnStatus(horse, fopAcStts_NODRAW_e);
+            daHorse_c* horse = horseForCameraPlayer(actor);
+            if (horse != NULL) {
+                fopAcM_OnStatus(horse, fopAcStts_NODRAW_e);
+            }
         }
     } else {
         fopAcM_OnStatus(actor, fopAcStts_NODRAW_e);
@@ -2021,7 +2045,7 @@ s32 dCamera_c::nextType(s32 i_curType) {
             }
 
             daAlink_c* link = camera_player_link(mpPlayerActor);
-            daHorse_c* horse = dComIfGp_getHorseActor();
+            daHorse_c* horse = horseForCameraPlayer(mpPlayerActor);
 
             bool bVar2 = false;
             bool bVar1 = false;
@@ -5369,7 +5393,7 @@ bool dCamera_c::lockonCamera(s32 param_0) {
     }
 
     if (player->checkHorseRide()) {
-        daHorse_c* horse = dComIfGp_getHorseActor();
+        daHorse_c* horse = horseForCameraPlayer(mpPlayerActor);
         if (horse != NULL && horse->getLashDashStart()) {
             onHorseDush();
             lockon->field_0x44 = 16;
@@ -8958,7 +8982,7 @@ bool dCamera_c::rideCamera(s32 param_0) {
         wk->field_0xa0 = 0;
 
         if (player->checkHorseRide()) {
-            wk->field_0xa0 = dComIfGp_getHorseActor();
+            wk->field_0xa0 = horseForCameraPlayer(mpPlayerActor);
             wk->field_0x98 = (daHorse_c*)wk->field_0xa0;
             wk->field_0x00 = 0;
         } else if (player->checkCargoCarry()) {
