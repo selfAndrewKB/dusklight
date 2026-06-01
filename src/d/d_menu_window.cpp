@@ -1241,8 +1241,13 @@ bool dMw_c::dMw_ring_delete() {
     checkMemSize();
 #if TARGET_PC
     // Co-op: do not let a closed wheel leave later singular UI reads bound to P2.
-    mpStick->setPad(PAD_1);
-    mpCStick->setPad(PAD_1);
+    // Scene teardown deletes these controls before it deletes the ring.
+    if (mpStick != NULL) {
+        mpStick->setPad(PAD_1);
+    }
+    if (mpCStick != NULL) {
+        mpCStick->setPad(PAD_1);
+    }
     dusk::coop::ui_owner::clearSingularSlot();
 #endif
     return true;
