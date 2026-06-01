@@ -15,6 +15,13 @@
 #include "d/d_pane_class.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "JSystem/J2DGraph/J2DOrthoGraph.h"
+#include "dusk/coop/camera.h"
+#include "dusk/coop/hud_owner.h"
+#include "dusk/coop/ui_owner.h"
+#endif
+
 dMeterHakusha_c::dMeterHakusha_c(void* i_screen) {
     field_0x004 = (J2DScreen*)i_screen;
     _create();
@@ -65,6 +72,15 @@ int dMeterHakusha_c::_create() {
     }
 
     mHakushaNum = dMeter2Info_getHorseLifeCount();
+#if TARGET_PC
+    for (int slot = 1; slot < dusk::coop::kPlayerSlotCount; slot++) {
+        coop_hakusha_state& state = mCoopHakushaState[slot - 1];
+        std::memset(&state, 0, sizeof(state));
+        dusk::coop::hud_owner::pushSlot(static_cast<dusk::coop::PlayerSlot>(slot));
+        state.num = dusk::coop::hud_owner::horseLifeCount();
+        dusk::coop::hud_owner::popSlot();
+    }
+#endif
 
     mpButtonScreen = JKR_NEW J2DScreen();
     JUT_ASSERT(0, mpButtonScreen != NULL);
@@ -103,7 +119,30 @@ int dMeterHakusha_c::_create() {
 
 int dMeterHakusha_c::_execute(u32 i_flags) {
     updateHakusha();
+#if TARGET_PC
     alphaAnimeHakusha(i_flags);
+    coop_alpha_state primaryAlpha[3];
+    captureAlphaState(primaryAlpha);
+
+    for (int slot = 1; slot < dusk::coop::kPlayerSlotCount; slot++) {
+        coop_hakusha_state& state = mCoopHakushaState[slot - 1];
+        applyAlphaState(state.alpha);
+        dusk::coop::hud_owner::pushSlot(static_cast<dusk::coop::PlayerSlot>(slot));
+        updateHakushaState(state.data, state.animFrame, &state.num, state.status,
+                           dusk::coop::hud_owner::horseLifeCount());
+        // Co-op: advance this rider's native spur visibility using their slot-local prompt state.
+        alphaAnimeHakushaState(
+            i_flags,
+            dusk::coop::hud_owner::buttonStatus(
+                dusk::coop::player_button_status::ButtonStatusKind::Do));
+        dusk::coop::hud_owner::popSlot();
+        captureAlphaState(state.alpha);
+    }
+
+    applyAlphaState(primaryAlpha);
+#else
+    alphaAnimeHakusha(i_flags);
+#endif
     return 1;
 }
 
@@ -111,37 +150,86 @@ void dMeterHakusha_c::draw() {
     J2DGrafContext* graf_ctx = dComIfGp_getCurrentGrafPort();
     graf_ctx->setup2D();
 
+#if TARGET_PC
+    if (!dusk::coop::camera::isSplitScreenEnabled()) {
+        drawHakushaState(graf_ctx, mHakushaData, mHakushaAnimFrame, mHakushaStatus);
+        return;
+    }
+
+    // Co-op: split-screen replay draws only the riders represented by each viewport.
+    dusk::coop::hud_owner::pushSlot(dusk::coop::PlayerSlot::Primary);
+    if (dusk::coop::hud_owner::isHorseMeterVisible()) {
+        drawHakushaState(graf_ctx, mHakushaData, mHakushaAnimFrame, mHakushaStatus);
+    }
+    dusk::coop::hud_owner::popSlot();
+
+    for (int slot = 1; slot < dusk::coop::kPlayerSlotCount; slot++) {
+        // Co-op: do not let an unallocated extra viewport fall back to P1's camera during replay.
+        if (slot >= dComIfGp_getWindowNum()) {
+            continue;
+        }
+
+        const dusk::coop::PlayerSlot playerSlot = static_cast<dusk::coop::PlayerSlot>(slot);
+        dusk::coop::hud_owner::pushSlot(playerSlot);
+        if (dusk::coop::hud_owner::isHorseMeterVisible()) {
+            dusk::coop::ui_owner::ViewportState viewportState;
+            J2DOrthoGraph graph;
+            if (dusk::coop::ui_owner::beginViewport(playerSlot, &viewportState)) {
+                if (dusk::coop::ui_owner::setViewportGraph(playerSlot, &graph)) {
+                    // Co-op: replay the same native spur presenter with this viewport's horse state.
+                    coop_hakusha_state& state = mCoopHakushaState[slot - 1];
+                    coop_alpha_state primaryAlpha[3];
+                    captureAlphaState(primaryAlpha);
+                    applyAlphaState(state.alpha);
+                    drawHakushaState(&graph, state.data, state.animFrame, state.status);
+                    applyAlphaState(primaryAlpha);
+                }
+                // Co-op: setPort restores the ortho graph but also resets GX viewport state.
+                // Reapply the saved P1 viewport afterward so later HUD packets stay in P1's window.
+                graf_ctx->setPort();
+                dusk::coop::ui_owner::endViewport(viewportState);
+            }
+        }
+        dusk::coop::hud_owner::popSlot();
+    }
+#else
+    drawHakushaState(graf_ctx, mHakushaData, mHakushaAnimFrame, mHakushaStatus);
+#endif
+}
+
+void dMeterHakusha_c::drawHakushaState(J2DGrafContext* graf_ctx, hakusha_data* data,
+                                       f32* animFrame, u8* status) {
     mpButtonA->translate(mButtonAPosX, mButtonAPosY);
     mpButtonScreen->draw(0.0f, 0.0f, graf_ctx);
 
     for (int i = 0; i < getHakushaNum(); i++) {
-        if (mHakushaData[i].flags & 1) {
+        if (data[i].flags & 1) {
             mpHakushaOn->show();
         } else {
             mpHakushaOn->hide();
         }
 
-        if (mHakushaData[i].flags & 2) {
+        if (data[i].flags & 2) {
             mpHakushaOff->show();
         } else {
             mpHakushaOff->hide();
         }
 
-        mpHakushaOn->translate(mHakushaData[i].pos_x, mHakushaData[i].pos_y);
-        mpHakushaOff->translate(mHakushaData[i].pos_x, mHakushaData[i].pos_y);
+        mpHakushaOn->translate(data[i].pos_x, data[i].pos_y);
+        mpHakushaOff->translate(data[i].pos_x, data[i].pos_y);
         mpHakushaScreen->draw(0.0f, 0.0f, graf_ctx);
 
-        if (mHakushaData[i].flags != 0 && mHakushaAnimFrame[i] != 0.0f) {
+        if (data[i].flags != 0 && animFrame[i] != 0.0f) {
             Vec center = mpHakushaOn->getGlobalVtxCenter(false, 0);
 
-            if (mHakushaStatus[i] == 0) {
+            if (status[i] == 0) {
                 dMeter2Info_getMeterClass()->getMeterDrawPtr()->drawPikariHakusha(
-                    center.x, center.y, mHakushaAnimFrame[i], g_drawHIO.mSpurIconPikariScale,
+                    center.x, center.y, animFrame[i], g_drawHIO.mSpurIconPikariScale,
                     g_drawHIO.mSpurIconPikariFrontOuter, g_drawHIO.mSpurIconPikariFrontInner,
                     g_drawHIO.mSpurIconPikariBackOuter, g_drawHIO.mSpurIconPikariBackInner);
             } else {
                 dMeter2Info_getMeterClass()->getMeterDrawPtr()->drawPikariHakusha(
-                    center.x, center.y, mHakushaAnimFrame[i],
+                    center.x, center.y, animFrame[i],
                     g_drawHIO.mSpurIconRevivePikariScale,
                     g_drawHIO.mSpurIconRevivePikariFrontOuter,
                     g_drawHIO.mSpurIconRevivePikariFrontInner,
@@ -181,12 +269,22 @@ int dMeterHakusha_c::_delete() {
 }
 
 void dMeterHakusha_c::alphaAnimeHakusha(u32 i_flags) {
+#if TARGET_PC
+    alphaAnimeHakushaState(i_flags, dComIfGp_getDoStatus());
+}
+
+void dMeterHakusha_c::alphaAnimeHakushaState(u32 i_flags, u8 doStatus) {
+#endif
     if ((i_flags & 0x4000) || (i_flags & 0x40) || (i_flags & 0x100000) || (i_flags & 0x1000) ||
         (i_flags & 8) || (i_flags & 0x10) || (i_flags & 0x20) || (i_flags & 0x04000000) ||
         (i_flags & 0x08000000) || (i_flags & 0x01000000) || !(i_flags & 0x02000000) ||
         (strcmp(dComIfGp_getStartStageName(), "F_SP00") == 0 &&
          dComIfG_play_c::getLayerNo(0) == 4) ||
+#if TARGET_PC
+        (doStatus != 9 && doStatus != 0))
+#else
         (dComIfGp_getDoStatus() != 9 && dComIfGp_getDoStatus() != 0))
+#endif
     {
         setAlphaHakushaAnimeMin();
         setAlphaButtonAnimeMin();
@@ -194,14 +292,42 @@ void dMeterHakusha_c::alphaAnimeHakusha(u32 i_flags) {
     }
 
     setAlphaHakushaAnimeMax();
+#if TARGET_PC
+    if (doStatus == 9) {
+#else
     if (dComIfGp_getDoStatus() == 9) {
+#endif
         setAlphaButtonAnimeMax();
     } else {
         setAlphaButtonAnimeMin();
     }
 }
 
+#if TARGET_PC
+void dMeterHakusha_c::captureAlphaState(coop_alpha_state* state) {
+    CPaneMgr* panes[] = {mpHakushaOn, mpHakushaOff, mpButtonA};
+    for (int i = 0; i < 3; i++) {
+        state[i].rate = panes[i]->getAlphaRate();
+        state[i].timer = panes[i]->getAlphaTimer();
+    }
+}
+
+void dMeterHakusha_c::applyAlphaState(const coop_alpha_state* state) {
+    CPaneMgr* panes[] = {mpHakushaOn, mpHakushaOff, mpButtonA};
+    for (int i = 0; i < 3; i++) {
+        panes[i]->setAlphaRate(state[i].rate);
+        panes[i]->alphaAnimeStart(state[i].timer);
+    }
+}
+#endif
+
 void dMeterHakusha_c::updateHakusha() {
+    updateHakushaState(mHakushaData, mHakushaAnimFrame, &mHakushaNum, mHakushaStatus,
+                       dMeter2Info_getHorseLifeCount());
+}
+
+void dMeterHakusha_c::updateHakushaState(hakusha_data* data, f32* animFrame, s16* hakushaNum,
+                                         u8* status, s16 horseLifeCount) {
     Vec sp2C = mpHakushaPos[0]->getGlobalVtxCenter(false, 0);
     Vec sp20 = mpHakushaPos[5]->getGlobalVtxCenter(false, 0);
 
@@ -210,61 +336,57 @@ void dMeterHakusha_c::updateHakusha() {
 
     f32 temp_f28 = (sp20.x - sp2C.x) / (f32)getHakushaNum();
 
-    if (mHakushaNum != dMeter2Info_getHorseLifeCount()) {
-        if (mHakushaNum > dMeter2Info_getHorseLifeCount()) {
-            mHakushaAnimFrame[dMeter2Info_getHorseLifeCount()] =
+    if (*hakushaNum != horseLifeCount) {
+        if (*hakushaNum > horseLifeCount) {
+            animFrame[horseLifeCount] =
                 18.0f - g_drawHIO.mSpurIconPikariAnimSpeed;
-            mHakushaStatus[dMeter2Info_getHorseLifeCount()] = 0;
-        } else if (mHakushaNum < dMeter2Info_getHorseLifeCount()) {
-            for (int i = mHakushaNum; i < dMeter2Info_getHorseLifeCount(); i++) {
-                mHakushaAnimFrame[i] = 18.0f - g_drawHIO.mSpurIconRevivePikariAnimSpeed;
-                mHakushaStatus[i] = 1;
+            status[horseLifeCount] = 0;
+        } else if (*hakushaNum < horseLifeCount) {
+            for (int i = *hakushaNum; i < horseLifeCount; i++) {
+                animFrame[i] = 18.0f - g_drawHIO.mSpurIconRevivePikariAnimSpeed;
+                status[i] = 1;
             }
         }
 
-        mHakushaNum = dMeter2Info_getHorseLifeCount();
+        *hakushaNum = horseLifeCount;
     }
 
     for (int i = 0; i < getHakushaNum(); i++) {
-        if (mHakushaAnimFrame[i] > 0.0f) {
-            if (mHakushaStatus[i] == 0) {
-                mHakushaAnimFrame[i] += g_drawHIO.mSpurIconPikariAnimSpeed;
+        if (animFrame[i] > 0.0f) {
+            if (status[i] == 0) {
+                animFrame[i] += g_drawHIO.mSpurIconPikariAnimSpeed;
             } else {
-                mHakushaAnimFrame[i] += g_drawHIO.mSpurIconRevivePikariAnimSpeed;
+                animFrame[i] += g_drawHIO.mSpurIconRevivePikariAnimSpeed;
             }
 
-            if (mHakushaAnimFrame[i] > 28.0f) {
-                mHakushaAnimFrame[i] = 0.0f;
+            if (animFrame[i] > 28.0f) {
+                animFrame[i] = 0.0f;
             }
         }
 
-        mHakushaData[i].pos_x = abtn_x_offset;
-        mHakushaData[i].pos_y = abtn_y_offset;
+        data[i].pos_x = abtn_x_offset;
+        data[i].pos_y = abtn_y_offset;
 
         if (mpHakushaOn->getAlpha() == 0) {
-            mHakushaData[i].flags &= ~0x1;
-        } else if (i < dMeter2Info_getHorseLifeCount() ||
-                   (mHakushaAnimFrame[i] != 0.0f && mHakushaAnimFrame[i] <= 20.0f &&
-                    mHakushaStatus[i] == 0) ||
-                   (mHakushaAnimFrame[i] != 0.0f && mHakushaAnimFrame[i] > 20.0f &&
-                    mHakushaStatus[i] == 1))
+            data[i].flags &= ~0x1;
+        } else if (i < horseLifeCount ||
+                   (animFrame[i] != 0.0f && animFrame[i] <= 20.0f && status[i] == 0) ||
+                   (animFrame[i] != 0.0f && animFrame[i] > 20.0f && status[i] == 1))
         {
-            mHakushaData[i].flags |= 0x1;
+            data[i].flags |= 0x1;
         } else {
-            mHakushaData[i].flags &= ~0x1;
+            data[i].flags &= ~0x1;
         }
 
         if (mpHakushaOff->getAlpha() == 0) {
-            mHakushaData[i].flags &= ~0x2;
-        } else if (i < dMeter2Info_getHorseLifeCount() ||
-                   (mHakushaAnimFrame[i] != 0.0f && mHakushaAnimFrame[i] <= 20.0f &&
-                    mHakushaStatus[i] == 0) ||
-                   (mHakushaAnimFrame[i] != 0.0f && mHakushaAnimFrame[i] > 20.0f &&
-                    mHakushaStatus[i] == 1))
+            data[i].flags &= ~0x2;
+        } else if (i < horseLifeCount ||
+                   (animFrame[i] != 0.0f && animFrame[i] <= 20.0f && status[i] == 0) ||
+                   (animFrame[i] != 0.0f && animFrame[i] > 20.0f && status[i] == 1))
         {
-            mHakushaData[i].flags &= ~0x2;
+            data[i].flags &= ~0x2;
         } else {
-            mHakushaData[i].flags |= 0x2;
+            data[i].flags |= 0x2;
         }
 
         abtn_x_offset += temp_f28;

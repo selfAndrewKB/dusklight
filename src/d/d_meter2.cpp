@@ -26,6 +26,7 @@
 
 #if TARGET_PC
 #include "dusk/coop/camera.h"
+#include "dusk/coop/horse_owner.h"
 #include "dusk/coop/player_button_status.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/memory.h"
@@ -680,10 +681,14 @@ void dMeter2_c::checkStatus() {
             mStatus |= 0x8000;
         } else if (dComIfGp_checkPlayerStatus0(0, 0x4000000)) {
             mStatus |= 0x10000;
+#if TARGET_PC
+        } else if (dusk::coop::horse_owner::anyHorseNeedsLashMeter()) {
+            // Co-op: create the native spur presenter when any registered rider needs it.
+#else
         } else if (daPy_getPlayerActorClass()->checkHorseRideNotReady() &&
                    dComIfGp_getHorseActor() != NULL &&
-                   !dComIfGp_getHorseActor()->checkRodeoMode())
-        {
+                   !dComIfGp_getHorseActor()->checkRodeoMode()) {
+#endif
             mStatus |= 0x2000000;
         }
     }

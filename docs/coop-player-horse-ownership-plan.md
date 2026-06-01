@@ -42,8 +42,9 @@ slot-assigned runtime Epona, current rider, any active horse, or horse-local col
 - Horse scene-exit collection executes once per horse but writes through the global singleton.
 - Special-wall background collision receives horse pass flags after the calling horse PID has been
   discarded. It needs an explicit horse-local collision context, not an iteration over every horse.
-- `dMeter2Info_setHorseLifeCount()` is written from horse execution and remains one global meter
-  field. Independent lash presentation is a later HUD-owner question.
+- `dMeter2Info_setHorseLifeCount()` remains the canonical horse's vanilla global meter field.
+  Additional horses now present their horse-local lash counts through `hud_owner` while replaying
+  the same native spur presenter into their viewport.
 - Manual split-screen testing exposed a rein-presentation ownership leak: the visible floating reins
   disappeared when P1 entered horseback first-person mode alongside P1's normally suppressed model,
   even when observing from P2. The correct fix was not rein-specific submission filtering or local
@@ -102,6 +103,8 @@ daHorse_c* getHorseForPlayer(const daAlink_c* player);
 daAlink_c* getPlayerForHorse(const daHorse_c* horse);
 PlayerSlot getSlotForHorse(const daHorse_c* horse);
 bool isCanonicalHorse(const daHorse_c* horse);
+bool shouldPresentLashMeter(PlayerSlot slot);
+bool anyHorseNeedsLashMeter();
 
 void ensureHorseForSlot(PlayerSlot slot);
 void ensureAdditionalHorses();
@@ -166,6 +169,10 @@ Implementation status:
 - Runtime clones localize mutable BCK wrappers while sharing immutable archive animation data.
   Every horse model evaluation rebinds the calling actor's matrix calculator onto the shared
   model-data root joint.
+- The native spur presenter now resolves lash counts through `hud_owner` and replays one presenter
+  with independent per-slot animation and pane-alpha state into each mounted player's viewport.
+  P1 keeps the vanilla global count and alpha lifecycle; runtime clones present their horse-local
+  lash count and slot-local visibility without creating a second shared-pane presenter.
 - Authored Zelda-horse helpers and scene-start campaign placement intentionally remain canonical.
 - Manual mounted-gameplay validation is still required before this checkpoint is considered
   complete.
@@ -180,7 +187,8 @@ Manual proof:
 
 - Fix scene-exit area collection so each horse fills its own buffer.
 - Route horse jump tags, horse-region switches, and physical gate interactions through registered
-  horses where the rule is "any active horse."
+  horses where the rule is "any active horse." Horse jump tags now run their native trigger test
+  for every registered horse; region switches and physical gates remain to audit.
 - Preserve the initiating horse identity through special-wall background collision checks.
 - Review collision callbacks that still ask P1 after already receiving the colliding ALINK.
 
@@ -258,8 +266,6 @@ Continuous position, speed, and rein values belong in `latest.json`, not the eve
 
 - Whether players should ever be allowed to cross-mount another slot's Epona. V1 deliberately keeps
   slot assignment strict for deterministic ownership.
-- Whether P2 needs a dedicated lash meter in the first mounted-gameplay pass or whether the meter
-  can remain canonical until the broader HUD pass.
 - Whether authored canonical-Epona reposition tags should also reposition runtime clones.
 - Which enemy horseback/minigame reads should remain campaign-authoritative and which should react
   to any mounted player.

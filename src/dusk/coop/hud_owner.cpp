@@ -1,8 +1,11 @@
 #include "dusk/coop/hud_owner.h"
 
+#include "d/actor/d_a_horse.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_item_data.h"
+#include "d/d_meter2_info.h"
 #include "dusk/coop/camera.h"
+#include "dusk/coop/horse_owner.h"
 #include "dusk/coop/player_item_selection.h"
 #include "dusk/coop/ui_owner.h"
 
@@ -86,6 +89,20 @@ ItemPresentation itemPresentation(int button) {
     }
 
     return presentation;
+}
+
+s16 horseLifeCount() {
+    PlayerSlot slot = currentSlot();
+    if (slot == PlayerSlot::Primary) {
+        return dMeter2Info_getHorseLifeCount();
+    }
+
+    daHorse_c* horse = horse_owner::getHorse(slot);
+    return horse != nullptr ? horse->getLashCount() : dMeter2Info_getHorseLifeCount();
+}
+
+bool isHorseMeterVisible() {
+    return horse_owner::shouldPresentLashMeter(currentSlot());
 }
 
 }  // namespace dusk::coop::hud_owner

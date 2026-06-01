@@ -23,5 +23,7 @@ u8 buttonFlag(player_button_status::ButtonStatusKind kind);
 u8 threeDStatus();
 u8 threeDDirection();
 ItemPresentation itemPresentation(int button);
+s16 horseLifeCount();
+bool isHorseMeterVisible();
 
 }  // namespace dusk::coop::hud_owner

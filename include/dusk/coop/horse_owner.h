@@ -39,6 +39,19 @@ daAlink_c* getPlayerForHorse(const daHorse_c* horse);
 PlayerSlot getSlotForHorse(const daHorse_c* horse);
 bool isCanonicalHorse(const daHorse_c* horse);
 bool isAdditionalHorse(const daHorse_c* horse);
+bool shouldPresentLashMeter(PlayerSlot slot);
+bool anyHorseNeedsLashMeter();
+
+template <typename Func>
+void forEachRegisteredHorse(Func fn) {
+    for (int i = 0; i < kPlayerSlotCount; i++) {
+        PlayerSlot slot = static_cast<PlayerSlot>(i);
+        daHorse_c* horse = getHorse(slot);
+        if (horse != nullptr) {
+            fn(slot, horse);
+        }
+    }
+}
 
 void ensureHorseForSlot(PlayerSlot slot);
 void ensureAdditionalHorses();

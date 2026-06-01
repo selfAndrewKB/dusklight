@@ -208,6 +208,26 @@ bool isAdditionalHorse(const daHorse_c* horse) {
            isAdditionalHorseSpawnRequest(horse);
 }
 
+bool shouldPresentLashMeter(PlayerSlot slot) {
+    daHorse_c* horse = getHorse(slot);
+    if (horse == nullptr || horse->checkRodeoMode()) {
+        return false;
+    }
+
+    daAlink_c* player = getPlayerForHorse(horse);
+    return player != nullptr && player->checkHorseRideNotReady();
+}
+
+bool anyHorseNeedsLashMeter() {
+    for (int i = 0; i < kPlayerSlotCount; i++) {
+        if (shouldPresentLashMeter(static_cast<PlayerSlot>(i))) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 void ensureHorseForSlot(PlayerSlot slot) {
     HorseSlotState* state = stateForSlot(slot);
     daHorse_c* canonical = getHorse(PlayerSlot::Primary);
