@@ -106,9 +106,20 @@ void diffModelKankyoMaterial(J3DModel* model, dKy_tevstr_c* tevstr) {
     if (refresh_tex_mtx) {
         model->getModelData()->simpleCalcMaterial((MtxP)j3dDefaultMtx);
     }
-    const int tex_gen_num = refresh_tex_mtx ? 2 : 0;
-    model->mDiffFlag =
-        J3D_DIFF_FLAG(1, 1, 1, 8, tex_gen_num, 0, 0, 0, 1, 1, 0, 0, 1, 0);
+
+    // Co-op: preserve the allocation contract of the model's native differed display list while
+    // excluding texture-number and sampler-adjacent state owned by normal model entry.
+    u32 refresh_diff_flag =
+        original_diff_flag &
+        (J3DDiffFlag_MatColor | J3DDiffFlag_ColorChan | J3DDiffFlag_AmbColor |
+         J3DDiffFlag_TevReg | J3DDiffFlag_KonstColor | J3DDiffFlag_Fog);
+    refresh_diff_flag |= J3D_DIFF_LIGHTOBJNUM(getDiffFlag_LightObjNum(original_diff_flag));
+    if (refresh_tex_mtx) {
+        refresh_diff_flag |=
+            J3D_DIFF_TEXGENNUM(std::min<u32>(2, getDiffFlag_TexGenNum(original_diff_flag)));
+    }
+
+    model->mDiffFlag = refresh_diff_flag;
     model->diff();
     model->mDiffFlag = original_diff_flag;
 }
