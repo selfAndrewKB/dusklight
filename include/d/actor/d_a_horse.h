@@ -356,6 +356,8 @@ public:
     u8 getProcID() const { return m_procID; }
     s16 getLashCount() const { return m_lashCnt; }
     int getReinPointCount() const { return field_0x1204; }
+    const cXyz* getReinPoints() { return m_reinLine.getPos(0); }
+    const mDoExt_3DlineMat_c* getReinLineMaterial() const { return &m_reinLine; }
     bool isRidden() const { return checkStateFlg0(FLG0_UNK_1); }
 #endif
 

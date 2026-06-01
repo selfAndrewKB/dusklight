@@ -27,6 +27,7 @@
 #include <cstring>
 #include "dusk/logging.h"
 #include "dusk/frame_interpolation.h"
+#include "dusk/coop/line_render_diagnostics.h"
 
 u8 mDoExt::CurrentHeapAdjustVerbose;
 u8 mDoExt::HeapAdjustVerbose;
@@ -2803,6 +2804,9 @@ void mDoExt_3DlineMat1_c::update(int param_0, f32 param_1, GXColor& param_2, u16
 #endif
 
     view_class* sp_3c = dComIfGd_getView();
+#if TARGET_PC
+    const cXyz& lineEye = presentationEye != nullptr ? *presentationEye : sp_3c->lookat.eye;
+#endif
     mDoExt_3Dline_c* sp_38 = mpLines;
     f32 local_f27 = param_3 != 0 ? param_1 / param_3 : 0.0f;
 
@@ -2856,7 +2860,6 @@ void mDoExt_3DlineMat1_c::update(int param_0, f32 param_1, GXColor& param_2, u16
         }
 
 #if TARGET_PC
-        const cXyz& lineEye = (presentationEye != nullptr && dusk::frame_interp::is_enabled()) ? *presentationEye : sp_3c->lookat.eye;
         sp_13c = *local_r27 - lineEye;
 #else
         sp_13c = *local_r27 - sp_3c->lookat.eye;
@@ -2947,6 +2950,13 @@ void mDoExt_3DlineMat1_c::update(int param_0, f32 param_1, GXColor& param_2, u16
         DCStoreRangeNoSync(sp_24, sp_34);
         DCStoreRangeNoSync(sp_20, sp_30);
         DCStoreRangeNoSync(sp_18, sp_2c);
+#if TARGET_PC
+        // Co-op: capture post-expansion ribbon geometry so split-screen presentation defects can
+        // be distinguished from actor-owned control-point simulation.
+        dusk::coop::line_render_diagnostics::recordExpansion(
+            this, getMaterialID(), mInterpLineKind, sp_14, sp_38[0].field_0x0, sp_24, field_0x34,
+            lineEye, presentationEye != nullptr);
+#endif
         sp_38++;
     }
 }
@@ -2991,6 +3001,9 @@ void mDoExt_3DlineMat1_c::update(int param_0, GXColor& param_2, dKy_tevstr_c* pa
 #endif
 
     view_class* stack_3c = dComIfGd_getView();
+#if TARGET_PC
+    const cXyz& lineEye = presentationEye != nullptr ? *presentationEye : stack_3c->lookat.eye;
+#endif
     mDoExt_3Dline_c* sp_38 = mpLines;
     f32 local_f30;
     f32 local_f29;
@@ -3016,7 +3029,7 @@ void mDoExt_3DlineMat1_c::update(int param_0, GXColor& param_2, dKy_tevstr_c* pa
         local_r27 = sp_38[0].field_0x0;
         size_p = sp_38->field_0x4;
 #if TARGET_PC
-        if (presentationEye != nullptr && dusk::frame_interp::is_enabled() && size_p == NULL) {
+        if (presentationEye != nullptr && size_p == NULL) {
             sp_38 += 1;
             continue;
         }
@@ -3035,7 +3048,6 @@ void mDoExt_3DlineMat1_c::update(int param_0, GXColor& param_2, dKy_tevstr_c* pa
         local_f30 = sp_130.abs();
         local_f31 += local_f30 * 0.1f;
 #if TARGET_PC
-        const cXyz& lineEye = (presentationEye != nullptr && dusk::frame_interp::is_enabled()) ? *presentationEye : stack_3c->lookat.eye;
         sp_13c = local_r27[0] - lineEye;
 #else
         sp_13c = local_r27[0] - stack_3c->lookat.eye;
@@ -3105,15 +3117,22 @@ void mDoExt_3DlineMat1_c::update(int param_0, GXColor& param_2, dKy_tevstr_c* pa
         DCStoreRangeNoSync(sp_24, sp_34);
         DCStoreRangeNoSync(sp_20, sp_30);
         DCStoreRangeNoSync(sp_18, sp_2c);
+#if TARGET_PC
+        // Co-op: capture post-expansion ribbon geometry so split-screen presentation defects can
+        // be distinguished from actor-owned control-point simulation.
+        dusk::coop::line_render_diagnostics::recordExpansion(
+            this, getMaterialID(), mInterpLineKind, sp_14, sp_38[0].field_0x0, sp_24, field_0x34,
+            lineEye, presentationEye != nullptr);
+#endif
         sp_38 += 1;
     }
 }
 
 #if TARGET_PC
 void mDoExt_3DlineMat1_c::refreshGeometryForPresentationEye(const cXyz& eye) {
-    if (!dusk::frame_interp::is_enabled()) {
-        return;
-    }
+    // Co-op: record per-viewport ribbon refresh dispatch without changing presentation behavior.
+    dusk::coop::line_render_diagnostics::recordPresentationRefreshRequest(this, mInterpLineKind,
+                                                                          eye);
     if (mInterpLineKind == 1) {
         update(field_0x34, mInterpLineF, mColor, mInterpLineU16, mpTevStr, &eye);
     } else if (mInterpLineKind == 2) {

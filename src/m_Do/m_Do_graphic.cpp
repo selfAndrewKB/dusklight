@@ -2381,6 +2381,10 @@ int mDoGph_Painter() {
                 // Co-op: every registered Epona owns an independent rein simulation snapshot.
                 dusk::coop::horse_owner::lerpRegisteredHorseReins(
                     dusk::frame_interp::get_interpolation_step());
+            }
+            if (split_screen_active || dusk::frame_interp::is_enabled()) {
+                // Co-op: textured ribbons face the active camera, so every split viewport needs
+                // its own expansion even when frame interpolation is disabled.
                 g_dComIfG_gameInfo.drawlist.refresh3DlineMats(camera_p->view.lookat.eye);
             }
 #endif

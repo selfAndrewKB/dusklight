@@ -44,6 +44,16 @@ slot-assigned runtime Epona, current rider, any active horse, or horse-local col
   discarded. It needs an explicit horse-local collision context, not an iteration over every horse.
 - `dMeter2Info_setHorseLifeCount()` is written from horse execution and remains one global meter
   field. Independent lash presentation is a later HUD-owner question.
+- Manual split-screen testing exposed a rein-presentation ownership leak: the visible floating reins
+  disappeared when P1 entered horseback first-person mode alongside P1's normally suppressed model,
+  even when observing from P2. The correct fix was not rein-specific submission filtering or local
+  line-point rewriting; it was restoring the native per-viewport ribbon expansion lifecycle.
+- Bounded `render.lines` diagnostics confirmed that both mounted horses submit finite, horse-local
+  rein materials, but neither received a presentation-eye expansion while frame interpolation was
+  disabled. Textured 3D ribbons are camera-facing geometry: split-screen replay must rebuild every
+  submitted textured ribbon for the active viewport eye regardless of interpolation state. Keep
+  horse control-point interpolation conditional on frame interpolation; keep viewport expansion
+  conditional on split-screen replay or interpolation.
 
 ## Ownership Boundary
 

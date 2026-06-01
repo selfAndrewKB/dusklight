@@ -16,6 +16,7 @@
 #include "dusk/coop/hud_diagnostics.h"
 #include "dusk/coop/horse_owner.h"
 #include "dusk/coop/input.h"
+#include "dusk/coop/line_render_diagnostics.h"
 #include "dusk/coop/player_attention.h"
 #include "dusk/coop/player_query.h"
 #include "dusk/coop/player_slots.h"
@@ -33,6 +34,7 @@
 #include "nlohmann/json.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <ctime>
 #include <deque>
 #include <fstream>
@@ -994,6 +996,26 @@ json eventKeyForProvider(const char* provider, const json& data) {
     if (name == "horse.owner") {
         return horseOwnerEventKey(data);
     }
+    if (name == "render.lines") {
+        json records = json::array();
+        for (const json& record : data.value("records", json::array())) {
+            records.push_back({
+                {"material", record.value("material", "")},
+                {"material_id", record.value("material_id", -1)},
+                {"line_kind", record.value("line_kind", 0)},
+                {"line_index", record.value("line_index", 0)},
+                {"point_count", record.value("point_count", 0)},
+                {"presentation_refresh", record.value("presentation_refresh", false)},
+                {"control_non_finite_count", record.value("control_non_finite_count", 0)},
+                {"expanded_non_finite_count", record.value("expanded_non_finite_count", 0)},
+                {"suspicious", record.value("suspicious", false)},
+            });
+        }
+        return {
+            {"schema_version", data.value("schema_version", 1)},
+            {"records", records},
+        };
+    }
     if (name == "input.pad") {
         return inputPadEventKey(data);
     }
@@ -1337,6 +1359,48 @@ json attentionListSummary(dAttList_c* entries, int capacity) {
     return list;
 }
 
+json reinPointSummary(const cXyz* points, int count, const cXyz& horsePos) {
+    constexpr f32 kFarPointDistance = 2000.0f;
+    constexpr f32 kLongSegmentDistance = 1000.0f;
+    constexpr f32 kDistanceBucketSize = 100.0f;
+    int nonFiniteCount = 0;
+    f32 maxDistance = 0.0f;
+    f32 maxSegment = 0.0f;
+    for (int i = 0; points != nullptr && i < count; i++) {
+        const cXyz& point = points[i];
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
+            nonFiniteCount++;
+            continue;
+        }
+
+        const f32 distance = point.abs(horsePos);
+        if (distance > maxDistance) {
+            maxDistance = distance;
+        }
+        if (i > 0) {
+            const f32 segment = point.abs(points[i - 1]);
+            if (segment > maxSegment) {
+                maxSegment = segment;
+            }
+        }
+    }
+
+    const bool farPoint = maxDistance > kFarPointDistance;
+    const bool longSegment = maxSegment > kLongSegmentDistance;
+    json summary = {
+        {"non_finite_count", nonFiniteCount},
+        {"far_from_horse", farPoint},
+        {"long_segment", longSegment},
+        {"max_distance_bucket", static_cast<int>(maxDistance / kDistanceBucketSize)},
+        {"max_segment_bucket", static_cast<int>(maxSegment / kDistanceBucketSize)},
+    };
+    if (nonFiniteCount != 0 || farPoint || longSegment) {
+        summary["max_distance"] = maxDistance;
+        summary["max_segment"] = maxSegment;
+    }
+    return summary;
+}
+
 json collectHorseOwner() {
     json slots = json::array();
     daHorse_c* retainedHorses[coop::kPlayerSlotCount] = {};
@@ -1379,7 +1443,14 @@ json collectHorseOwner() {
             slotData["process"] = static_cast<unsigned int>(horse->getProcID());
             slotData["riding"] = horse->isRidden();
             slotData["lash_count"] = static_cast<int>(horse->getLashCount());
-            slotData["rein_point_count"] = horse->getReinPointCount();
+            const int reinPointCount = horse->getReinPointCount();
+            slotData["rein_point_count"] = reinPointCount;
+            slotData["rein_material"] =
+                ptrString(reinterpret_cast<uintptr_t>(horse->getReinLineMaterial()));
+            slotData["rein_points"] =
+                reinPointSummary(horse->getReinPoints(), reinPointCount, horse->current.pos);
+            slotData["rein_suppressed_by_subjectivity"] =
+                horse->isRidden() && player != nullptr && player->checkHorseSubjectivity();
             slotData["localized_animation_count"] =
                 coop::horse_owner::getLocalizedAnimationCount(horse);
             slotData["animations"] = json::array({
@@ -1407,12 +1478,15 @@ json collectHorseOwner() {
                 {"previous_count", reins->previousCount},
                 {"current_count", reins->currentCount},
             };
+            slotData["rein_snapshot"] =
+                reinPointSummary(reins->current, reins->currentCount,
+                                 horse != nullptr ? horse->current.pos : cXyz::Zero);
         }
         slots.push_back(slotData);
     }
 
     return {
-        {"schema_version", 1},
+        {"schema_version", 2},
         {"canonical_horse", ptrString(reinterpret_cast<uintptr_t>(dComIfGp_getHorseActor()))},
         {"duplicate_retained_horse", duplicateRetainedHorse},
         {"slots", slots},
@@ -2282,13 +2356,66 @@ json collectHudPresentation() {
     };
 }
 
+json collectRenderLines() {
+    constexpr f32 kWideRibbonDistance = 500.0f;
+    constexpr f32 kLongSegmentDistance = 1000.0f;
+    constexpr f32 kDistanceBucketSize = 10.0f;
+    json records = json::array();
+    const coop::line_render_diagnostics::ExpansionRecord* expansions =
+        coop::line_render_diagnostics::getRecords();
+    const int count = coop::line_render_diagnostics::getRecordCount();
+    for (int i = 0; i < count; i++) {
+        const coop::line_render_diagnostics::ExpansionRecord& expansion = expansions[i];
+        const bool suspicious = expansion.controlNonFiniteCount != 0 ||
+                                expansion.expandedNonFiniteCount != 0 ||
+                                expansion.maxControlSegment > kLongSegmentDistance ||
+                                expansion.maxExpandedWidth > kWideRibbonDistance;
+        json record = {
+            {"material", ptrString(expansion.material)},
+            {"material_id", expansion.materialId},
+            {"line_kind", expansion.lineKind},
+            {"line_index", expansion.lineIndex},
+            {"point_count", expansion.pointCount},
+            {"presentation_refresh", expansion.presentationRefresh},
+            {"actor_expansion_count", expansion.actorExpansionCount},
+            {"presentation_refresh_request_count", expansion.presentationRefreshRequestCount},
+            {"presentation_expansion_count", expansion.presentationExpansionCount},
+            {"last_presentation_eye",
+             {expansion.lastPresentationEye.x, expansion.lastPresentationEye.y,
+              expansion.lastPresentationEye.z}},
+            {"control_non_finite_count", expansion.controlNonFiniteCount},
+            {"expanded_non_finite_count", expansion.expandedNonFiniteCount},
+            {"max_control_segment_bucket",
+             static_cast<int>(expansion.maxControlSegment / kDistanceBucketSize)},
+            {"max_expanded_width_bucket",
+             static_cast<int>(expansion.maxExpandedWidth / kDistanceBucketSize)},
+            {"max_expanded_distance_from_eye_bucket",
+             static_cast<int>(expansion.maxExpandedDistanceFromEye / kDistanceBucketSize)},
+            {"suspicious", suspicious},
+        };
+        if (suspicious) {
+            record["eye"] = {expansion.eye.x, expansion.eye.y, expansion.eye.z};
+            record["max_control_segment"] = expansion.maxControlSegment;
+            record["max_expanded_width"] = expansion.maxExpandedWidth;
+            record["max_expanded_distance_from_eye"] = expansion.maxExpandedDistanceFromEye;
+        }
+        records.push_back(record);
+    }
+    return {
+        {"schema_version", 2},
+        {"revision", coop::line_render_diagnostics::getRevision()},
+        {"records", records},
+    };
+}
+
 Provider s_providers[] = {
     {"scene.current", 1, "cheap", 30, true, 20, 4096, collectSceneCurrent},
     {"render.stats", 1, "cheap", 30, true, 20, 4096, collectRenderStats},
     {"render.windows", 1, "cheap", 1, true, 20, 8192, collectRenderWindows},
     {"camera.state", 1, "cheap", 1, true, 20, 8192, collectCameraState},
     {"player.slots", 1, "cheap", 1, true, 120, 8192, collectPlayerSlots},
-    {"horse.owner", 1, "cheap", 1, true, 120, 12288, collectHorseOwner},
+    {"horse.owner", 2, "cheap", 1, true, 120, 12288, collectHorseOwner},
+    {"render.lines", 2, "cheap", 1, true, 120, 32768, collectRenderLines},
     {"input.pad", 1, "cheap", 1, true, 120, 4096, collectInputPad},
     {"attention.state", 2, "medium", 5, true, 60, 32768, collectAttentionState},
     {"player.status", 1, "cheap", 1, true, 120, 8192, collectPlayerStatus},
