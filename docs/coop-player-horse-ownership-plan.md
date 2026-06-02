@@ -214,6 +214,170 @@ Manual proof:
 - If scene placement moves canonical Epona, deliberately decide whether runtime clones follow,
   respawn beside their players, or remain untouched for that sequence.
 
+#### Specialized Follow-Up Lanes
+
+These lanes sit outside ordinary rider-local Epona control. Do not mass-convert their remaining
+`dComIfGp_getHorseActor()` and P1 reads. Before editing a callsite, identify whether the native
+question is about canonical campaign Epona, the initiating rider's assigned horse, any registered
+horse, a selected enemy target, a damage source, or one singular authored presentation.
+
+##### Horse-Start Placement Tags And Canonical Repositioning
+
+This lane covers authored stage placement, restart positioning, horse stop volumes, and warp-demo
+staging. These systems can deliberately move or hide campaign Epona independently of ordinary rider
+control.
+
+Start with:
+
+- `src/d/actor/d_a_tag_hinit.cpp`: `daTagHinit_c::execute()` directly repositions canonical Epona
+  through `setHorsePosAndAngle()` after stage switches and event bits permit the placement.
+- `src/d/actor/d_a_tag_hstop.cpp`: horse-stop regions, mounted bow-training switches, floating
+  message flow, and canonical horse turn-stand state.
+- `src/d/actor/d_a_alink.cpp`: `checkHorseStart()` and ALINK scene-start setup decide whether the
+  entering player starts mounted and how canonical Epona participates.
+- `src/d/actor/d_a_e_warpappear.cpp`: warp-demo staging explicitly resolves P1, camera 0, and
+  canonical Epona while placing the bridge-warp sequence.
+- `src/d/actor/d_a_no_chg_room.cpp`: no-room-change transitions borrow canonical horse height.
+- `src/d/actor/d_a_npc_aru.cpp`, `src/d/actor/d_a_npc_besu.cpp`,
+  `src/d/actor/d_a_npc_bou.cpp`, `src/d/actor/d_a_npc_kolin.cpp`,
+  `src/d/actor/d_a_npc_maro.cpp`, `src/d/actor/d_a_npc_post.cpp`, and
+  `src/d/actor/d_a_npc_taro.cpp`: authored NPC scenes that search for or stage canonical Epona.
+
+Initial stance:
+
+- Preserve canonical movement when the scene is deliberately staging campaign Epona.
+- Decide per tag whether runtime clones remain untouched, respawn beside their assigned players, or
+  follow a deliberate shared scene reset.
+- Keep save/restart writes canonical. Runtime clones remain session-only actors.
+
+##### Rodeo And Cattle-Herding Behavior
+
+This lane covers Ordon's goat-herding sequence and Epona's rodeo movement mode. It mixes global
+minigame progression with rider-local horse movement and cow reactions.
+
+Start with:
+
+- `src/d/actor/d_a_tag_event.cpp`: type `5` tag events enter rodeo mode and currently enable it on
+  canonical Epona.
+- `src/d/actor/d_a_tag_camera.cpp`: camera-tag conditions include horseback jumping and rodeo mode,
+  but still contain canonical-horse and P1 status reads.
+- `src/d/actor/d_a_horse.cpp`: `setStickRodeoMove()`, the rodeo path fields, point counters, and cow
+  collision callbacks are horse-local mechanics.
+- `src/d/actor/d_a_alink_horse.inc`: rider-side rodeo input, balance, fall, and completion handling.
+- `src/d/actor/d_a_cow.cpp`: cow proximity, surprise, lash, and movement reactions still search P1.
+- `src/d/actor/d_a_alink_damage.inc`: mounted cow-hit knockback still resolves canonical Epona.
+- `src/d/d_camera.cpp`: `CAM_TYPE_RODEO` is the dedicated rodeo camera mode.
+
+Initial stance:
+
+- Keep minigame completion and switch progression singular unless a co-op design explicitly changes
+  the rules.
+- Route horse movement and balance through the rider's assigned Epona.
+- Decide whether cows react to any eligible mounted player, the nearest player, or the minigame's
+  retained owner before converting their searches.
+
+##### Zelda-On-Epona Helpers
+
+This lane covers the final horseback battle's story Zelda actor, including her attachment point,
+animations, bow, damage state, shadow, and campaign-horse material state.
+
+Start with:
+
+- `src/d/actor/d_a_hozelda.cpp`: repeated canonical-horse reads attach Zelda to Epona, choose ride
+  offsets, update bow behavior, toggle bag material, and borrow Epona's shadow ID.
+- `src/d/actor/d_a_alink_horse.inc`: `checkHorseZeldaBowMode()` and `setHorseZeldaDamage()` resolve
+  Zelda through canonical Epona.
+- `src/d/actor/d_a_alink.cpp`: the horseback jump action checks whether canonical Epona carries
+  Zelda.
+- `src/d/actor/d_a_b_gnd.cpp`: the Ganondorf horseback battle reads P1 ride state and canonical
+  Epona speed throughout its encounter logic.
+
+Initial stance:
+
+- Keep Zelda attached to canonical campaign Epona unless an authored sequence demonstrably needs a
+  different presentation owner.
+- Do not duplicate Zelda for runtime clones.
+- Treat additional riders in the final battle as a separate encounter-design decision from
+  ordinary Epona ownership.
+
+##### Event-Camera And Scripted Demo Sequences
+
+This lane covers camera scripts and ALINK demos that intentionally stage mounted movement. These
+paths often need one singular event owner even when ordinary riding is per-player.
+
+Start with:
+
+- `src/d/d_ev_camera.cpp`: event-camera tactics and item-camera collision exclusions still use P1
+  ride state and canonical Epona at several branches.
+- `src/d/actor/d_a_alink_demo.inc`: mounted demo setup, ride-actor comparison, jump checks, and
+  scripted horse placement still consult canonical Epona.
+- `src/d/actor/d_a_tag_camera.cpp`: authored camera volumes include horse, horse-jump, and rodeo
+  conditions.
+- `src/d/actor/d_a_e_warpappear.cpp`: bridge-warp demo logic is an example of a deliberately
+  singular staged sequence.
+
+Initial stance:
+
+- Preserve one event-camera presentation owner for singular demos.
+- When a demo is rider-triggered, retain the initiating ALINK and resolve that rider's assigned
+  horse where the script is asking about the participant rather than campaign Epona.
+- Audit presentation collapse needs separately; do not make every event camera per-viewport by
+  default.
+
+##### Horseback Combat Set Pieces
+
+This lane covers encounter-specific rules built around mounted Link, King Bulblin, boars, mounted
+enemies, and Ganondorf. These are not ordinary enemy-awareness conversions.
+
+Start with:
+
+- `src/d/actor/d_a_e_wb.cpp`: King Bulblin and boar encounter logic repeatedly asks whether P1 is
+  riding and how fast canonical Epona is moving.
+- `src/d/actor/d_a_b_gnd.cpp`: Ganondorf horseback battle movement and attack decisions use P1 and
+  canonical Epona speed.
+- `src/d/actor/d_a_e_fk.cpp`: mounted or special cavalry behavior resolves canonical Epona.
+- `src/d/actor/d_a_e_kr.cpp`: horseback encounter behavior contains direct P1 ride and canonical
+  speed reads.
+- `src/d/actor/d_a_e_rd.cpp`, `src/d/actor/d_a_e_rdy.cpp`, and
+  `src/d/actor/d_a_e_rdb.cpp`: mounted enemy and boar-rider families mix awareness, combat, and
+  scripted encounter behavior.
+- `src/d/actor/d_a_alink_bow.inc` and `src/d/actor/d_a_alink_damage.inc`: ALINK boar-battle bow and
+  damage branches still consult canonical Epona.
+
+Initial stance:
+
+- Classify each encounter before conversion: some set pieces are campaign-authoritative, while
+  others should follow a selected target or the initiating rider.
+- Keep scripted encounter progression singular unless the encounter is deliberately redesigned for
+  multiple riders.
+- Reuse behavior-owned enemy target state where the native question is about an enemy's current
+  opponent. Do not infer an owner from actor iteration order.
+
+##### Enemy Reactions To Mounted Speed
+
+Several enemy damage and behavior paths still decide reaction strength by asking whether P1 rides
+canonical Epona above a speed threshold. In co-op this can ignore a fast P2 impact or apply P1's
+speed to another player's attack.
+
+Start with:
+
+- `src/d/actor/d_a_e_dn.cpp`: mounted hit reactions check P1 ride state and canonical speed.
+- `src/d/actor/d_a_e_mf.cpp`: mounted hit reactions contain the same P1-speed pattern.
+- `src/d/actor/d_a_e_rd.cpp`: awareness, mounted damage, and encounter branches contain several
+  canonical speed checks.
+- `src/d/actor/d_a_e_rdy.cpp`: mounted reaction logic checks P1 and canonical speed.
+- `src/d/actor/d_a_e_yr.cpp`: behavior and speed helpers resolve canonical Epona.
+- `src/d/actor/d_a_e_kr.cpp`: mounted behavior checks canonical speed.
+- `src/d/actor/d_a_bd.cpp`: movement tuning borrows canonical Epona speed while P1 is mounted.
+
+Initial stance:
+
+- For collision or damage reactions, resolve the striking ALINK or horse from hit provenance.
+- For awareness or chase behavior, resolve the enemy's behavior-owned selected target and that
+  target's assigned horse.
+- Keep encounter-global checks in the set-piece lane rather than forcing them through generic enemy
+  targeting APIs.
+
 Manual proof:
 
 - Story Epona placement, saves, scene transitions, and authored horseback sequences retain vanilla
