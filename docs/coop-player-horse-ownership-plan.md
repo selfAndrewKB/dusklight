@@ -19,6 +19,9 @@ slot-assigned runtime Epona, current rider, any active horse, or horse-local col
 - Runtime clone actors never overwrite horse restart/save data and never become the campaign horse.
 - Runtime clones are slot-assigned: P2 calls, mounts, controls, and renders P2's Epona rather than
   racing P1 for whichever horse was touched last.
+- Runtime clones mirror canonical Epona's native `FLG0_NO_DRAW_WAIT` state when created. Campaign
+  Epona may exist as a parked actor in eligible areas without being presented; clone registration
+  must not make an additional horse visible until its own native call-horse flow releases that wait.
 - Authored story, rodeo, NPC, event-camera, and save paths remain canonical until individually
   classified.
 - The registry is shaped for four local player slots, but the first manual proof targets P1/P2.

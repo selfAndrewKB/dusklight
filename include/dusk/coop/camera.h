@@ -20,11 +20,13 @@ constexpr int kSecondaryWindowId = 1;
 constexpr int kSecondaryPlayerId = 1;
 
 bool isSplitScreenEnabled();
+bool isSplitScreenRequested();
 void setSplitScreenEnabled(bool enabled);
 SplitScreenLayout getSplitScreenLayout();
 void setSplitScreenLayout(SplitScreenLayout layout);
 
 void resetSplitScreenCameraState();
+void restoreSplitScreenCameraState();
 bool ensureSecondaryCamera();
 void syncSecondaryPlayerAssignment();
 void refreshWindowLayout();

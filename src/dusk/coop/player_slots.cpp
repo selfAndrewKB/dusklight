@@ -22,6 +22,7 @@ aurora::Module CoopLog("dusk::coop");
 
 // Co-op: records actor identity only. Actor lifetime stays owned by the game.
 fopAc_ac_c* s_players[kPlayerSlotCount] = {};
+bool s_requestedPlayers[kPlayerSlotCount] = {};
 
 constexpr bool isValidSlot(PlayerSlot slot) {
     return slot == PlayerSlot::Slot0 || slot == PlayerSlot::Slot1 ||
@@ -83,10 +84,6 @@ void unregisterPlayer(PlayerSlot slot, const fopAc_ac_c* actor) {
         registered_actor = nullptr;
         CoopLog.debug("unregistered player slot {} actor 0x{:x}", index,
                       reinterpret_cast<uintptr_t>(actor));
-        if (slot != PlayerSlot::Primary) {
-            player_item_selection::resetSlot(slot);
-        }
-
         if (slot == PlayerSlot::Slot1) {
             camera::syncSecondaryPlayerAssignment();
         }
@@ -179,6 +176,9 @@ unsigned int spawnPlayer(PlayerSlot slot, daAlink_c* primary) {
         return 0;
     }
 
+    // Co-op: requested additional slots are session intent and must be rebuilt after area loads.
+    s_requestedPlayers[slotIndex(slot)] = true;
+
     cXyz pos = primary->current.pos;
     pos.x += 120.0f;
     csXyz angle = primary->shape_angle;
@@ -204,6 +204,23 @@ unsigned int spawnPlayer(PlayerSlot slot, daAlink_c* primary) {
 
     fpcLy_SetCurrentLayer(savedLayer);
     return result;
+}
+
+void restoreRequestedPlayers(daAlink_c* primary) {
+    if (primary == nullptr) {
+        return;
+    }
+
+    for (int i = 1; i < kPlayerSlotCount; i++) {
+        const PlayerSlot slot = static_cast<PlayerSlot>(i);
+        if (s_requestedPlayers[i] && getPlayer(slot) == nullptr) {
+            spawnPlayer(slot, primary);
+        }
+    }
+}
+
+bool isPlayerRequested(PlayerSlot slot) {
+    return isValidSlot(slot) && s_requestedPlayers[slotIndex(slot)];
 }
 
 }  // namespace dusk::coop

@@ -80,6 +80,8 @@ to the requesting player slot.
 | Question the callsite is asking | Use | Current status |
 | --- | --- | --- |
 | "Which co-op slot owns this actor?" | `dusk::coop::player_slots` | Implemented |
+| "Which additional slots should be rebuilt after an area load?" | requested-session state in `dusk::coop::player_slots` | Implemented; scene-local actors unregister normally and the completed new primary ALINK respawns requested slots |
+| "Which ALINK temporarily owns the shared body model-data calculators?" | `dusk::coop::alink_model_data_owner` | Implemented for additional-player startup model evaluation, execute, and draw; each scope restores P1 afterward |
 | "Which active player is nearest or eligible by raw distance/angle facts?" | `dusk::coop::player_query` | Implemented |
 | "Who is this enemy fighting right now?" | `dusk::coop::enemy_targeting` | Implemented for scoped combat targeting |
 | "Who caused this hit?" | `dusk::coop::damage_owner` | Implemented for direct players and known owned items |

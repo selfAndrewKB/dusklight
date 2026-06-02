@@ -31,6 +31,7 @@ struct PlayerInfo {
 
 struct SidecarState {
     bool enabled = false;
+    bool enabledForNextPlayScene = false;
     bool cameraRequested = false;
     SplitScreenLayout layout = SplitScreenLayout::Vertical;
     dDlst_window_c window;
@@ -124,7 +125,12 @@ bool isSplitScreenEnabled() {
     return s_state.enabled;
 }
 
+bool isSplitScreenRequested() {
+    return s_state.enabledForNextPlayScene;
+}
+
 void setSplitScreenEnabled(bool enabled) {
+    s_state.enabledForNextPlayScene = enabled;
     if (s_state.enabled == enabled) {
         return;
     }
@@ -162,6 +168,10 @@ void resetSplitScreenCameraState() {
     s_state.playerInfo = {};
     s_state.playerInfo.cameraId = kSecondaryCameraId;
     applyWindowLayout();
+}
+
+void restoreSplitScreenCameraState() {
+    setSplitScreenEnabled(s_state.enabledForNextPlayScene);
 }
 
 bool ensureSecondaryCamera() {

@@ -236,7 +236,8 @@ Use this pattern again when a secondary ALINK bug appears:
 Do these after the audit stops changing shape:
 
 - Move temporary secondary ALINK probe flags out of `player_slots.*` if they survive beyond this audit.
-- Rename probe UI labels if a flag graduates from diagnostic to normal mitigation.
+- Model-data ownership flags graduated into `dusk::coop::alink_model_data_owner`; keep that runtime
+  invariant out of the probe bitmask and Actor Spawner UI.
 - Remove or hide dangerous toggles such as `Skip start proc init` once no longer needed; it is known to crash.
 - Reduce `dusk::coop.alink` checkpoint logging once the next milestone no longer needs creation-phase traces.
 - Decide whether the Actor Spawner button remains a developer diagnostic, moves to a dedicated co-op debug panel, or is removed.
@@ -252,7 +253,9 @@ The next diagnostic returned from secondary `create()` before the final create-t
 
 The next diagnostic kept secondary `create()` structurally complete and skipped only secondary create-time `allAnimePlay()`. The user confirmed on 2026-05-11 that the crash was fixed, but player 1's visible animation still broke. That means create-time animation playback alone is not the full culprit.
 
-The current diagnostic replaces one-off rebuild probes with runtime toggles in the Actor Spawner's `Secondary ALINK probes` tree. The toggles are backed by `dusk::coop::SecondaryAlinkProbeFlag` so ALINK and the UI share one bitmask.
+Historical note: this diagnostic replaced one-off rebuild probes with runtime toggles in the Actor
+Spawner's `Secondary ALINK probes` tree. The remaining toggles are now labeled isolation probes and
+default off. Proven shared model-data ownership has graduated into `alink_model_data_owner`.
 
 Available toggles:
 
@@ -266,12 +269,14 @@ Available toggles:
 - Skip secondary `playFaceTextureAnime()`.
 - Skip secondary `setItemMatrix()` / `setWolfItemMatrix()`.
 - Skip secondary `setItemActor()`.
-- Restore player 1's shared ALINK model-data owner after secondary `playerInit()` / `changeLink()`.
-- Scope shared ALINK model-data ownership to secondary only during secondary draw, then restore player 1 immediately afterward.
-- Scope shared ALINK model-data ownership to secondary only during secondary execute, then restore player 1 immediately afterward.
+- Historical: restore player 1's shared ALINK model-data owner after secondary `playerInit()` / `changeLink()`.
+- Historical: scope shared ALINK model-data ownership to secondary only during secondary draw, then restore player 1 immediately afterward.
+- Historical: scope shared ALINK model-data ownership to secondary only during secondary execute, then restore player 1 immediately afterward.
 - Ignore the shared `dAttention_c::Lockon()` result for secondary ALINK prototypes.
 
-Current default bits preserve the latest visible idle-P2 harness: skip secondary `execute()`; restore player 1's shared model-data owner after secondary initialization; keep scoped draw/execute ownership ready for deliberate follow-up tests; and suppress secondary reads of the shared global attention lock. Secondary create-time `allAnimePlay()`, create-time `mpLinkModel->calc()`, and `draw()` are enabled by default now that scoped model-data ownership makes the prototype visible without reintroducing the original player 1 animation lock. Re-enable the create-time skips, `Skip draw`, or raw shared attention lock only for isolation tests.
+Current isolation-probe defaults are zero. Additional-player `playerInit()` restore, startup model
+evaluation, execute, and draw use the durable `alink_model_data_owner` runtime policy. Re-enable a
+skip probe only for a deliberate diagnostic regression test.
 
 The latest diagnostics capture showed P2 input stayed clean while `dAttention_c::Lockon()` and `dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_121` moved with P1 attention state. The new `Ignore shared attention lock` probe makes `daAlink_c::checkAttentionLock()` return false only for secondary ALINK prototypes when the flag is enabled. This is a diagnostic containment step, not the final co-op design: the durable fix still needs a per-player attention/status model rather than making secondary ALINK permanently blind to all attention.
 
@@ -283,11 +288,18 @@ The confirmed culprit is `changeModelDataDirect()` / `changeModelDataDirectWolf(
 
 Restoring player 1's model-data owner after secondary `playerInit()` fixed the player 1 animation lock in the user's Visual Studio build. Keep that mitigation as the first proven ALINK shared-state fix. The next audit should look for other `J3DModelData` callbacks, material animators, texture animators, and user-area writes that are installed on shared resource/model data rather than on per-actor model instances.
 
+Graduation result: `dusk::coop::alink_model_data_owner` now owns this invariant. Additional-player
+startup evaluation, execute, and draw install that actor's calculators only for the matching native
+lifecycle scope, then restore P1. Requested additional slots and split-screen intent also survive
+area loads: scene-local actor/camera pointers reset normally, and the completed new primary ALINK
+rebuilds the requested session slots.
+
 Purpose:
 
 - Test combinations without rebuilding for every probe.
 - Keep each skipped call explicit in the log, using `dusk::coop.alink` checkpoints such as `skip-create-model-calc`.
-- Prefer enabling one new skip at a time, starting from the current default bits. Combination testing is useful only after individual results are recorded.
+- Historical testing enabled one new skip at a time from that phase's default bits. Combination
+  testing was useful only after individual results were recorded.
 
 Expected manual check:
 
@@ -296,7 +308,8 @@ Expected manual check:
 3. Spawn `Spawn Secondary Link`.
 4. The secondary actor is expected to be visible with the current default harness.
 5. Move, stop, attack, and shield/block with player 1.
-6. Confirm player 1's visible animation remains correct with `Restore P1 model data owner` checked.
+6. Historical: confirm player 1's visible animation remains correct with
+   `Restore P1 model data owner` checked. Current builds enforce that ownership policy directly.
 
 First visible-P2 draw test result:
 
@@ -358,7 +371,8 @@ Manual test sequence:
 
 1. Start from the current visible-P2 harness.
 2. Spawn the secondary prototype and confirm both actors are visible and player 1 still behaves normally.
-3. Leave `Scoped execute model data owner` checked.
+3. Historical: leave `Scoped execute model data owner` checked. Current builds enforce that scope
+   directly through `alink_model_data_owner`.
 4. Uncheck `Skip execute`.
 5. Observe whether player 2 remains stable/visible and whether player 1 regresses.
 6. Capture `secondary execute` and `primary runtime` logs together so proc/animation movement can be compared directly.

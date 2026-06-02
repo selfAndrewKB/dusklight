@@ -124,7 +124,8 @@ Failure conditions:
 
 Track these once basic locomotion works:
 
-- Decide which secondary ALINK probe flags graduate into normal containment.
+- Shared ALINK model-data calculator scoping graduated into `alink_model_data_owner`; it is runtime
+  policy around additional-player startup evaluation, execute, and draw rather than a debug toggle.
 - The old shared-attention containment flag has been superseded by `player_attention`.
 - Reduce old `dusk::coop.alink` checkpoint logging once diagnostics artifacts cover the same facts.
 - Move the Actor Spawner secondary ALINK harness into a dedicated co-op debug panel if it survives beyond this milestone.

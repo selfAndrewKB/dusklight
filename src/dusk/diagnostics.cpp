@@ -1261,8 +1261,9 @@ json collectRenderWindows() {
     }
 
     return {
-        {"schema_version", 1},
+        {"schema_version", 2},
         {"split_screen_enabled", dusk::coop::camera::isSplitScreenEnabled()},
+        {"split_screen_requested", dusk::coop::camera::isSplitScreenRequested()},
         {"window_count", windowCount},
         {"secondary_ready", dusk::coop::camera::isSecondaryCameraReady()},
         {"secondary_requested", dusk::coop::camera::isSecondaryCameraRequested()},
@@ -1276,8 +1277,9 @@ json collectRenderWindows() {
 
 json collectCameraState() {
     return {
-        {"schema_version", 1},
+        {"schema_version", 2},
         {"split_screen_enabled", dusk::coop::camera::isSplitScreenEnabled()},
+        {"split_screen_requested", dusk::coop::camera::isSplitScreenRequested()},
         {"window_count", dComIfGp_getWindowNum()},
         {"secondary_ready", dusk::coop::camera::isSecondaryCameraReady()},
         {"secondary_requested", dusk::coop::camera::isSecondaryCameraRequested()},
@@ -1295,6 +1297,7 @@ json collectPlayerSlots() {
             {"slot", i},
             {"actor_uid", nullptr},
             {"ptr", ptrString(reinterpret_cast<uintptr_t>(actor))},
+            {"requested", coop::isPlayerRequested(slot)},
             {"stable_actor_uid_deferred", true},
         };
 
@@ -1310,7 +1313,7 @@ json collectPlayerSlots() {
     }
 
     return {
-        {"schema_version", 1},
+        {"schema_version", 2},
         {"slots", slots},
     };
 }
@@ -1443,6 +1446,7 @@ json collectHorseOwner() {
             slotData["speed_f"] = horse->speedF;
             slotData["process"] = static_cast<unsigned int>(horse->getProcID());
             slotData["riding"] = horse->isRidden();
+            slotData["call_wait"] = horse->checkHorseCallWait() != 0;
             slotData["lash_count"] = static_cast<int>(horse->getLashCount());
             const int reinPointCount = horse->getReinPointCount();
             slotData["rein_point_count"] = reinPointCount;
@@ -1487,7 +1491,7 @@ json collectHorseOwner() {
     }
 
     return {
-        {"schema_version", 2},
+        {"schema_version", 3},
         {"canonical_horse", ptrString(reinterpret_cast<uintptr_t>(dComIfGp_getHorseActor()))},
         {"duplicate_retained_horse", duplicateRetainedHorse},
         {"slots", slots},
@@ -2215,13 +2219,11 @@ json collectInputPad() {
 
 json collectCoopProbes() {
     return {
-        {"schema_version", 1},
+        {"schema_version", 2},
         {"secondary_alink_probe_flags", coop::getSecondaryAlinkProbeFlags()},
         {"skip_execute", coop::hasSecondaryAlinkProbeFlag(coop::SecondaryAlinkProbe_SkipExecute)},
         {"skip_draw", coop::hasSecondaryAlinkProbeFlag(coop::SecondaryAlinkProbe_SkipDraw)},
-        {"restore_primary_model_data_owner", coop::hasSecondaryAlinkProbeFlag(coop::SecondaryAlinkProbe_RestorePrimaryModelDataOwner)},
-        {"scoped_draw_model_data_owner", coop::hasSecondaryAlinkProbeFlag(coop::SecondaryAlinkProbe_ScopedDrawModelDataOwner)},
-        {"scoped_execute_model_data_owner", coop::hasSecondaryAlinkProbeFlag(coop::SecondaryAlinkProbe_ScopedExecuteModelDataOwner)},
+        {"model_data_owner_policy", "scoped_runtime"},
     };
 }
 
@@ -2447,10 +2449,10 @@ json collectRenderLines() {
 Provider s_providers[] = {
     {"scene.current", 1, "cheap", 30, true, 20, 4096, collectSceneCurrent},
     {"render.stats", 1, "cheap", 30, true, 20, 4096, collectRenderStats},
-    {"render.windows", 1, "cheap", 1, true, 20, 8192, collectRenderWindows},
-    {"camera.state", 1, "cheap", 1, true, 20, 8192, collectCameraState},
-    {"player.slots", 1, "cheap", 1, true, 120, 8192, collectPlayerSlots},
-    {"horse.owner", 2, "cheap", 1, true, 120, 12288, collectHorseOwner},
+    {"render.windows", 2, "cheap", 1, true, 20, 8192, collectRenderWindows},
+    {"camera.state", 2, "cheap", 1, true, 20, 8192, collectCameraState},
+    {"player.slots", 2, "cheap", 1, true, 120, 8192, collectPlayerSlots},
+    {"horse.owner", 3, "cheap", 1, true, 120, 12288, collectHorseOwner},
     {"event.presentation", 2, "cheap", 1, true, 120, 4096, collectEventPresentation},
     {"render.lines", 2, "cheap", 1, true, 120, 32768, collectRenderLines},
     {"input.pad", 1, "cheap", 1, true, 120, 4096, collectInputPad},
@@ -2465,7 +2467,7 @@ Provider s_providers[] = {
     {"bokoblin.attack", 1, "cheap", 1, true, 240, 8192, collectBokoblinAttackProbe},
     {"gibdo.state", 1, "cheap", 1, true, 240, 8192, collectGibdoStateProbe},
     {"young_gohma.state", 1, "cheap", 1, true, 240, 8192, collectYoungGohmaStateProbe},
-    {"coop.probes", 1, "cheap", 30, true, 20, 4096, collectCoopProbes},
+    {"coop.probes", 2, "cheap", 30, true, 20, 4096, collectCoopProbes},
     {"alink.secondary", 4, "cheap", 1, true, 120, 8192, collectAlinkSecondary},
     {"hud.presentation", 2, "cheap", 1, true, 120, 8192, collectHudPresentation},
 };

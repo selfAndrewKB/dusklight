@@ -207,7 +207,7 @@ void ImGuiMenuTools::ShowActorSpawner() {
             dusk::io::fs_path_to_string(dusk::diagnostics::getOutputPath()).c_str());
     }
 
-    if (ImGui::TreeNode("Secondary ALINK probes")) {
+    if (ImGui::TreeNode("Secondary ALINK isolation probes")) {
         if (ImGui::SmallButton("Default")) {
             dusk::coop::setSecondaryAlinkProbeFlags(dusk::coop::kDefaultSecondaryAlinkProbeFlags);
         }
@@ -226,18 +226,7 @@ void ImGuiMenuTools::ShowActorSpawner() {
         secondaryAlinkProbeCheckbox("Skip face texture animation", dusk::coop::SecondaryAlinkProbe_SkipFaceTextureAnime);
         secondaryAlinkProbeCheckbox("Skip item matrix", dusk::coop::SecondaryAlinkProbe_SkipItemMatrix);
         secondaryAlinkProbeCheckbox("Skip item actor setup", dusk::coop::SecondaryAlinkProbe_SkipSetItemActor);
-        secondaryAlinkProbeCheckbox(
-            "Restore P1 model data owner",
-            dusk::coop::SecondaryAlinkProbe_RestorePrimaryModelDataOwner
-        );
-        secondaryAlinkProbeCheckbox(
-            "Scoped draw model data owner",
-            dusk::coop::SecondaryAlinkProbe_ScopedDrawModelDataOwner
-        );
-        secondaryAlinkProbeCheckbox(
-            "Scoped execute model data owner",
-            dusk::coop::SecondaryAlinkProbe_ScopedExecuteModelDataOwner
-        );
+        ImGui::TextDisabled("Shared model-data ownership is enforced by the co-op runtime.");
         ImGui::TreePop();
     }
 

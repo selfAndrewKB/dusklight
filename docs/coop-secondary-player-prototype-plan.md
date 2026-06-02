@@ -178,6 +178,9 @@ Validation performed:
 - Player 1 continued through normal-looking idle, movement, and attack-related proc transitions afterward, with no report that the earlier visible-animation lock returned.
 - Interpretation: visible secondary ALINK rendering is now proven viable under explicit shared `J3DModelData` ownership scoping. The next question is not whether a second ALINK can render, but which minimal secondary execution and input paths can be restored without disturbing the primary actor or reintroducing shared-state corruption.
 - Historical note: this probe kept `Skip execute` enabled by default, but added `Scoped execute model data owner` so a deliberate manual test could re-enable secondary runtime while preserving the proven ownership discipline and producing paired `secondary execute` / `primary runtime` evidence. Later input-routing work promoted secondary execute into the default harness.
+- Graduation note: shared ALINK model-data calculator ownership now lives in
+  `dusk::coop::alink_model_data_owner`; it is enforced runtime policy rather than an Actor Spawner
+  toggle.
 - User tested the scoped secondary execute probe by spawning player 2 first, then unchecking `Skip execute`.
 - Player 2 remained visible, began playing idle animations correctly, and mirrored player 1's target/shield-raise animation when activated.
 - Interpretation: scoped secondary execute admits at least idle animation runtime without the original player 1 animation lock. The next suspected hazard is shared input/action/status ownership for targeting or shield state.

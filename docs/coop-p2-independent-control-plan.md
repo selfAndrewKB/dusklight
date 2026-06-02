@@ -56,6 +56,11 @@ This is not a global replacement of `dComIfGp_getPlayer(0)`, `daPy_getPlayerActo
   or ALINK target handoff failures.
 - The legacy `Ignore shared attention lock` probe is no longer part of default secondary ALINK
   behavior or the Actor Spawner UI. It was a containment switch, not the final ownership model.
+- Shared ALINK body-model calculator ownership is also no longer a probe. The
+  `alink_model_data_owner` sidecar scopes additional-player startup evaluation, execute, and draw,
+  then restores P1 because the body `J3DModelData` is shared while the calculators are actor-local.
+- Requested additional slots and split-screen intent survive area loads. Scene-local actor and
+  camera pointers still reset normally, then rebuild after the new primary ALINK completes creation.
 
 ## API Shape
 

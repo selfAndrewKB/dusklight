@@ -792,6 +792,14 @@ int daHorse_c::create() {
                 onStateFlg0(FLG0_NO_DRAW_WAIT);
             }
         }
+#if TARGET_PC
+        if (coopAdditionalHorse && dComIfGp_getHorseActor() != NULL &&
+            dComIfGp_getHorseActor()->checkHorseCallWait())
+        {
+            // Co-op: a runtime clone mirrors canonical Epona's native parked presentation state.
+            onStateFlg0(FLG0_NO_DRAW_WAIT);
+        }
+#endif
 
         if (!fopAcM_entrySolidHeap(this, daHorse_createHeap, 0x6E60)) {
             return cPhs_ERROR_e;
