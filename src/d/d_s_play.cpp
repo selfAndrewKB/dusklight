@@ -943,6 +943,12 @@ static int dScnPly_Delete(dScnPly_c* i_this) {
 
     dComIfGp_init();
 
+#if TARGET_PC
+    // Co-op: direct stage warps can tear down transient split-screen UI and actor heaps. Start the
+    // next play scene from the persistent game heap instead of carrying scene-local heap context.
+    mDoExt_setCurrentHeap(mDoExt_getGameHeap());
+#endif
+
     #if PLATFORM_WII
     data_8053a730 = 0;
     #endif
