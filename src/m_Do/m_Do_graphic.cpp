@@ -58,6 +58,7 @@
 #include "d/actor/d_a_horse.h"
 #include "dusk/coop/camera.h"
 #include "dusk/coop/debug_overlay.h"
+#include "dusk/coop/event_presentation.h"
 #include "dusk/coop/horse_owner.h"
 #include "dusk/coop/player_attention.h"
 #include "dusk/dusk.h"
@@ -2187,7 +2188,8 @@ int mDoGph_Painter() {
 
         if (camera_p != NULL) {
 #if TARGET_PC
-            const bool split_screen_active = dusk::coop::camera::isSplitScreenEnabled();
+            const bool split_screen_active =
+                dusk::coop::event_presentation::shouldPresentSplitViewports();
             bool refreshed_kankyo_materials = false;
             // Co-op: real-shadow texture generation happens before the main viewport replay,
             // but its matrices depend on active camera/light state. Prime the render globals for
@@ -2751,6 +2753,10 @@ int mDoGph_Painter() {
         };
 
         for (int window_idx = 0; window_idx < window_num; window_idx++) {
+            // Co-op: singular authored sequences keep camera 1 alive but present only camera 0.
+            if (!dusk::coop::event_presentation::shouldDrawWindow(window_idx)) {
+                continue;
+            }
             draw_window(window_idx);
         }
     }

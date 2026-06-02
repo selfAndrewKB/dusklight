@@ -17,7 +17,7 @@
 
 #if TARGET_PC
 #include "JSystem/J2DGraph/J2DOrthoGraph.h"
-#include "dusk/coop/camera.h"
+#include "dusk/coop/event_presentation.h"
 #include "dusk/coop/hud_owner.h"
 #include "dusk/coop/ui_owner.h"
 #endif
@@ -151,7 +151,7 @@ void dMeterHakusha_c::draw() {
     graf_ctx->setup2D();
 
 #if TARGET_PC
-    if (!dusk::coop::camera::isSplitScreenEnabled()) {
+    if (!dusk::coop::event_presentation::shouldPresentSplitViewports()) {
         drawHakushaState(graf_ctx, mHakushaData, mHakushaAnimFrame, mHakushaStatus);
         return;
     }

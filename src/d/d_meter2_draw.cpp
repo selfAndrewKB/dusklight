@@ -21,7 +21,7 @@
 #include "d/d_msg_class.h"
 #include "d/d_msg_object.h"
 #include "d/d_pane_class.h"
-#include "dusk/coop/camera.h"
+#include "dusk/coop/event_presentation.h"
 #include "dusk/coop/hud_diagnostics.h"
 #include "dusk/coop/hud_owner.h"
 #include "dusk/coop/player_item_selection.h"
@@ -772,7 +772,8 @@ void restorePaneState(CPaneMgr* pane, const CoopPaneState& state) {
 void dMeter2Draw_c::drawCoopSecondaryButtonHud(J2DGrafContext* i_restoreGrafCtx) {
     // Co-op: P2's prompt state shares vanilla panes, so isolate the secondary draw and restore them.
     // Co-op: window 1 is P2's split-screen viewport, so require two active windows.
-    if (!dusk::coop::camera::isSplitScreenEnabled() || dComIfGp_getWindowNum() < 2 ||
+    if (!dusk::coop::event_presentation::shouldPresentSplitViewports() ||
+        dComIfGp_getWindowNum() < 2 ||
         dComIfGp_isPauseFlag())
     {
         return;

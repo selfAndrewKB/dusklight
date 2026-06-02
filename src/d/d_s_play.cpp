@@ -42,6 +42,7 @@
 #if TARGET_PC
 #include "dusk/autosave.h"
 #include "dusk/coop/camera.h"
+#include "dusk/coop/event_presentation.h"
 #include "dusk/coop/player_attention.h"
 #include "dusk/memory.h"
 #include "dusk/ui/ui.hpp"
@@ -916,7 +917,8 @@ static int dScnPly_Delete(dScnPly_c* i_this) {
 
     dComIfGp_setWindowNum(0);
 #if TARGET_PC
-    // Co-op: scene teardown clears Dusk-owned secondary camera/window state without touching vanilla structs.
+    // Co-op: scene teardown clears transient presentation before secondary camera/window sidecars.
+    dusk::coop::event_presentation::reset();
     dusk::coop::camera::resetSplitScreenCameraState();
 #endif
     dComIfGd_setView(NULL);
@@ -1474,7 +1476,8 @@ static int phase_4(dScnPly_c* i_this) {
     dComIfGp_setWindow(0, 0.0f, 0.0f, FB_WIDTH, FB_HEIGHT, 0.0f, 1.0f, 0, 2);
     dComIfGp_setCameraInfo(0, NULL, 0, 0, -1);
 #if TARGET_PC
-    // Co-op: each play scene starts from a clean sidecar, then the debug UI/hotkey can opt back in.
+    // Co-op: each play scene starts from clean presentation and camera sidecars.
+    dusk::coop::event_presentation::reset();
     dusk::coop::camera::resetSplitScreenCameraState();
 #endif
     dComIfGd_setWindow(NULL);

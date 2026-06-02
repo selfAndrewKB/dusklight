@@ -1,6 +1,6 @@
 #include "dusk/coop/render_shadows.h"
 
-#include "dusk/coop/camera.h"
+#include "dusk/coop/event_presentation.h"
 #include "dusk/coop/render_visibility.h"
 
 namespace dusk::coop::render_shadows {
@@ -11,7 +11,7 @@ bool shouldBypassSharedShadowCulling() {
 
 bool shouldRefreshRealShadowForCurrentView() {
 #if TARGET_PC
-    return dusk::coop::camera::isSplitScreenEnabled();
+    return dusk::coop::event_presentation::shouldPresentSplitViewports();
 #else
     return false;
 #endif

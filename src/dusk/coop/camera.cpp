@@ -3,6 +3,7 @@
 #include "SSystem/SComponent/c_malloc.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_drawlist.h"
+#include "dusk/coop/event_presentation.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/logging.h"
 #include "f_op/f_op_camera_mng.h"
@@ -79,7 +80,7 @@ void applyWindowLayout() {
 
 void applyWindowLayoutForCamera(int cameraId) {
     if (!s_state.enabled || cameraId == kPrimaryCameraId) {
-        if (!s_state.enabled) {
+        if (!s_state.enabled || dusk::coop::event_presentation::isFullscreen()) {
             dComIfGp_setWindow(0, 0.0f, 0.0f, FB_WIDTH, FB_HEIGHT, 0.0f, 1.0f,
                                kPrimaryCameraId, 2);
         } else if (s_state.layout == SplitScreenLayout::Horizontal) {

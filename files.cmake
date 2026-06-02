@@ -1422,6 +1422,7 @@ set(DUSK_FILES
         include/dusk/coop/defender_owner.h
         include/dusk/coop/debug_overlay.h
         include/dusk/coop/enemy_targeting.h
+        include/dusk/coop/event_presentation.h
         include/dusk/coop/event_owner.h
         include/dusk/coop/hud_owner.h
         include/dusk/coop/hud_diagnostics.h
@@ -1453,6 +1454,7 @@ set(DUSK_FILES
         src/dusk/coop/defender_owner.cpp
         src/dusk/coop/debug_overlay.cpp
         src/dusk/coop/enemy_targeting.cpp
+        src/dusk/coop/event_presentation.cpp
         src/dusk/coop/event_owner.cpp
         src/dusk/coop/hud_owner.cpp
         src/dusk/coop/hud_diagnostics.cpp

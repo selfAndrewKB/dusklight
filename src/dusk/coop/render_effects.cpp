@@ -1,6 +1,6 @@
 #include "dusk/coop/render_effects.h"
 
-#include "dusk/coop/camera.h"
+#include "dusk/coop/event_presentation.h"
 
 namespace dusk::coop::render_effects {
 
@@ -12,7 +12,7 @@ bool shouldReplayLateWorldEffectTail() {
 
 bool shouldRunFullscreenFramebufferEffects() {
 #if TARGET_PC
-    return !dusk::coop::camera::isSplitScreenEnabled();
+    return !dusk::coop::event_presentation::shouldPresentSplitViewports();
 #else
     return true;
 #endif
@@ -26,7 +26,7 @@ bool shouldDrawViewportTrim() {
 
 bool shouldRefreshInvisibleListFramebuffer() {
 #if TARGET_PC
-    return dusk::coop::camera::isSplitScreenEnabled();
+    return dusk::coop::event_presentation::shouldPresentSplitViewports();
 #else
     return false;
 #endif
@@ -34,7 +34,7 @@ bool shouldRefreshInvisibleListFramebuffer() {
 
 bool shouldRefreshProjectionParticleFramebuffer() {
 #if TARGET_PC
-    return dusk::coop::camera::isSplitScreenEnabled();
+    return dusk::coop::event_presentation::shouldPresentSplitViewports();
 #else
     return false;
 #endif
@@ -42,7 +42,7 @@ bool shouldRefreshProjectionParticleFramebuffer() {
 
 bool shouldBypassSharedParticleCreationCulling() {
 #if TARGET_PC
-    return dusk::coop::camera::isSplitScreenEnabled();
+    return dusk::coop::event_presentation::shouldPresentSplitViewports();
 #else
     return false;
 #endif

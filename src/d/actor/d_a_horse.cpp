@@ -22,6 +22,7 @@
 
 #if TARGET_PC
 #include "dusk/coop/horse_owner.h"
+#include "dusk/coop/event_presentation.h"
 #include "dusk/coop/input.h"
 #include "dusk/coop/player_attention.h"
 #include "dusk/dusk.h"
@@ -4811,6 +4812,14 @@ int daHorse_c::draw() {
 }
 
 static int daHorse_Draw(daHorse_c* i_this) {
+#if TARGET_PC
+    if (dusk::coop::event_presentation::shouldHideSlot(
+            dusk::coop::horse_owner::getSlotForHorse(i_this)))
+    {
+        // Co-op: hide an extra slot's runtime Epona with its rider during singular presentation.
+        return 1;
+    }
+#endif
     return i_this->draw();
 }
 

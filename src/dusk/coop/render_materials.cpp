@@ -5,7 +5,7 @@
 #include "JSystem/J3DGraphAnimator/J3DModel.h"
 #include "SSystem/SComponent/c_counter.h"
 #include "d/d_kankyo.h"
-#include "dusk/coop/camera.h"
+#include "dusk/coop/event_presentation.h"
 
 #include <algorithm>
 #include <vector>
@@ -192,7 +192,7 @@ void registerKankyoModel(J3DModel* model, dKy_tevstr_c* tevstr) {
 
 void refreshKankyoMaterialsForCurrentView() {
 #if TARGET_PC
-    if (!dusk::coop::camera::isSplitScreenEnabled() || s_refreshing) {
+    if (!dusk::coop::event_presentation::shouldPresentSplitViewports() || s_refreshing) {
         return;
     }
 

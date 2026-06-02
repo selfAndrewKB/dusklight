@@ -20,7 +20,7 @@
 #include "dusk/frame_interpolation.h"
 #include <cstring>
 #if TARGET_PC
-#include "dusk/coop/camera.h"
+#include "dusk/coop/event_presentation.h"
 #include "dusk/coop/player_button_status.h"
 #include "dusk/coop/ui_owner.h"
 #include "dusk/string.hpp"
@@ -301,7 +301,8 @@ void dMeterButton_c::draw() {
 #if TARGET_PC
     J2DOrthoGraph coop_graf;
     const bool secondary_prompt =
-        dusk::coop::camera::isSplitScreenEnabled() && mCoopHudSlot == dusk::coop::PlayerSlot::Secondary;
+        dusk::coop::event_presentation::shouldPresentSplitViewports() &&
+        mCoopHudSlot == dusk::coop::PlayerSlot::Secondary;
     if (secondary_prompt) {
         // Co-op: preserve vanilla widescreen prompt coordinates while presenting them in P2's viewport.
         if (dusk::coop::ui_owner::setViewportGraph(dusk::coop::PlayerSlot::Secondary, &coop_graf)) {

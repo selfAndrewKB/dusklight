@@ -12,6 +12,7 @@
 #include "dusk/coop/damage_owner.h"
 #include "dusk/coop/defender_owner.h"
 #include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/event_presentation.h"
 #include "dusk/coop/gibdo_state_probe.h"
 #include "dusk/coop/hud_diagnostics.h"
 #include "dusk/coop/horse_owner.h"
@@ -1493,6 +1494,34 @@ json collectHorseOwner() {
     };
 }
 
+json collectEventPresentation() {
+    const coop::event_presentation::DebugState& state =
+        coop::event_presentation::getDebugState();
+    json hiddenSlots = json::array();
+    for (int i = 0; i < coop::kPlayerSlotCount; i++) {
+        const coop::PlayerSlot slot = static_cast<coop::PlayerSlot>(i);
+        if (coop::event_presentation::shouldHideSlot(slot)) {
+            hiddenSlots.push_back(i);
+        }
+    }
+
+    return {
+        {"schema_version", 1},
+        {"revision", state.revision},
+        {"fullscreen", state.fullscreen},
+        {"split_screen_capability", coop::camera::isSplitScreenEnabled()},
+        {"split_viewports_presented", coop::event_presentation::shouldPresentSplitViewports()},
+        {"hide_additional_visuals", state.hideAdditionalVisuals},
+        {"total_depth", state.totalDepth},
+        {"sources", {
+            {"wolf_howl", state.wolfHowlDepth},
+        }},
+        {"last_transition", coop::event_presentation::transitionName(state.lastTransition)},
+        {"last_source", coop::event_presentation::sourceName(state.lastSource)},
+        {"hidden_slots", hiddenSlots},
+    };
+}
+
 json attentionObjectSummary(dAttention_c* attention, int slot) {
     json data = {
         {"slot", slot},
@@ -2415,6 +2444,7 @@ Provider s_providers[] = {
     {"camera.state", 1, "cheap", 1, true, 20, 8192, collectCameraState},
     {"player.slots", 1, "cheap", 1, true, 120, 8192, collectPlayerSlots},
     {"horse.owner", 2, "cheap", 1, true, 120, 12288, collectHorseOwner},
+    {"event.presentation", 1, "cheap", 1, true, 120, 4096, collectEventPresentation},
     {"render.lines", 2, "cheap", 1, true, 120, 32768, collectRenderLines},
     {"input.pad", 1, "cheap", 1, true, 120, 4096, collectInputPad},
     {"attention.state", 2, "medium", 5, true, 60, 32768, collectAttentionState},

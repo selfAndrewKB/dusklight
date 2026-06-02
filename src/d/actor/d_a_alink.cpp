@@ -56,6 +56,7 @@
 #include "dusk/action_bindings.h"
 #include "dusk/coop/alink_probes.h"
 #include "dusk/coop/camera.h"
+#include "dusk/coop/event_presentation.h"
 #include "dusk/coop/horse_owner.h"
 #include "dusk/coop/input.h"
 #include "dusk/coop/player_attention.h"
@@ -20630,6 +20631,10 @@ int daAlink_c::draw() {
 
 static int daAlink_Draw(daAlink_c* i_this) {
 #if TARGET_PC
+    if (dusk::coop::event_presentation::shouldHideSlot(dusk::coop::getSlotForActor(i_this))) {
+        // Co-op: singular fullscreen sequences hide extra ALINK presentation without stopping simulation.
+        return 1;
+    }
     if (dusk::coop::isAdditionalPlayer(i_this) &&
         dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_SkipDraw))
     {
