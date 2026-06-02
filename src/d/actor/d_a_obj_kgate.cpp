@@ -12,6 +12,10 @@
 #include "d/actor/d_a_horse.h"
 #include "d/actor/d_a_obj_eff.h"
 
+#if TARGET_PC
+#include "dusk/coop/horse_owner.h"
+#endif
+
 enum {
     ACT_WAIT_EVENT,
     ACT_EVENT,
@@ -39,6 +43,36 @@ static void* search_coach(void* i_actor, void* i_data) {
 
     return NULL;
 }
+
+#if TARGET_PC
+static daHorse_c* findHorseInArea(MtxP gate_mtx, const cXyz& bound_a, const cXyz& bound_b) {
+    daHorse_c* result = NULL;
+    dusk::coop::horse_owner::forEachRegisteredHorse(
+        [&](dusk::coop::PlayerSlot, daHorse_c* horse) {
+            if (result != NULL) {
+                return;
+            }
+
+            cXyz offset(0.0f, 0.0f, 250.0f);
+            cXyz pos;
+            Mtx m;
+            mDoMtx_stack_c::transS(horse->current.pos);
+            mDoMtx_stack_c::YrotM(horse->shape_angle.y);
+            mDoMtx_stack_c::multVec(&offset, &pos);
+
+            mDoMtx_inverse(gate_mtx, m);
+            mDoMtx_stack_c::copy(m);
+            mDoMtx_stack_c::multVec(&pos, &pos);
+
+            if (bound_a.x <= pos.x && pos.x <= bound_b.x && bound_a.z <= pos.z &&
+                pos.z <= bound_b.z)
+            {
+                result = horse;
+            }
+        });
+    return result;
+}
+#endif
 
 static int const l_gateBmdIdx[] = {5, 4, 5};
 
@@ -379,7 +413,13 @@ int daObjKGate_c::checkAreaL(cXyz const* param_0, cXyz const* param_1) {
 
         offset.set(0.0f, 0.0f, 250.0f);
 
-        daHorse_c* horse_p = dComIfGp_getHorseActor();
+        daHorse_c* horse_p;
+#if TARGET_PC
+        // Co-op: rider gates react to the registered Epona entering this panel's native area.
+        horse_p = findHorseInArea(mpGateModel->getBaseTRMtx(), bound_a, bound_b);
+#else
+        horse_p = dComIfGp_getHorseActor();
+#endif
         if (horse_p != NULL) {
             mDoMtx_stack_c::transS(horse_p->current.pos);
             mDoMtx_stack_c::YrotM(horse_p->shape_angle.y);
@@ -463,7 +503,13 @@ int daObjKGate_c::checkAreaR(cXyz const* param_0, cXyz const* param_1) {
 
         offset.set(0.0f, 0.0f, 250.0f);
 
-        daHorse_c* horse_p = dComIfGp_getHorseActor();
+        daHorse_c* horse_p;
+#if TARGET_PC
+        // Co-op: rider gates react to the registered Epona entering this panel's native area.
+        horse_p = findHorseInArea(mpGateModel2->getBaseTRMtx(), bound_a, bound_b);
+#else
+        horse_p = dComIfGp_getHorseActor();
+#endif
         if (horse_p != NULL) {
             mDoMtx_stack_c::transS(horse_p->current.pos);
             mDoMtx_stack_c::YrotM(horse_p->shape_angle.y);
@@ -629,30 +675,43 @@ void daObjKGate_c::action_typeA() {
             }
         }
 
-        daHorse_c* horse_p = dComIfGp_getHorseActor();
-        if (horse_p != NULL && horse_p->speedF != 0.0f) {
-            if (chk_l == AREA_CHECK_HORSE) {
-                switch (checkDirL(horse_p)) {
-                case FALSE:
-                    mGateLMove = 800;
-                    break;
-                case TRUE:
-                    mGateLMove = -800;
-                    break;
-                }
-
-                field_0xbb4 = 2500.0f;
+        daHorse_c* horse_l = NULL;
+        daHorse_c* horse_r = NULL;
+#if TARGET_PC
+        if (chk_l == AREA_CHECK_HORSE) {
+            cXyz bound_a(0.0f, 0.0f, -100.0f);
+            cXyz bound_b(400.0f, 0.0f, 300.0f);
+            horse_l = findHorseInArea(mpGateModel->getBaseTRMtx(), bound_a, bound_b);
+        }
+        if (chk_r == AREA_CHECK_HORSE) {
+            cXyz bound_a(0.0f, 0.0f, -300.0f);
+            cXyz bound_b(400.0f, 0.0f, 100.0f);
+            horse_r = findHorseInArea(mpGateModel2->getBaseTRMtx(), bound_a, bound_b);
+        }
+#else
+        horse_l = horse_r = dComIfGp_getHorseActor();
+#endif
+        if (horse_l != NULL && horse_l->speedF != 0.0f && chk_l == AREA_CHECK_HORSE) {
+            switch (checkDirL(horse_l)) {
+            case FALSE:
+                mGateLMove = 800;
+                break;
+            case TRUE:
+                mGateLMove = -800;
+                break;
             }
 
-            if (chk_r == AREA_CHECK_HORSE) {
-                switch (checkDirR(horse_p)) {
-                case FALSE:
-                    mGateRMove = -800;
-                    break;
-                case TRUE:
-                    mGateRMove = 800;
-                    break;
-                }
+            field_0xbb4 = 2500.0f;
+        }
+
+        if (horse_r != NULL && horse_r->speedF != 0.0f && chk_r == AREA_CHECK_HORSE) {
+            switch (checkDirR(horse_r)) {
+            case FALSE:
+                mGateRMove = -800;
+                break;
+            case TRUE:
+                mGateRMove = 800;
+                break;
             }
         }
 

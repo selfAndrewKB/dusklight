@@ -13,17 +13,12 @@
 #include "d/d_com_inf_game.h"
 #include "f_op/f_op_actor_mng.h"
 
-static BOOL hitCheck(daSwc00_c* i_swc) {
-    fopAc_ac_c* a_this = i_swc;
-    fopAc_ac_c* playerAc = daPy_getPlayerActorClass();
-    fopAc_ac_c* player;
+#if TARGET_PC
+#include "dusk/coop/horse_owner.h"
+#endif
 
-    u8 condition = daSwc00_getCondition(i_swc);
-    if (condition == 2) {
-        player = dComIfGp_getHorseActor();
-    } else {
-        player = playerAc;
-    }
+static BOOL hitCheckActor(daSwc00_c* i_swc, fopAc_ac_c* player) {
+    fopAc_ac_c* a_this = i_swc;
 
     if (player == NULL) {
         return FALSE;
@@ -53,6 +48,26 @@ static BOOL hitCheck(daSwc00_c* i_swc) {
     }
 
     return FALSE;
+}
+
+static BOOL hitCheck(daSwc00_c* i_swc) {
+    if (daSwc00_getCondition(i_swc) == 2) {
+#if TARGET_PC
+        BOOL hit = FALSE;
+        // Co-op: horse-only switch volumes are any-active-horse world rules.
+        dusk::coop::horse_owner::forEachRegisteredHorse(
+            [&](dusk::coop::PlayerSlot, daHorse_c* horse) {
+                if (!hit && hitCheckActor(i_swc, horse)) {
+                    hit = TRUE;
+                }
+            });
+        return hit;
+#else
+        return hitCheckActor(i_swc, dComIfGp_getHorseActor());
+#endif
+    }
+
+    return hitCheckActor(i_swc, daPy_getPlayerActorClass());
 }
 
 #if DEBUG

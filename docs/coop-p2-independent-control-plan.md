@@ -152,6 +152,17 @@ First pass implemented:
   world-point projection helpers. Delayed 2D packets restore GX viewport/scissor state after draw.
 - Fishing line and bobber geometry remain world-render ownership, not HUD presentation.
 
+Deferred runtime audit:
+
+- One intermittent item-wheel allocation failure was observed when P1 held a bomb and P2 opened
+  the wheel around P2's bomb-impact recovery. The deterministic Hawkeye and both-players-holding-
+  bombs failures were addressed, but this recovery edge has not reproduced reliably enough to
+  justify a timing change.
+- `hud_diagnostics` records ring admission at request, prompt cleanup, and create phases. If the
+  failure returns, inspect the newest Dusklight log for `ring admission` lines and classify whether
+  transient Scene2D subheap flag 7, prompt subheap flag 8, or both survived into wheel creation
+  before changing heap lifetime behavior.
+
 ### `event_owner`
 
 Owns "which player requested this accepted event/demo?" once the vanilla event manager has chosen an
@@ -223,7 +234,9 @@ slot, cut-type checks, forced position/angle changes, required action checks, an
 should talk to that same player slot until the lesson ends.
 
 Global save bits for learned skills can remain shared campaign state in V1. The actor/player being
-trained should not be forced to P1.
+trained should not be forced to P1. This remains a deferred audit lane rather than an active
+milestone: implement it only if playtesting demonstrates that P2 must independently own a training
+sequence.
 
 ## Priority Order
 
@@ -254,8 +267,8 @@ trained should not be forced to P1.
    - Keep the validated generic ALINK talk/check/pickup path intact.
    - Audit remaining world actors case by case when their own P1-only eligibility reads are observed.
 
-5. Convert Hidden Skills through `training_owner`.
-   - Bind `NPC_KN` to the player that initiated the lesson.
+5. Defer Hidden Skill conversion unless playtesting demonstrates a concrete P2 ownership failure.
+   - If needed later, bind `NPC_KN` to the player that initiated the lesson.
    - Route training cut checks, side-step checks, forced placement, and training flags to that slot.
    - Leave save/event completion shared unless a later milestone needs per-slot skill progress.
 
@@ -268,7 +281,7 @@ trained should not be forced to P1.
 | First-person and item aim | `src/d/actor/d_a_alink_bow.inc`, `src/d/actor/d_a_alink_ironball.inc`, hookshot code in ALINK, `src/d/actor/d_a_arrow.cpp` | Bow/slingshot, Hawkeye, iron ball, hookshot, item cameras, and viewport-local item overlays have a first owner-aware pass. |
 | Interaction prompts | `src/d/actor/d_a_alink.cpp`, `src/f_op/f_op_actor_mng.cpp`, NPC/object actors with action prompts | Generic ALINK talk/check/pickup and carried-item actions are slot-local; knob/shutter door prompt side selection uses `interaction_owner`; event-owner door demos move the requester; HUD prompt rendering is owner-aware. Remaining world-actor singleton prompts should be audited case by case. |
 | Climb/hang camera hints | `src/d/actor/d_a_alink_hang.inc` | Hang, ladder, climb, and roof-hang camera status writes route through `player_camera_status` so P2 climb states do not write into P1's camera row. |
-| Howling/Hidden Skills | `src/d/actor/d_a_tag_howl.cpp`, `src/d/actor/d_a_obj_smw_stone.cpp`, `src/d/actor/d_a_npc_kn.cpp` | Howling intentionally remains P1/global pending singular fullscreen `event_presentation`; Hidden Skill trainer is P1/training-owned. |
+| Howling/Hidden Skills | `src/d/actor/d_a_tag_howl.cpp`, `src/d/actor/d_a_obj_smw_stone.cpp`, `src/d/actor/d_a_npc_kn.cpp` | Howling intentionally remains P1/global pending singular fullscreen `event_presentation`; Hidden Skill trainer ownership is deferred unless testing exposes a concrete P2 failure. |
 
 ## Test Plan
 

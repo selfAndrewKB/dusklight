@@ -39,7 +39,9 @@ slot-assigned runtime Epona, current rider, any active horse, or horse-local col
   calculator active for both models unless each actor rebinds its own calculator at evaluation time.
 - Horse BCK archive wrappers also carry mutable frame state. Runtime clones need actor-local
   wrappers over the shared immutable animation key data.
-- Horse scene-exit collection executes once per horse but writes through the global singleton.
+- Horse scene-exit collection originally executed once per horse but wrote through the global
+  singleton. Each executor now fills its own actor buffer, and shared exit producers recognize every
+  active ALINK.
 - Special-wall background collision receives horse pass flags after the calling horse PID has been
   discarded. It needs an explicit horse-local collision context, not an iteration over every horse.
 - `dMeter2Info_setHorseLifeCount()` remains the canonical horse's vanilla global meter field.
@@ -167,6 +169,8 @@ Implementation status:
 - Horseback boomerang, hookshot, bottle, and subject camera status bits use
   `player_camera_status` on PC.
 - Runtime clones localize mutable BCK wrappers while sharing immutable archive animation data.
+  Clone teardown releases those wrappers through the JKR allocator path before clearing sidecar
+  state.
   Every horse model evaluation rebinds the calling actor's matrix calculator onto the shared
   model-data root joint.
 - The native spur presenter now resolves lash counts through `hud_owner` and replays one presenter
@@ -185,10 +189,14 @@ Manual proof:
 
 ### 3. Route Horse-Local World Interaction
 
-- Fix scene-exit area collection so each horse fills its own buffer.
+- Each horse now fills its own scene-exit buffer. Shared field exits offer their native transition
+  handoff to every active ALINK, and shared grotto exits recognize every active ALINK entering their
+  native volume, so additional riders cannot leave the map without starting the shared scene change.
 - Route horse jump tags, horse-region switches, and physical gate interactions through registered
-  horses where the rule is "any active horse." Horse jump tags now run their native trigger test
-  for every registered horse; region switches and physical gates remain to audit.
+  horses where the rule is "any active horse." Horse jump tags and horse-only `SwAreaC` volumes now
+  run their native trigger tests for every registered horse. Kakariko and rider-gate horse panels
+  resolve the registered Epona that entered each native panel area; ordinary player and coach paths
+  remain unchanged.
 - Preserve the initiating horse identity through special-wall background collision checks.
 - Review collision callbacks that still ask P1 after already receiving the colliding ALINK.
 

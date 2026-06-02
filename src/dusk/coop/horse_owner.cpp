@@ -71,7 +71,8 @@ void clearAnimations(HorseSlotState* state) {
     }
 
     for (HorseAnimationClone& animation : state->animations) {
-        delete animation.localized;
+        // Co-op: localized wrappers are JKR allocations and must leave through the JKR heap path.
+        JKR_DELETE(animation.localized);
     }
     state->animations.clear();
 }

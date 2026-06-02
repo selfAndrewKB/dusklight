@@ -10,6 +10,10 @@
 #include "d/actor/d_a_player.h"
 #include "m_Do/m_Do_mtx.h"
 
+#if TARGET_PC
+#include "dusk/coop/player_query.h"
+#endif
+
 int daScex_c::checkWork() {
     if (getArg1() == 0xFF || getArg1() == 0 || getArg1() == 3) {
         if (fopAcM_isSwitch(this, getSwNo())) {
@@ -57,6 +61,43 @@ static int daScex_Execute(daScex_c* i_this) {
 }
 
 int daScex_c::execute() {
+#if TARGET_PC
+    // Co-op: scene exits are shared world triggers; offer the native handoff to each active ALINK.
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+        daPy_py_c* player = static_cast<daPy_py_c*>(actor);
+
+        if (checkWork() && checkArea(&player->current.pos)) {
+            switch (getArg1()) {
+            case 0xFF:
+            case 1:
+                player->onSceneChangeArea(getArg0(), getPathID(), this);
+                break;
+            case 2:
+            case 0:
+                player->onSceneChangeAreaJump(getArg0(), getPathID(), this);
+                break;
+            case 3:
+            case 4:
+                player->onSceneChangeAreaJump(getArg0(), getPathID(), this);
+                break;
+            }
+        }
+
+        if (mSceneChangeOK && player->checkSceneChangeAreaStart()) {
+            if ((getArg1() == 3 || getArg1() == 4) && field_0x598 == 0) {
+                mDoAud_seStart(Z2SE_FORCE_BACK, NULL, 0, 0);
+                player->voiceStart(Z2SE_WL_V_FALL_TO_RESTART);
+                field_0x598 = 1;
+            }
+
+            if (getArg1() == 0xFF || getArg1() == 0 || getArg1() == 3) {
+                if (getSwNo() != 0xFF) {
+                    fopAcM_onSwitch(this, getSwNo());
+                }
+            }
+        }
+    });
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
     cXyz spC;
 
@@ -94,6 +135,7 @@ int daScex_c::execute() {
             }
         }
     }
+#endif
 
     return 1;
 }

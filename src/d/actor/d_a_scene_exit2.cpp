@@ -9,6 +9,10 @@
 #include "d/d_com_inf_game.h"
 #include "f_pc/f_pc_name.h"
 
+#if TARGET_PC
+#include "dusk/coop/player_query.h"
+#endif
+
 void daScExit_c::initBaseMtx() {
     setBaseMtx();
 }
@@ -138,7 +142,18 @@ int daScExit_c::demoProc() {
 }
 
 BOOL daScExit_c::checkArea() {
+#if TARGET_PC
+    BOOL hit = FALSE;
+    // Co-op: grotto exits are shared event triggers; any active ALINK may enter the native volume.
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* player) {
+        if (!hit && fopAcM_searchActorDistanceXZ(this, player) < mRadius) {
+            hit = TRUE;
+        }
+    });
+    return hit;
+#else
     return fopAcM_searchPlayerDistanceXZ(this) < mRadius;
+#endif
 }
 
 int daScExit_c::draw() {
