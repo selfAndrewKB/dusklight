@@ -916,9 +916,7 @@ int daHorse_c::create() {
         setRoomInfo(1);
 
 #if TARGET_PC
-        if (coopAdditionalHorse) {
-            dusk::coop::horse_owner::registerHorse(coopHorseSlot, this);
-        } else {
+        if (!coopAdditionalHorse) {
             dComIfGp_setHorseActor(this);
             dusk::coop::horse_owner::registerHorse(dusk::coop::PlayerSlot::Primary, this);
             dusk::coop::horse_owner::ensureAdditionalHorses();
@@ -957,6 +955,13 @@ int daHorse_c::create() {
         }
 
         fopAcM_setStageLayer(this);
+
+#if TARGET_PC
+        if (coopAdditionalHorse) {
+            // Co-op: publish a runtime clone only after native rein and presentation state is ready.
+            dusk::coop::horse_owner::registerHorse(coopHorseSlot, this);
+        }
+#endif
     }
 
     return phase_state;
@@ -3635,6 +3640,12 @@ int daHorse_c::callHorseSubstance(cXyz const* i_pos) {
     onStateFlg0(FLG0_CALL_HORSE);
     changeOriginalDemo();
     changeDemoMode(12, 0);
+#if TARGET_PC
+    if (dusk::coop::horse_owner::isCanonicalHorse(this)) {
+        // Co-op: a shared campaign-Epona summon releases parked clones through their native call flow.
+        dusk::coop::horse_owner::callParkedAdditionalHorsesForCanonicalSummon();
+    }
+#endif
     return rt;
 }
 

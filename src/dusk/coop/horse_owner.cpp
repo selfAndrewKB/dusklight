@@ -29,6 +29,10 @@ struct HorseAnimationClone {
 struct HorseSlotState {
     daHorse_c* horse = nullptr;
     fpc_ProcID pendingSpawnId = fpcM_ERROR_PROCESS_ID_e;
+    bool callWhenRegistered = false;
+    bool placeWhenRegistered = false;
+    cXyz placementPos;
+    s16 placementAngle = 0;
     std::vector<HorseAnimationClone> animations;
     HorseReinSimulationState reins;
 };
@@ -65,6 +69,36 @@ HorseSlotState* stateForHorse(const daHorse_c* horse) {
     return stateForSlot(slot);
 }
 
+cXyz additionalHorsePosition(PlayerSlot slot, const cXyz& basePos, s16 angle) {
+    cXyz pos = basePos;
+    const f32 offset = 160.0f * slotIndex(slot);
+    pos.x += cM_scos(angle) * offset;
+    pos.z -= cM_ssin(angle) * offset;
+    return pos;
+}
+
+void applyDeferredPresentation(PlayerSlot slot, HorseSlotState* state) {
+    if (state == nullptr || state->horse == nullptr) {
+        return;
+    }
+
+    if (state->placeWhenRegistered) {
+        cXyz pos = additionalHorsePosition(slot, state->placementPos, state->placementAngle);
+        state->horse->setHorsePosAndAngle(&pos, state->placementAngle);
+        state->horse->offNoDrawWait();
+        CoopHorseLog.debug("applied deferred horse slot {} placement", slotIndex(slot));
+    } else if (state->callWhenRegistered) {
+        daAlink_c* player = static_cast<daAlink_c*>(getPlayer(slot));
+        if (player != nullptr) {
+            state->horse->callHorse(&player->current.pos);
+            CoopHorseLog.debug("applied deferred horse slot {} summon", slotIndex(slot));
+        }
+    }
+
+    state->callWhenRegistered = false;
+    state->placeWhenRegistered = false;
+}
+
 void clearAnimations(HorseSlotState* state) {
     if (state == nullptr) {
         return;
@@ -85,6 +119,8 @@ void clearSlot(HorseSlotState* state) {
     clearAnimations(state);
     state->horse = nullptr;
     state->pendingSpawnId = fpcM_ERROR_PROCESS_ID_e;
+    state->callWhenRegistered = false;
+    state->placeWhenRegistered = false;
     state->reins = {};
 }
 
@@ -120,6 +156,7 @@ void registerHorse(PlayerSlot slot, daHorse_c* horse) {
 
     state->horse = horse;
     state->pendingSpawnId = fpcM_ERROR_PROCESS_ID_e;
+    applyDeferredPresentation(slot, state);
     CoopHorseLog.debug("registered horse slot {} actor 0x{:x}", slotIndex(slot),
                        reinterpret_cast<uintptr_t>(horse));
 
@@ -239,10 +276,7 @@ void ensureHorseForSlot(PlayerSlot slot) {
         return;
     }
 
-    cXyz pos = canonical->current.pos;
-    const f32 offset = 160.0f * slotIndex(slot);
-    pos.x += cM_scos(canonical->shape_angle.y) * offset;
-    pos.z -= cM_ssin(canonical->shape_angle.y) * offset;
+    cXyz pos = additionalHorsePosition(slot, canonical->current.pos, canonical->shape_angle.y);
     csXyz angle = canonical->shape_angle;
 
     layer_class* savedLayer = fpcLy_CurrentLayer();
@@ -270,6 +304,47 @@ void ensureHorseForSlot(PlayerSlot slot) {
 void ensureAdditionalHorses() {
     for (int i = 1; i < kPlayerSlotCount; i++) {
         ensureHorseForSlot(static_cast<PlayerSlot>(i));
+    }
+}
+
+void callParkedAdditionalHorsesForCanonicalSummon() {
+    for (int i = 1; i < kPlayerSlotCount; i++) {
+        const PlayerSlot slot = static_cast<PlayerSlot>(i);
+        HorseSlotState* state = stateForSlot(slot);
+        daAlink_c* player = static_cast<daAlink_c*>(getPlayer(slot));
+        if (state == nullptr || player == nullptr) {
+            continue;
+        }
+
+        if (state->horse == nullptr) {
+            state->callWhenRegistered = true;
+            ensureHorseForSlot(slot);
+            CoopHorseLog.debug("queued deferred horse slot {} summon", slotIndex(slot));
+        } else if (state->horse->checkHorseCallWait()) {
+            state->horse->callHorse(&player->current.pos);
+        }
+    }
+}
+
+void presentParkedAdditionalHorsesForCanonicalPlacement(const cXyz& pos, s16 angle) {
+    for (int i = 1; i < kPlayerSlotCount; i++) {
+        const PlayerSlot slot = static_cast<PlayerSlot>(i);
+        HorseSlotState* state = stateForSlot(slot);
+        if (state == nullptr || getPlayer(slot) == nullptr) {
+            continue;
+        }
+
+        if (state->horse == nullptr) {
+            state->placementPos = pos;
+            state->placementAngle = angle;
+            state->placeWhenRegistered = true;
+            ensureHorseForSlot(slot);
+            CoopHorseLog.debug("queued deferred horse slot {} placement", slotIndex(slot));
+        } else if (state->horse->checkHorseCallWait()) {
+            cXyz horsePos = additionalHorsePosition(slot, pos, angle);
+            state->horse->setHorsePosAndAngle(&horsePos, angle);
+            state->horse->offNoDrawWait();
+        }
     }
 }
 

@@ -8,6 +8,10 @@
 #include "d/actor/d_a_tag_hinit.h"
 #include "f_op/f_op_actor_mng.h"
 
+#if TARGET_PC
+#include "dusk/coop/horse_owner.h"
+#endif
+
 int daTagHinit_c::create() {
     fopAcM_ct(this, daTagHinit_c);
 
@@ -52,6 +56,11 @@ int daTagHinit_c::execute() {
         daHorse_c* horse = dComIfGp_getHorseActor();
         horse->setHorsePosAndAngle(&current.pos, shape_angle.y);
         horse->offNoDrawWait();
+#if TARGET_PC
+        // Co-op: authored Epona-presence tags must present parked runtime clones as well.
+        dusk::coop::horse_owner::presentParkedAdditionalHorsesForCanonicalPlacement(
+            current.pos, shape_angle.y);
+#endif
         fopAcM_delete(this);
     }
 

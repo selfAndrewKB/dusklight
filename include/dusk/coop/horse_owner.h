@@ -55,6 +55,8 @@ void forEachRegisteredHorse(Func fn) {
 
 void ensureHorseForSlot(PlayerSlot slot);
 void ensureAdditionalHorses();
+void callParkedAdditionalHorsesForCanonicalSummon();
+void presentParkedAdditionalHorsesForCanonicalPlacement(const cXyz& pos, s16 angle);
 void releaseHorseForSlot(PlayerSlot slot);
 
 fpc_ProcID getPendingHorseSpawnId(PlayerSlot slot);

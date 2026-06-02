@@ -22,6 +22,15 @@ slot-assigned runtime Epona, current rider, any active horse, or horse-local col
 - Runtime clones mirror canonical Epona's native `FLG0_NO_DRAW_WAIT` state when created. Campaign
   Epona may exist as a parked actor in eligible areas without being presented; clone registration
   must not make an additional horse visible until its own native call-horse flow releases that wait.
+- When an ordinary canonical Epona summon is accepted, parked runtime clones enter their own native
+  call-horse flow against their assigned players. Do not expose clones by clearing draw state
+  directly, and do not pull already-present clones toward P1's summon.
+- When an authored horse-initialization tag explicitly presents canonical Epona, parked runtime
+  clones receive the matching placement lifecycle with deterministic slot offsets. Already-present
+  clones keep their rider-local state.
+- Clone creation is asynchronous. If a canonical summon or placement arrives while a requested
+  runtime clone is still pending, `horse_owner` retains that presentation transition and applies it
+  when the clone registers.
 - Authored story, rodeo, NPC, event-camera, and save paths remain canonical until individually
   classified.
 - The registry is shaped for four local player slots, but the first manual proof targets P1/P2.
@@ -113,6 +122,8 @@ bool anyHorseNeedsLashMeter();
 
 void ensureHorseForSlot(PlayerSlot slot);
 void ensureAdditionalHorses();
+void callParkedAdditionalHorsesForCanonicalSummon();
+void presentParkedAdditionalHorsesForCanonicalPlacement(const cXyz& pos, s16 angle);
 void releaseHorseForSlot(PlayerSlot slot);
 
 J3DAnmTransform* localizeAnimationTransform(daHorse_c* horse, J3DAnmTransform* animation);
