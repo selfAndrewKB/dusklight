@@ -147,6 +147,9 @@ First pass implemented:
 - The item wheel remains one fullscreen vanilla surface, but retains the first active slot whose
   D-pad opened it. Wheel buttons, sticks, wolf checks, assignment, and mix-item logic follow that
   retained slot until close.
+- The wheel's retained slot also supplies `event_presentation` with its fullscreen presenter.
+  P2-owned rings expand camera 1's existing render window while maps and the Start menu remain
+  deliberately P1/global presentation surfaces.
 - Fishing rod requests use an explicit owner-aware forced-wheel entry point.
 - Hawkeye scope, ALINK live reticles, and boomerang lock markers use shared viewport begin/end and
   world-point projection helpers. Delayed 2D packets restore GX viewport/scissor state after draw.
@@ -253,7 +256,8 @@ sequence.
    - Slot-local X/Y assignments, item HUD snapshots, and the singular owner-aware wheel now route
      through `player_item_selection` and `ui_owner`.
    - Keep force-status, untargeted HUD surfaces, map, pause, and full meter duplication P1-owned
-     until their gameplay state has a deliberate ownership model.
+     until their gameplay state has a deliberate ownership model. Maps and pause surfaces now
+     collapse presentation fullscreen without broadening their input ownership.
 
 3. Convert first-person/item aiming status. First pass complete.
    - Bow/slingshot, Hawkeye, iron ball, and hookshot subject modes route camera/status to the owning

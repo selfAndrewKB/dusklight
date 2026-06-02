@@ -97,7 +97,7 @@ to the requesting player slot.
 | "Which player owns first-person/item camera status?" | `dusk::coop::player_camera_status` over `dusk::coop::camera` | First pass implemented for slot-local status 0/1 bits, camera attention bits, subject zoom/focus, bow/slingshot, Hawkeye, iron ball subject mode, hookshot subject/hang/flight status, and MG_ROD camera/cast status |
 | "Which player owns this prompt/object interaction?" | `dusk::coop::interaction_owner` | Selects active-player prompt owners for knob/shutter door side fields. Generic ALINK talk/check/pickup and carried-item actions already work through slot-local attention/status; use this API for remaining world actors with their own P1-only eligibility scans. Howling stones intentionally remain P1/global |
 | "Which player requested this accepted event/demo?" | `dusk::coop::event_owner` | Initial implementation derives from event `Pt1`; message input, ALINK door-demo staff consumption, and knob/shutter door demos use it so P2-started scripted interactions do not animate or move P1 |
-| "Should this explicitly classified singular event temporarily present one fullscreen camera and hide additional players?" | `dusk::coop::event_presentation` | Implemented as an opt-in presentation override above the camera sidecar; P1/global howling stones are the first consumer |
+| "Should this explicitly classified singular event or captured menu surface temporarily present one fullscreen camera and hide non-presenting players?" | `dusk::coop::event_presentation` | Implemented as an opt-in presentation override above the camera sidecar; P1/global howling stones, item ring, Start-menu tree, field/dungeon maps, and Agitha's insect screen are classified consumers |
 | "Which player is retained by this training sequence?" | future `training_owner` | Deferred unless Hidden Skill / `NPC_KN` playtesting exposes a concrete P2 ownership failure |
 | "Which player owns camera/HUD/message/story/save state?" | camera/HUD/story-specific APIs | Partially implemented for split-screen camera only |
 | "Which viewport owns this render pass, post effect, lighting, fog, or culling decision?" | split-screen viewport/render ownership APIs | Initial audit in `coop-split-screen-api-audit.md`; `render_visibility` implemented for known draw-culling paths |
@@ -156,10 +156,11 @@ to the requesting player slot.
   accepted; that is `interaction_owner`.
 - **Training owner:** retained instructional/event combat sequences such as Hidden Skills. Once a
   trainer binds to a slot, required move checks and forced placement should follow that slot.
-- **Singular event presentation:** opt-in fullscreen presentation for authored sequences that
-  intentionally remain global. It collapses split-screen rendering and hides additional-player
-  visuals without disabling co-op simulation. P1/global howling stones are the first consumer; do
-  not treat every dialogue or message-camera scene as singular automatically.
+- **Singular event presentation:** opt-in fullscreen presentation for authored sequences and
+  captured menu surfaces. It expands the retained presenter's existing render window and hides
+  non-presenting player visuals without disabling co-op simulation. Howling stones remain P1/global;
+  the item ring presents its retained `ui_owner` slot; Start menus, maps, and Agitha's insect screen
+  remain P1/global. Do not treat every dialogue or message-camera scene as singular automatically.
 - **Viewport/render ownership:** split-screen render passes, post effects, lighting, fog, HUD
   projection, draw-time visibility culling, and shadows should be owned by viewport/render policy.
   Use `render_visibility` for shared draw-culling decisions, `render_materials` for viewport-owned

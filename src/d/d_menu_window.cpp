@@ -27,6 +27,7 @@
 #include "m_Do/m_Do_controller_pad.h"
 
 #ifdef TARGET_PC
+#include "dusk/coop/event_presentation.h"
 #include "dusk/coop/hud_diagnostics.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/coop/ui_owner.h"
@@ -346,6 +347,10 @@ void dMw_c::key_wait_init(u8 i_proc) {
     case COLLECT_CLOSE:
         dMw_fade_in();
         dMw_collect_delete(true);
+#if TARGET_PC
+        // Co-op: retain fullscreen presentation across collection descendants, then restore here.
+        dusk::coop::event_presentation::end(dusk::coop::event_presentation::Source::PauseMenu);
+#endif
         break;
     case DMAP_CLOSE:
         dMw_dmap_delete(true);
@@ -359,10 +364,18 @@ void dMw_c::key_wait_init(u8 i_proc) {
     case SAVE_CLOSE:
         dMw_fade_in();
         dMw_save_delete();
+#if TARGET_PC
+        // Co-op: saving can exit the collection tree directly instead of returning to its root.
+        dusk::coop::event_presentation::end(dusk::coop::event_presentation::Source::PauseMenu);
+#endif
         break;
     case INSECT_AGITHA_CLOSE:
         dMw_fade_in();
         dMw_insect_delete();
+#if TARGET_PC
+        // Co-op: Agitha's standalone captured screen restores split presentation after cleanup.
+        dusk::coop::event_presentation::end(dusk::coop::event_presentation::Source::AgithaInsect);
+#endif
         break;
     }
     mpHeap->freeAll();
@@ -382,6 +395,10 @@ static f32 dummy() {
 }
 
 void dMw_c::collect_open_init(u8) {
+#if TARGET_PC
+    // Co-op: the authored Start-menu tree captures and presents one global fullscreen surface.
+    dusk::coop::event_presentation::begin(dusk::coop::event_presentation::Source::PauseMenu);
+#endif
     field_0x144 = 3;
     dMeter2Info_setWindowStatus(3);
     Z2GetAudioMgr()->seStart(Z2SE_SY_MENU_IN, NULL, 0, 0, 1.0f, 1.0f, -1.0f, -1.0f, 0);
@@ -571,6 +588,10 @@ void dMw_c::collect_insect_close_init(u8) {
 }
 
 void dMw_c::insect_open_init(u8) {
+#if TARGET_PC
+    // Co-op: Agitha's NPC-triggered insect screen is a singular captured fullscreen surface.
+    dusk::coop::event_presentation::begin(dusk::coop::event_presentation::Source::AgithaInsect);
+#endif
     field_0x144 = 10;
     dMeter2Info_setWindowStatus(10);
     Z2GetAudioMgr()->seStart(Z2SE_SY_MENU_SUB_IN, NULL, 0, 0, 1.0f, 1.0f, -1.0f, -1.0f, 0);
@@ -1199,6 +1220,11 @@ void dMw_c::dMw_ring_create(u8 i_origin) {
     dComIfGp_setHeapLockFlag(1);
 
 #if TARGET_PC
+    // Co-op: collapse around the retained wheel owner's camera before capturing its background.
+    dusk::coop::event_presentation::Options presentation_options;
+    presentation_options.fullscreenSlot = dusk::coop::ui_owner::singularSlot();
+    dusk::coop::event_presentation::begin(dusk::coop::event_presentation::Source::ItemRing,
+                                          presentation_options);
     // Co-op: the retained singular wheel owner supplies both menu sticks until the wheel closes.
     mpStick->setPad(dusk::coop::ui_owner::currentPad());
     mpCStick->setPad(dusk::coop::ui_owner::currentPad());
@@ -1240,6 +1266,8 @@ bool dMw_c::dMw_ring_delete() {
 
     checkMemSize();
 #if TARGET_PC
+    // Co-op: restore split presentation only after the captured wheel surface has been released.
+    dusk::coop::event_presentation::end(dusk::coop::event_presentation::Source::ItemRing);
     // Co-op: do not let a closed wheel leave later singular UI reads bound to P2.
     // Scene teardown deletes these controls before it deletes the ring.
     if (mpStick != NULL) {
@@ -1278,6 +1306,10 @@ bool dMw_c::dMw_collect_delete(bool) {
 }
 
 void dMw_c::dMw_fmap_create() {
+#if TARGET_PC
+    // Co-op: field maps remain global, but their captured surface must present fullscreen.
+    dusk::coop::event_presentation::begin(dusk::coop::event_presentation::Source::FieldMap);
+#endif
     markMemSize();
     dComIfGp_setHeapLockFlag(2);
 
@@ -1332,10 +1364,18 @@ bool dMw_c::dMw_fmap_delete(bool param_0) {
     }
 
     checkMemSize();
+#if TARGET_PC
+    // Co-op: release fullscreen presentation after the native field-map capture is gone.
+    dusk::coop::event_presentation::end(dusk::coop::event_presentation::Source::FieldMap);
+#endif
     return true;
 }
 
 void dMw_c::dMw_dmap_create() {
+#if TARGET_PC
+    // Co-op: dungeon maps remain global, but their captured surface must present fullscreen.
+    dusk::coop::event_presentation::begin(dusk::coop::event_presentation::Source::DungeonMap);
+#endif
     markMemSize();
     dComIfGp_setHeapLockFlag(3);
 
@@ -1381,6 +1421,10 @@ bool dMw_c::dMw_dmap_delete(bool param_0) {
     }
 
     checkMemSize();
+#if TARGET_PC
+    // Co-op: release fullscreen presentation after the native dungeon-map capture is gone.
+    dusk::coop::event_presentation::end(dusk::coop::event_presentation::Source::DungeonMap);
+#endif
     return true;
 }
 
@@ -1866,6 +1910,11 @@ int dMw_c::_delete() {
         return 0;
     } else {
         dMw_capture_delete();
+#if TARGET_PC
+        // Co-op: scene teardown can bypass ordinary menu close states; clear menu-only sources.
+        dusk::coop::event_presentation::end(dusk::coop::event_presentation::Source::PauseMenu);
+        dusk::coop::event_presentation::end(dusk::coop::event_presentation::Source::AgithaInsect);
+#endif
         mDoExt_setCurrentHeap(heap);
         mDoExt_removeMesgFont();
         return 1;

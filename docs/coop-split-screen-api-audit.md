@@ -21,7 +21,7 @@ families, and which systems are intentionally deferred.
 | Which viewport owns real-shadow submission culling and baked shadow matrices? | `render_shadows` | Partially implemented through `dusk::coop::render_shadows` for shared-list culling bypass and per-viewport real-shadow refresh |
 | Which viewport should camera-facing 3D line/ribbon geometry use? | shared 3D-line material refresh | Implemented for `mDoExt_3DlineMat0_c` and `mDoExt_3DlineMat1_c` during the per-window painter pass |
 | Which player owns HUD, reticles, prompts, and message UI? | `hud_owner` / `ui_owner` | `hud_owner` presents slot-local prompts and assigned items; `ui_owner` owns transient overlay viewport context and the singular item wheel. Full inventory/menu/message UI remains deferred |
-| Should an explicitly classified singular event temporarily present one fullscreen camera and hide additional players? | `event_presentation` | Implemented opt-in override above the camera sidecar; P1/global howling stones are the first consumer |
+| Should an explicitly classified singular event or captured menu surface temporarily present one fullscreen camera and hide non-presenting players? | `event_presentation` | Implemented opt-in override above the camera sidecar; howling stones and captured fullscreen menu surfaces are classified consumers |
 | Which player activated an NPC/object/event trigger? | `interaction_owner` / `event_owner` | Initial knob/shutter prompt-side and accepted door-demo proofs implemented; generic ALINK talk/check/pickup actions already flow through slot-local attention/status, while remaining world-actor singleton prompts are audited case by case |
 | Which camera or player should audio listener state follow? | `audio_listener_owner` | Not implemented; audio listener stays camera 0/P1-owned |
 | Should this actor, world chunk, foliage/detail, or background part be draw-culled for local split-screen? | `render_visibility` | Initial PC split-screen bypass implemented for known P1-camera draw-culling paths |
@@ -230,13 +230,17 @@ Design note:
 
 Audit decision:
 
-- Some authored sequences should temporarily present one fullscreen camera and optionally hide
-  additional local players while their simulation continues.
+- Some authored sequences and captured menu surfaces should temporarily present one fullscreen
+  camera and optionally hide non-presenting local players while their simulation continues.
 - Implemented as an opt-in `event_presentation` override above the camera/window sidecar. Do not
   call `setSplitScreenEnabled(false)` and do not mutate persistent actor `NODRAW` state as the
   default hiding mechanism.
-- Keep howling stones P1/global in V1. They are the first consumer because their waveform
-  minigame is singular world/message state.
+- Keep howling stones P1/global in V1. Captured fullscreen menu surfaces also opt in: item rings
+  present their retained `ui_owner` slot, while Start-menu descendants, field/dungeon maps, and
+  Agitha's insect screen remain P1/global.
+- Begin menu presentation before framebuffer capture and end it after capture deletion. Keep
+  retained item-ring input and selection in `ui_owner`; presentation collapse does not broaden
+  Start-menu or map input ownership.
 - Evaluate message-camera scenes, Hidden Skill training, minigames, and cutscenes case by case.
   Ordinary dialogue must not collapse split-screen automatically.
 

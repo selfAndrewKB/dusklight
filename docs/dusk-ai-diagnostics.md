@@ -325,7 +325,11 @@ The smallest useful implementation starts with:
 - `gibdo.state`: Gibdo-local wake/chase/attack probe for the P2-first inert-state investigation. It records action/move mode, current BCK, animation progress, selected slot, close-range gates, line-of-sight result, delay counter, scream owner state, and `loop_suspect` events without changing behavior.
 - `young_gohma.state`: Young Gohma-local gate probe for the post-attack idle/drop investigation. It records action/subaction, animation frame/play speed, selected slot, distance, angle diff, range/cone/LOS gate results, final `pl_check` result, attack-collider state, and `loop_suspect` events without changing behavior.
 - `hud.presentation`: P1/P2 item resolver state plus the shared meter tree before P2 replay, after P2 apply, and after the restore pass. Pane translation and scale remain rich `latest.json` context; JSONL emission is driven only by ownership, item/count, visibility, and digit-state changes.
-- `event.presentation`: singular fullscreen presentation state, source depth, split-screen capability versus active viewport layout, hidden slots, and the latest begin/end/reset transition. JSONL emission is driven only by those semantic transitions.
+- `event.presentation`: singular fullscreen presentation state, source depths, retained presenter
+  slot/window, split-screen capability versus active viewport layout, non-presenter hiding policy,
+  hidden slots, and the latest begin/end/reset transition. Schema v2 covers howl, item-ring,
+  Start-menu, field-map, dungeon-map, and Agitha-insect sources. JSONL emission is driven only by
+  those semantic transitions.
 - `diagnostics.stats`: recorder health in `latest.json`, including per-provider event counts, byte counts, throttles, payload oversize counts, current budget-window counts, and configured provider budgets.
 
 Leave process-tree, heap, OSReport sink, and debug-viewer providers for follow-up unless the first implementation needs them to answer the current ALINK question.
