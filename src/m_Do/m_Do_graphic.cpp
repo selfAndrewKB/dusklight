@@ -2753,7 +2753,7 @@ int mDoGph_Painter() {
         };
 
         for (int window_idx = 0; window_idx < window_num; window_idx++) {
-            // Co-op: singular authored sequences keep camera 1 alive but present only camera 0.
+            // Co-op: fullscreen presentation keeps every camera alive but replays only its owner.
             if (!dusk::coop::event_presentation::shouldDrawWindow(window_idx)) {
                 continue;
             }
@@ -2830,8 +2830,11 @@ int mDoGph_Painter() {
 #if TARGET_PC
     auto set_hud_viewport = [&]() {
         if (dusk::coop::camera::isSplitScreenEnabled()) {
-            view_port_class* view_port = dComIfGp_getWindow(0)->getViewPort();
-            // Co-op: V1 HUD is P1-owned; draw it into P1's window instead of spanning both views.
+            int window_index = dusk::coop::event_presentation::isFullscreen()
+                                   ? dusk::coop::event_presentation::presenterWindowIndex()
+                                   : 0;
+            view_port_class* view_port = dComIfGp_getWindow(window_index)->getViewPort();
+            // Co-op: bind shared 2D work to the window currently presenting the authored surface.
             GXSetViewport(view_port->x_orig, view_port->y_orig, view_port->width,
                           view_port->height, view_port->near_z, view_port->far_z);
             GXSetScissor(view_port->x_orig, view_port->y_orig, view_port->width,

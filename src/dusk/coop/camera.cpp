@@ -80,7 +80,10 @@ void applyWindowLayout() {
 
 void applyWindowLayoutForCamera(int cameraId) {
     if (!s_state.enabled || cameraId == kPrimaryCameraId) {
-        if (!s_state.enabled || dusk::coop::event_presentation::isFullscreen()) {
+        const bool presentPrimaryFullscreen =
+            dusk::coop::event_presentation::isFullscreen() &&
+            dusk::coop::event_presentation::presenterWindowIndex() == 0;
+        if (!s_state.enabled || presentPrimaryFullscreen) {
             dComIfGp_setWindow(0, 0.0f, 0.0f, FB_WIDTH, FB_HEIGHT, 0.0f, 1.0f,
                                kPrimaryCameraId, 2);
         } else if (s_state.layout == SplitScreenLayout::Horizontal) {
@@ -99,7 +102,12 @@ void applyWindowLayoutForCamera(int cameraId) {
         return;
     }
 
-    if (s_state.layout == SplitScreenLayout::Horizontal) {
+    if (dusk::coop::event_presentation::isFullscreen() &&
+        dusk::coop::event_presentation::presenterWindowIndex() == kSecondaryWindowId)
+    {
+        setWindowRaw(&s_state.window, 0.0f, 0.0f, FB_WIDTH, FB_HEIGHT, 0.0f, 1.0f,
+                     kSecondaryCameraId, 2);
+    } else if (s_state.layout == SplitScreenLayout::Horizontal) {
         const f32 halfHeight = static_cast<f32>(FB_HEIGHT) * 0.5f;
         setWindowRaw(&s_state.window, 0.0f, halfHeight, FB_WIDTH, halfHeight, 0.0f, 1.0f,
                      kSecondaryCameraId, 2);

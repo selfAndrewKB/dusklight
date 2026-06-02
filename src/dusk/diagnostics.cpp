@@ -1506,15 +1506,22 @@ json collectEventPresentation() {
     }
 
     return {
-        {"schema_version", 1},
+        {"schema_version", 2},
         {"revision", state.revision},
         {"fullscreen", state.fullscreen},
         {"split_screen_capability", coop::camera::isSplitScreenEnabled()},
         {"split_viewports_presented", coop::event_presentation::shouldPresentSplitViewports()},
-        {"hide_additional_visuals", state.hideAdditionalVisuals},
+        {"presenter_slot", static_cast<int>(state.presenterSlot)},
+        {"presenter_window", state.presenterWindowIndex},
+        {"hide_non_presenter_visuals", state.hideNonPresenterVisuals},
         {"total_depth", state.totalDepth},
         {"sources", {
             {"wolf_howl", state.wolfHowlDepth},
+            {"item_ring", state.itemRingDepth},
+            {"pause_menu", state.pauseMenuDepth},
+            {"field_map", state.fieldMapDepth},
+            {"dungeon_map", state.dungeonMapDepth},
+            {"agitha_insect", state.agithaInsectDepth},
         }},
         {"last_transition", coop::event_presentation::transitionName(state.lastTransition)},
         {"last_source", coop::event_presentation::sourceName(state.lastSource)},
@@ -2444,7 +2451,7 @@ Provider s_providers[] = {
     {"camera.state", 1, "cheap", 1, true, 20, 8192, collectCameraState},
     {"player.slots", 1, "cheap", 1, true, 120, 8192, collectPlayerSlots},
     {"horse.owner", 2, "cheap", 1, true, 120, 12288, collectHorseOwner},
-    {"event.presentation", 1, "cheap", 1, true, 120, 4096, collectEventPresentation},
+    {"event.presentation", 2, "cheap", 1, true, 120, 4096, collectEventPresentation},
     {"render.lines", 2, "cheap", 1, true, 120, 32768, collectRenderLines},
     {"input.pad", 1, "cheap", 1, true, 120, 4096, collectInputPad},
     {"attention.state", 2, "medium", 5, true, 60, 32768, collectAttentionState},
