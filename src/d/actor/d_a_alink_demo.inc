@@ -916,6 +916,12 @@ void daAlink_c::endHighModel() {
 }
 
 void daAlink_c::resetSpecialEvent() {
+#if TARGET_PC
+    if (checkWolfHowlDemoMode()) {
+        // Co-op: any native howl-demo reset must release its singular presentation override.
+        dusk::coop::event_presentation::end(dusk::coop::event_presentation::Source::WolfHowl);
+    }
+#endif
     dComIfGp_event_reset();
     dCam_getBody()->EndEventCamera(fopAcM_GetID(this));
     endDemoMode();

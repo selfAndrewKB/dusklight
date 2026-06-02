@@ -36,7 +36,7 @@ The hooks are guardrails, not a replacement for judgment. They exist to preserve
 - Remind presentation fixes not to rewrite interpolated points, shared pane positions, draw-list contents, or shared render buffers from symptoms alone. Trace the vanilla producer, retained owner, submission point, viewport replay, and restore path first; extend the narrow native ownership API only after diagnostics identify the broken boundary.
 - Remind viewport replay fixes that presentation refresh is independent from simulation interpolation. Camera-facing ribbons, projections, and similar replayed geometry must rebuild from submitted native state for every active viewport even when interpolation is disabled.
 - Remind all added-player fixes to begin with: "What vanilla lifecycle, state write, replay, or presentation pass is P2 missing?" Restore that missing native work at its ownership boundary before adding local correction code.
-- Remind interaction/event edits that singular authored sequences are not automatically player-owned. Keep howling stones P1/global in V1 and route future opt-in fullscreen collapse plus additional-player hiding through the planned `event_presentation` family rather than disabling split-screen capability or duplicating global minigame state.
+- Remind interaction/event edits that singular authored sequences are not automatically player-owned. Keep howling stones P1/global in V1 and route explicit fullscreen collapse plus additional-player hiding through `event_presentation` rather than disabling split-screen capability or duplicating global minigame state. For fullscreen item/map surfaces, keep retained menu input and selection in `ui_owner`; presentation collapse is a separate policy.
 - Remind attention/status work that clean P2 input does not prove independent P2 state; capture shared `dComIfGp`/attention facts before changing shield or lock-on behavior.
 - Remind plan/doc edits to reconcile plan lifecycle: exactly one current active co-op plan in `AGENTS.md`, completed evidence docs pointing forward, and stale `current`/`active`/`next`/`todo` language cleaned up when a milestone changes state.
 - After supported edit/check tools run, add focused review context for C++ edits, original/decomp edits, docs-map drift, new source files that may need `files.cmake`, fmt/MSVC logging hazards, and real `git diff --check` whitespace failures.
@@ -60,7 +60,7 @@ The hooks are guardrails, not a replacement for judgment. They exist to preserve
   - Also reminds presentation fixes to diagnose the native producer-to-viewport path before changing interpolated geometry, shared pane placement, draw-list mutation, or shared render buffers.
   - Also reminds viewport replay fixes to keep per-view camera-facing geometry expansion independent from frame interpolation enablement.
   - Also reminds every added-player fix to identify which vanilla lifecycle P2 is missing before adding correction code.
-  - Also reminds interaction/event edits to classify singular authored sequences separately and keep howling stones P1/global until the planned `event_presentation` family exists.
+  - Also reminds interaction/event edits to classify singular authored sequences separately, keep howling stones P1/global, opt authored fullscreen sequences into `event_presentation` individually, and keep fullscreen item/map input ownership in `ui_owner`.
   - Also watches plan-map edits and reminds Codex to retire completed plans cleanly instead of leaving stale active-plan breadcrumbs.
 
 ## Limitations

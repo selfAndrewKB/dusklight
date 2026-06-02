@@ -4036,6 +4036,10 @@ int daAlink_c::procWolfHowlDemoInit() {
         }
     }
 
+#if TARGET_PC
+    // Co-op: wolf howl stays a singular P1/global event; collapse only its authored presentation.
+    dusk::coop::event_presentation::begin(dusk::coop::event_presentation::Source::WolfHowl);
+#endif
     dCam_getBody()->StartEventCamera(12, fopAcM_GetID(this), nullptr);
     mProcVar1.field_0x300a = 0;
     mMsgClassID = fpcM_ERROR_PROCESS_ID_e;
@@ -4152,6 +4156,11 @@ int daAlink_c::procWolfHowlDemo() {
             if (checkUnderMove0BckNoArcWolf(WANM_HOWL_END) || isSkipEdge) {
                 if (checkAnmEnd(frameCtrl_p) || isSkipEdge) {
                     if (mProcVar0.mHowlExitID >= 0) {
+#if TARGET_PC
+                        // Co-op: scene-change handoff ends the singular howl presentation explicitly.
+                        dusk::coop::event_presentation::end(
+                            dusk::coop::event_presentation::Source::WolfHowl);
+#endif
                         dStage_changeScene(mProcVar0.mHowlExitID, 0.0f, 0, fopAcM_GetRoomNo(this),
                                            shape_angle.y, -1);
                     } else {
@@ -4159,6 +4168,9 @@ int daAlink_c::procWolfHowlDemo() {
                         if (daAlink_getAlinkActorClass()->getCorrectCurveID() == 9) {
                             if (dComIfGp_roomControl_getTimePass()) {
                                 g_env_light.time_change_rate = 1.0f;
+                                // Co-op: Dusk's Sun's Song shortcut closes the same global howl camera.
+                                dusk::coop::event_presentation::end(
+                                    dusk::coop::event_presentation::Source::WolfHowl);
                                 dComIfGp_event_reset();
                                 dCam_getBody()->EndEventCamera(fopAcM_GetID(this));
                             } else {
@@ -4194,6 +4206,11 @@ int daAlink_c::procWolfHowlDemo() {
                                 daHorse_c* horse = static_cast<daHorse_c*>(actor_p);
                                 int ret = horse->callHorse(&current.pos);
                                 if (ret == 1 || ret == 2) {
+#if TARGET_PC
+                                    // Co-op: horse-call handoff leaves the howl demo before its wait state.
+                                    dusk::coop::event_presentation::end(
+                                        dusk::coop::event_presentation::Source::WolfHowl);
+#endif
                                     mDoAud_taktModeMuteOff();
                                     return procCoHorseCallWaitInit(ret);
                                 }
@@ -4214,6 +4231,11 @@ int daAlink_c::procWolfHowlDemo() {
                         if (gwolf_p == NULL) {
                             resetSpecialEvent();
                         } else {
+#if TARGET_PC
+                            // Co-op: Golden Wolf handoff also leaves the shared howl presentation.
+                            dusk::coop::event_presentation::end(
+                                dusk::coop::event_presentation::Source::WolfHowl);
+#endif
                             endDemoMode();
                         }
 
@@ -4242,6 +4264,11 @@ int daAlink_c::procWolfHowlDemo() {
             if (gwolf_p != NULL) {
                 fopAcM_OnStatus(gwolf_p, 0x800);
                 gwolf_p->setHowlingFlag();
+#if TARGET_PC
+                // Co-op: Golden Wolf takes over after the authored howl camera closes.
+                dusk::coop::event_presentation::end(
+                    dusk::coop::event_presentation::Source::WolfHowl);
+#endif
                 dComIfGp_event_reset();
 
                 dCam_getBody()->EndEventCamera(fopAcM_GetID(this));

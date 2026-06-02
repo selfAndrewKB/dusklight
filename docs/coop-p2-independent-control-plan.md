@@ -28,7 +28,7 @@ This is not a global replacement of `dComIfGp_getPlayer(0)`, `daPy_getPlayerActo
   side-step, sword state, position, training flags, and forced player placement. The training owner
   should be retained once a lesson starts.
 - Howling stones and howl tags intentionally remain P1/global in V1. Their authored waveform
-  minigame is a candidate for the deferred singular fullscreen `event_presentation` policy, not
+  minigame is the first consumer of the singular fullscreen `event_presentation` policy, not
   the next `interaction_owner` conversion.
 
 ## Current Implementation
@@ -263,7 +263,7 @@ sequence.
 
 4. Convert basic interaction prompts through `interaction_owner`.
    - Door prompt side selection is the first migrated proof.
-   - Leave howling stones P1/global; they are a deferred singular-event presentation case.
+   - Leave howling stones P1/global; their authored fullscreen flow uses `event_presentation`.
    - Keep the validated generic ALINK talk/check/pickup path intact.
    - Audit remaining world actors case by case when their own P1-only eligibility reads are observed.
 
@@ -281,7 +281,7 @@ sequence.
 | First-person and item aim | `src/d/actor/d_a_alink_bow.inc`, `src/d/actor/d_a_alink_ironball.inc`, hookshot code in ALINK, `src/d/actor/d_a_arrow.cpp` | Bow/slingshot, Hawkeye, iron ball, hookshot, item cameras, and viewport-local item overlays have a first owner-aware pass. |
 | Interaction prompts | `src/d/actor/d_a_alink.cpp`, `src/f_op/f_op_actor_mng.cpp`, NPC/object actors with action prompts | Generic ALINK talk/check/pickup and carried-item actions are slot-local; knob/shutter door prompt side selection uses `interaction_owner`; event-owner door demos move the requester; HUD prompt rendering is owner-aware. Remaining world-actor singleton prompts should be audited case by case. |
 | Climb/hang camera hints | `src/d/actor/d_a_alink_hang.inc` | Hang, ladder, climb, and roof-hang camera status writes route through `player_camera_status` so P2 climb states do not write into P1's camera row. |
-| Howling/Hidden Skills | `src/d/actor/d_a_tag_howl.cpp`, `src/d/actor/d_a_obj_smw_stone.cpp`, `src/d/actor/d_a_npc_kn.cpp` | Howling intentionally remains P1/global pending singular fullscreen `event_presentation`; Hidden Skill trainer ownership is deferred unless testing exposes a concrete P2 failure. |
+| Howling/Hidden Skills | `src/d/actor/d_a_tag_howl.cpp`, `src/d/actor/d_a_obj_smw_stone.cpp`, `src/d/actor/d_a_npc_kn.cpp` | Howling intentionally remains P1/global and uses singular fullscreen `event_presentation`; Hidden Skill trainer ownership is deferred unless testing exposes a concrete P2 failure. |
 
 ## Test Plan
 

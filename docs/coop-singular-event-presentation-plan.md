@@ -7,9 +7,9 @@ one fullscreen message or minigame surface, and one global world-state transitio
 split-screen should not automatically duplicate or partition those sequences.
 
 Howling stones are the first clear example. They remain P1/global in V1. Players can use Dusk's
-seamless controller-port switching when they want to trade control briefly. A future implementation
-may collapse split-screen while a howl event runs so the original fullscreen presentation remains
-coherent.
+seamless controller-port switching when they want to trade control briefly. The implemented
+presentation override collapses split-screen while a howl event runs so the original fullscreen
+presentation remains coherent.
 
 This is a presentation policy, not a broad event-ownership conversion. Ordinary dialogue,
 interaction prompts, item cameras, and gameplay events should continue to use their existing narrow
@@ -33,31 +33,36 @@ It does not answer:
 Those remain `interaction_owner`, `event_owner`, `hud_owner` / `ui_owner`, and
 `dusk::coop::camera` questions.
 
-## Proposed API
+## Implemented API
 
-Add a Dusk-owned `dusk::coop::event_presentation` family:
+The Dusk-owned `dusk::coop::event_presentation` family is:
 
 ```cpp
 namespace dusk::coop::event_presentation {
 
-struct Options {
-    PlayerSlot fullscreenSlot = PlayerSlot::Primary;
-    bool hideAdditionalPlayers = true;
+enum class Source : u8 {
+    WolfHowl,
 };
 
-void begin(const Options& options);
-void end();
+struct Options {
+    bool hideAdditionalVisuals = true;
+};
+
+void begin(Source source, const Options& options = {});
+void end(Source source);
+void reset();
 
 bool isFullscreen();
-PlayerSlot fullscreenSlot();
-bool shouldHidePlayer(const fopAc_ac_c* actor);
+bool shouldPresentSplitViewports();
+bool shouldDrawWindow(int windowIndex);
+bool shouldHideSlot(PlayerSlot slot);
 
 }  // namespace dusk::coop::event_presentation
 ```
 
-The implementation should retain enough state to restore the previous presentation reliably.
-Prefer a scoped token or depth-aware begin/end model so nested singular sequences cannot restore
-split-screen too early.
+Each source has retained depth, so nested begin/end calls cannot restore split-screen too early.
+V1 deliberately presents P1's camera only. `reset()` clears interrupted presentation during play
+scene teardown and initialization beside the existing split-screen camera-sidecar reset.
 
 ## Presentation Policy
 
@@ -65,9 +70,9 @@ While a singular fullscreen presentation is active:
 
 - native co-op remains enabled;
 - additional ALINK actors continue executing and retain their player-slot identity;
-- the painter presents only the selected camera in a fullscreen viewport;
-- additional player models, equipment, shadows, and presentation-only attachments can be hidden
-  through one centralized draw policy;
+- the painter presents camera 0 in a fullscreen viewport while camera 1 remains alive;
+- additional ALINK models, ALINK-submitted equipment and shadows, and slot-owned runtime Epona are
+  hidden through one centralized slot policy;
 - shared world simulation, event progression, room state, and save state continue normally;
 - ending the sequence restores the previous split layout and player presentation immediately.
 
@@ -90,7 +95,7 @@ Howling stones and howl tags remain P1/global in V1:
 - do not route the waveform minigame through `interaction_owner` or `event_owner`;
 - do not duplicate the waveform screen per viewport.
 
-When the presentation API is implemented, hook the shared howl sequence at its lifecycle boundary:
+The shared howl sequence hooks the presentation API at its lifecycle boundary:
 
 - begin a primary fullscreen presentation when the global howl sequence starts;
 - hide additional players while the authored sequence is visible;
@@ -103,6 +108,8 @@ The hook should remain small and event-specific. The reusable behavior belongs i
 
 Evaluate future consumers case by case:
 
+- singular fullscreen item-ring, field-map, and dungeon-map surfaces, while their retained input
+  owner remains a `ui_owner` concern;
 - Hidden Skill training;
 - minigames with a single authored screen;
 - selected cutscenes or scripted demonstrations;
@@ -111,14 +118,25 @@ Evaluate future consumers case by case:
 Do not collapse split-screen for all messages, NPC conversations, signs, shops, or demos by
 default. Many can remain split-screen, and some should become correctly owner-routed instead.
 
-## Implementation Order
+## Implemented Slice
 
-1. Finish the current HUD/UI/interaction ownership work.
-2. Add `event_presentation` storage and a painter-level fullscreen override.
-3. Add centralized additional-player draw suppression without disabling simulation.
-4. Validate restore behavior when a sequence ends normally and when it aborts.
-5. Add the howling-stone lifecycle hook as the first consumer.
-6. Classify later singular sequences individually as they are encountered.
+- `event_presentation` retains source-indexed depth and refreshes the camera layout only when
+  fullscreen presentation begins or ends.
+- Camera layout, painter replay, framebuffer-effect policy, split-only framebuffer refresh,
+  secondary HUD replay, material refresh, shadow refresh, and draw-culling bypass distinguish
+  active split presentation from the underlying split-screen capability.
+- ALINK and runtime-Epona draw wrappers hide additional slots without changing execution or
+  persistent actor flags.
+- `event.presentation` diagnostics record depth, transition, split capability, active presentation
+  layout, and hidden slots.
+- Wolf howl begins after the global event is accepted and ends on its explicit close, scene-change,
+  Sun's Song, horse-call, and Golden Wolf handoffs. Scene lifecycle reset remains interruption
+  insurance.
+
+## Follow-Up Order
+
+1. Validate the test matrix below in game.
+2. Classify later singular sequences individually as they are encountered.
 
 ## Test Plan
 
