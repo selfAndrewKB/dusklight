@@ -7,7 +7,6 @@ enum SecondaryAlinkProbeFlag : unsigned int {
     SecondaryAlinkProbe_SkipExecute = 1u << 0,
     SecondaryAlinkProbe_SkipDraw = 1u << 1,
     SecondaryAlinkProbe_SkipWaitAnimeBind = 1u << 2,
-    SecondaryAlinkProbe_SkipStartProcInit = 1u << 3,
     SecondaryAlinkProbe_SkipSetMatrix = 1u << 4,
     SecondaryAlinkProbe_SkipCreateAnimePlay = 1u << 5,
     SecondaryAlinkProbe_SkipCreateModelCalc = 1u << 6,

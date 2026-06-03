@@ -51,6 +51,7 @@ constexpr int kEventVersion = 1;
 constexpr int kManifestVersion = 1;
 constexpr const char* kProfileSecondaryAlinkActionMirror = "coop.secondary_alink.action_mirror";
 constexpr size_t kRingBufferMaxEvents = 3600;
+constexpr size_t kCameraAreaLoadMaxCheckpoints = 24;
 constexpr u32 kLatestWriteMinFrameInterval = 15;
 constexpr u64 kBudgetWindowUs = 60ull * 1000ull * 1000ull;
 
@@ -94,6 +95,8 @@ struct State {
     u32 lastLatestWriteFrame = 0;
     SecondaryAlinkState secondaryAlinkState{};
     bool hasSecondaryAlinkState = false;
+    std::deque<json> cameraAreaLoadCheckpoints;
+    u32 cameraAreaLoadRevision = 0;
 };
 
 State s_state;
@@ -1040,6 +1043,7 @@ json eventKeyForProvider(const char* provider, const json& data) {
             const json body = camera.value("body", json::object());
             return json{
                 {"camera_id", body.value("camera_id", 0u)},
+                {"owner", body.value("owner", std::string("0x0"))},
                 {"type", body.value("type", 0)},
                 {"mode", body.value("mode", 0)},
                 {"active", body.value("active", false)},
@@ -1064,6 +1068,13 @@ json eventKeyForProvider(const char* provider, const json& data) {
             {"camera1_player", camera1.value("player1_id", 0)},
             {"camera0_body", camera_body_key(camera0)},
             {"camera1_body", camera_body_key(camera1)},
+        };
+    }
+    if (name == "camera.area_load") {
+        return {
+            {"schema_version", data.value("schema_version", 1)},
+            {"revision", data.value("revision", 0u)},
+            {"last_phase", data.value("last_phase", std::string())},
         };
     }
     if (name == "attention.state") {
@@ -1194,6 +1205,10 @@ json cameraSummary(int idx) {
     data["distance"] = camera->view.lookat.eye.abs(camera->view.lookat.center);
     data["body"] = {
         {"camera_id", static_cast<unsigned int>(camera->mCamera.CameraID())},
+        {"owner", ptrString(reinterpret_cast<uintptr_t>(camera->mCamera.mpPlayerActor))},
+        {"owner_angle_y", camera->mCamera.mpPlayerActor != nullptr
+                              ? static_cast<int>(camera->mCamera.mpPlayerActor->shape_angle.y)
+                              : 0},
         {"owner_room", camera->mCamera.mpPlayerActor != nullptr
                            ? static_cast<int>(fopAcM_GetRoomNo(camera->mCamera.mpPlayerActor))
                            : -1},
@@ -1214,6 +1229,9 @@ json cameraSummary(int idx) {
         {"window_height", camera->mCamera.mWindowHeight},
         {"window_aspect", camera->mCamera.mWindowAspect},
         {"view_cache_distance", camera->mCamera.iEye().abs(camera->mCamera.iCenter())},
+        {"view_cache_yaw", camera->mCamera.iU()},
+        {"controlled_yaw", camera->mCamera.U2()},
+        {"stored_yaw", camera->mCamera.U()},
         {"map", cameraMapSummary(camera->mCamera)},
     };
     return data;
@@ -1285,6 +1303,21 @@ json collectCameraState() {
         {"secondary_requested", dusk::coop::camera::isSecondaryCameraRequested()},
         {"camera0", cameraSummary(0)},
         {"camera1", cameraSummary(1)},
+    };
+}
+
+json collectCameraAreaLoad() {
+    json checkpoints = json::array();
+    for (const json& checkpoint : s_state.cameraAreaLoadCheckpoints) {
+        checkpoints.push_back(checkpoint);
+    }
+
+    return {
+        {"schema_version", 1},
+        {"revision", s_state.cameraAreaLoadRevision},
+        {"last_phase", checkpoints.empty() ? std::string()
+                                             : checkpoints.back().value("phase", std::string())},
+        {"checkpoints", checkpoints},
     };
 }
 
@@ -2451,6 +2484,7 @@ Provider s_providers[] = {
     {"render.stats", 1, "cheap", 30, true, 20, 4096, collectRenderStats},
     {"render.windows", 2, "cheap", 1, true, 20, 8192, collectRenderWindows},
     {"camera.state", 2, "cheap", 1, true, 20, 8192, collectCameraState},
+    {"camera.area_load", 1, "cheap", 1, true, 120, 32768, collectCameraAreaLoad},
     {"player.slots", 2, "cheap", 1, true, 120, 8192, collectPlayerSlots},
     {"horse.owner", 3, "cheap", 1, true, 120, 12288, collectHorseOwner},
     {"event.presentation", 2, "cheap", 1, true, 120, 4096, collectEventPresentation},
@@ -2609,6 +2643,11 @@ void tick(u32 frame) {
 
         json data = provider.collect();
         updateProviderLatest(provider.name, data);
+        if (std::string(provider.name) == "camera.area_load" &&
+            data.value("revision", 0u) == 0)
+        {
+            continue;
+        }
         if (std::string(provider.name) == "coop.player_query") {
             emitPlayerQueryEvents(provider, data);
             continue;
@@ -2708,6 +2747,60 @@ void recordSecondaryAlinkState(const char* phase, const SecondaryAlinkState& sta
     } else {
         storeEvent(makeEnvelope("alink.secondary", 1, "change", data));
     }
+    updateLatestFileIfDue(false);
+}
+
+void recordCameraAreaLoadCheckpoint(const char* phase, const char* startupSource, int cameraId,
+                                    const fopAc_ac_c* actor, const cXyz* center, const cXyz* eye,
+                                    s16 cameraYaw, int startMode, int cameraFrame) {
+    const cXyz& restartCenter = dComIfGs_getTurnRestart().getCameraCtr();
+    const cXyz& restartEye = dComIfGs_getTurnRestart().getCameraEye();
+    const char* stage = dComIfGp_getStartStageName();
+    json checkpoint = {
+        {"revision", ++s_state.cameraAreaLoadRevision},
+        {"phase", phase != nullptr ? phase : ""},
+        {"startup_source", startupSource != nullptr ? startupSource : ""},
+        {"camera_id", cameraId},
+        {"camera_frame", cameraFrame},
+        {"camera_yaw", static_cast<int>(cameraYaw)},
+        {"actor", ptrString(reinterpret_cast<uintptr_t>(actor))},
+        {"actor_room", actor != nullptr ? static_cast<int>(fopAcM_GetRoomNo(actor)) : -1},
+        {"actor_argument", actor != nullptr ? static_cast<int>(actor->argument) : 0},
+        {"actor_angle_y", actor != nullptr ? static_cast<int>(actor->shape_angle.y) : 0},
+        {"actor_pos", actor != nullptr
+                          ? json{actor->current.pos.x, actor->current.pos.y, actor->current.pos.z}
+                          : json::array()},
+        {"camera_center", center != nullptr ? json{center->x, center->y, center->z} : json::array()},
+        {"camera_eye", eye != nullptr ? json{eye->x, eye->y, eye->z} : json::array()},
+        {"turn_restart_center", {restartCenter.x, restartCenter.y, restartCenter.z}},
+        {"turn_restart_eye", {restartEye.x, restartEye.y, restartEye.z}},
+        {"turn_restart_angle_y", static_cast<int>(dComIfGs_getTurnRestartAngleY())},
+        {"last_scene_mode", static_cast<unsigned int>(dComIfGs_getLastSceneMode())},
+        {"start_mode", startMode},
+        {"stage", stage != nullptr ? stage : ""},
+        {"stage_room", static_cast<int>(dComIfGp_getStartStageRoomNo())},
+        {"stage_layer", static_cast<int>(dComIfGp_getStartStageLayer())},
+        {"stage_point", static_cast<int>(dComIfGp_getStartStagePoint())},
+        {"split_screen_enabled", coop::camera::isSplitScreenEnabled()},
+        {"split_screen_requested", coop::camera::isSplitScreenRequested()},
+        {"secondary_ready", coop::camera::isSecondaryCameraReady()},
+        {"secondary_requested", coop::camera::isSecondaryCameraRequested()},
+    };
+    s_state.cameraAreaLoadCheckpoints.push_back(checkpoint);
+    while (s_state.cameraAreaLoadCheckpoints.size() > kCameraAreaLoadMaxCheckpoints) {
+        s_state.cameraAreaLoadCheckpoints.pop_front();
+    }
+
+    if (!s_state.enabled) {
+        return;
+    }
+
+    ensureInitialized();
+    if (!s_state.initialized) {
+        return;
+    }
+
+    updateProviderLatest("camera.area_load", collectCameraAreaLoad());
     updateLatestFileIfDue(false);
 }
 

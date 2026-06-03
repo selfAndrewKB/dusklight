@@ -35,6 +35,8 @@ PlayerSlot getSlotForActor(const fopAc_ac_c* actor);
 int getPadForSlot(PlayerSlot slot);
 unsigned int spawnPlayer(PlayerSlot slot, daAlink_c* primary);
 void restoreRequestedPlayers(daAlink_c* primary);
+void queueSessionRestoreAfterPrimaryCameraReady();
+void tryRestoreQueuedSession(daAlink_c* primary);
 bool isPlayerRequested(PlayerSlot slot);
 
 }  // namespace dusk::coop

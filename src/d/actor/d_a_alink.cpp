@@ -4883,50 +4883,59 @@ void daAlink_c::playerInit() {
     onNoResetFlg0(FLG0_SWIM_UP);
     offOxygenTimer();
 
-    int startMode = getStartMode();
-    int startEvent = getStartEvent();
-
-    if (dComIfGp_getStartStagePoint() == -2 || dComIfGp_getStartStagePoint() == -3) {
-        mStartEventID = dComIfGp_evmng_startDemo(-1);
-    } else if (dComIfGp_getStartStagePoint() == -4) {
-        mStartEventID = dComIfGp_evmng_startDemo(0xD5);
+#if TARGET_PC
+    if (dusk::coop::isAdditionalPlayer(this)) {
+        // Co-op: runtime additional Links must not register the protagonist's scene-start demo again.
+        mStartEventID = 0xFF;
     } else {
-        if (getLastSceneMode() == 9) {
-            mStartEventID = dComIfGp_evmng_startDemo(0xD3);
-        } else if (startMode == 10) {
-            if (startEvent != 0xFF) {
-                mStartEventID = dComIfGp_evmng_startDemo(startEvent);
-            } else {
-                mStartEventID = dComIfGp_evmng_startDemo(0xCF);
-            }
-        } else if (startMode == 11) {
-            if (startEvent != 0xFF) {
-                mStartEventID = dComIfGp_evmng_startDemo(startEvent);
-            } else {
-                mStartEventID = dComIfGp_evmng_startDemo(0xD0);
-            }
-        } else if (startMode == 6) {
-            mStartEventID = dComIfGp_evmng_startDemo(0xCD);
-        } else if (startMode == 7) {
-            mStartEventID = dComIfGp_evmng_startDemo(0xCE);
-        } else if (startMode == 8) {
-            if (startEvent != 0xFF) {
-                mStartEventID = dComIfGp_evmng_startDemo(startEvent);
-            } else {
-                mStartEventID = dComIfGp_evmng_startDemo(0xD4);
-            }
-        } else if (startMode == 12) {
-            mStartEventID = dComIfGp_evmng_startDemo(0xC9);
-        } else if (getLastSceneMode() == 11) {
-            mStartEventID = dComIfGp_evmng_startDemo(0xFF);
-        } else if (getLastSceneMode() == 12) {
-            mStartEventID = dComIfGp_evmng_startDemo(0xD1);
-        } else {
-            mStartEventID = dComIfGp_evmng_startDemo(startEvent);
-        }
-    }
+#endif
+        int startMode = getStartMode();
+        int startEvent = getStartEvent();
 
-    dComIfGp_getPEvtManager()->orderStartDemo();
+        if (dComIfGp_getStartStagePoint() == -2 || dComIfGp_getStartStagePoint() == -3) {
+            mStartEventID = dComIfGp_evmng_startDemo(-1);
+        } else if (dComIfGp_getStartStagePoint() == -4) {
+            mStartEventID = dComIfGp_evmng_startDemo(0xD5);
+        } else {
+            if (getLastSceneMode() == 9) {
+                mStartEventID = dComIfGp_evmng_startDemo(0xD3);
+            } else if (startMode == 10) {
+                if (startEvent != 0xFF) {
+                    mStartEventID = dComIfGp_evmng_startDemo(startEvent);
+                } else {
+                    mStartEventID = dComIfGp_evmng_startDemo(0xCF);
+                }
+            } else if (startMode == 11) {
+                if (startEvent != 0xFF) {
+                    mStartEventID = dComIfGp_evmng_startDemo(startEvent);
+                } else {
+                    mStartEventID = dComIfGp_evmng_startDemo(0xD0);
+                }
+            } else if (startMode == 6) {
+                mStartEventID = dComIfGp_evmng_startDemo(0xCD);
+            } else if (startMode == 7) {
+                mStartEventID = dComIfGp_evmng_startDemo(0xCE);
+            } else if (startMode == 8) {
+                if (startEvent != 0xFF) {
+                    mStartEventID = dComIfGp_evmng_startDemo(startEvent);
+                } else {
+                    mStartEventID = dComIfGp_evmng_startDemo(0xD4);
+                }
+            } else if (startMode == 12) {
+                mStartEventID = dComIfGp_evmng_startDemo(0xC9);
+            } else if (getLastSceneMode() == 11) {
+                mStartEventID = dComIfGp_evmng_startDemo(0xFF);
+            } else if (getLastSceneMode() == 12) {
+                mStartEventID = dComIfGp_evmng_startDemo(0xD1);
+            } else {
+                mStartEventID = dComIfGp_evmng_startDemo(startEvent);
+            }
+        }
+
+        dComIfGp_getPEvtManager()->orderStartDemo();
+#if TARGET_PC
+    }
+#endif
     field_0x2f94 = -1;
     field_0x2f95 = -1;
     field_0x2f96 = -1;
@@ -5183,6 +5192,13 @@ int daAlink_c::create() {
     // Co-op: the spawn argument only selects an extra slot until sidecar registration exists.
     const dusk::coop::PlayerSlot coop_slot = dusk::coop::getAdditionalPlayerSpawnRequestSlot(this);
     const bool coop_secondary = coop_slot != dusk::coop::PlayerSlot::Invalid;
+    if (coop_secondary) {
+        // Co-op: runtime joins start from P1's position, not P1's authored area-entry semantics.
+        sceneMode = 0;
+        startMode = 0;
+        startPoint = 0;
+        isHorseStart = FALSE;
+    }
     auto coop_log_primary_state = [&](const char* phase) {
         if (!coop_secondary) {
             return;
@@ -5206,6 +5222,9 @@ int daAlink_c::create() {
             primary->attention_info.flags);
     };
     coop_log_primary_state("begin");
+#endif
+#if !TARGET_PC
+    const bool coop_secondary = false;
 #endif
 
     // Stage: City   Room: Entrance   Layer: 0
@@ -5360,7 +5379,7 @@ int daAlink_c::create() {
 #endif
         bgWaitFlg = TRUE;
 
-        if (checkCanoeStart()) {
+        if (!coop_secondary && checkCanoeStart()) {
             mRideActorID = fopAcM_create(fpcNm_CANOE_e, 0, &current.pos, fopAcM_GetRoomNo(this),
                                          &shape_angle, NULL, -1);
         } else if (sceneMode == 11) {
@@ -5378,10 +5397,11 @@ int daAlink_c::create() {
         || (startMode == 14 && !dComIfG_Bgsp().ChkMoveBG(mLinkAcch.m_gnd))
         || (startPoint == -4 && !(portalActor = fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchPortal, &current.pos)))
         || (mRideActorID != fpcM_ERROR_PROCESS_ID_e && !fopAcM_SearchByID(mRideActorID))
-        || (checkCanoeStart() && !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchCanoe, NULL))
-        || (checkBoarStart() && !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchBoar, NULL))
+        || (!coop_secondary && checkCanoeStart() && !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchCanoe, NULL))
+        || (!coop_secondary && checkBoarStart() && !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchBoar, NULL))
         || (startMode == 13 && (!mLinkAcch.ChkWaterHit() || mLinkAcch.m_wtr.GetHeight() < current.pos.y))
-        || ((checkCarryStartLightBallA() || checkCarryStartLightBallB()) && !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchLightBall, NULL))
+        // Co-op: runtime joins must not replay the protagonist's scene-entry carry requirements.
+        || (!coop_secondary && (checkCarryStartLightBallA() || checkCarryStartLightBallB()) && !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchLightBall, NULL))
         || (isHorseStart && dComIfGp_getHorseActor() == NULL)
         )
     {
@@ -5447,11 +5467,9 @@ int daAlink_c::create() {
 
     int midna_prm = 0;
 #if TARGET_PC
-    if (coop_secondary &&
-        dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_SkipStartProcInit))
-    {
-        // Co-op: skip secondary proc init to test whether startup action state corrupts P1 animation.
-        coop_log_primary_state("skip-start-proc-init");
+    if (coop_secondary) {
+        // Co-op: runtime joins need an ordinary local action proc, not P1's scene-entry replay.
+        checkWaitAction();
     } else {
 #endif
         midna_prm = setStartProcInit();
@@ -5554,18 +5572,19 @@ int daAlink_c::create() {
     }
 #endif
 
-    if ((dComIfGs_getLastSceneMode() & 0x400000) && !checkWolf() && !checkNotHeavyBootsStage() &&
+    // Co-op: global scene-entry equipment state belongs to the protagonist, not runtime joins.
+    if (!coop_secondary && (dComIfGs_getLastSceneMode() & 0x400000) && !checkWolf() && !checkNotHeavyBootsStage() &&
         !isHorseStart && !isEnteringLV7)
     {
         setHeavyBoots(1);
     }
 
-    if ((dComIfGs_getLastSceneMode() & 0x200000) && !checkCloudSea()) {
+    if (!coop_secondary && (dComIfGs_getLastSceneMode() & 0x200000) && !checkCloudSea()) {
         onNoResetFlg2(FLG2_UNK_1);
         mZ2Link.setKanteraState(2);
     }
 
-    if (checkCarryStartLightBallA() || checkCarryStartLightBallB()) {
+    if (!coop_secondary && (checkCarryStartLightBallA() || checkCarryStartLightBallB())) {
         setForceGrab((fopAc_ac_c*)fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchLightBall, NULL),
                      1, 1);
     }
@@ -5610,8 +5629,13 @@ int daAlink_c::create() {
 #if TARGET_PC
     if (!coop_secondary) {
         // Co-op: a fully created primary ALINK is the native rebuild point for requested session slots.
-        dusk::coop::camera::restoreSplitScreenCameraState();
-        dusk::coop::restoreRequestedPlayers(this);
+        dusk::diagnostics::recordCameraAreaLoadCheckpoint(
+            "alink.primary-ready", "queue-session-restore", 0, this, NULL, NULL,
+            shape_angle.y, startMode);
+        dusk::coop::queueSessionRestoreAfterPrimaryCameraReady();
+        dusk::diagnostics::recordCameraAreaLoadCheckpoint(
+            "alink.primary-ready", "session-restore-queued", 0, this, NULL, NULL,
+            shape_angle.y, startMode);
     }
 #endif
 
@@ -19624,6 +19648,8 @@ static int daAlink_Execute(daAlink_c* i_this) {
 #endif
     int result = i_this->execute();
 #if TARGET_PC
+    // Co-op: rebuild requested players only after P1's native startup camera has settled.
+    dusk::coop::tryRestoreQueuedSession(i_this);
     coopLogPrimaryRuntimeState(i_this);
 #endif
     return result;

@@ -67,6 +67,11 @@ The secondary Link experiment has graduated into the supported local additional-
 
 Requested additional slots and split-screen enablement are session intent, not properties of one play scene. Area loads clear scene-local actors and camera pointers normally. Once the next primary ALINK finishes creation, Dusk restores requested split-screen state and respawns requested additional slots from the new primary actor. P2 item assignments remain session-local across that reconstruction.
 
+Reconstructed additional ALINKs are runtime joins, not second protagonists entering the area. They
+keep structural `playerInit()` work, but do not register the global scene-start demo again or replay
+P1's authored area-entry action proc. They enter an ordinary local wait/action state at the rebuilt
+position.
+
 The original ALINK model-data probe has also graduated into `dusk::coop::alink_model_data_owner`. Link body `J3DModelData` is shared while its installed matrix calculators are actor-local, so additional-player startup evaluation, execute, and draw temporarily install that ALINK's calculators and restore P1 afterward. This is runtime policy now, not an Actor Spawner checkbox.
 
 Additional player spawning should not be owned by the ImGui Actor Spawner. The current debug button and `Ctrl+F12` hotkey are callers of the Dusk co-op lifecycle API. Future player-count settings, controller-port "press Start to join", and online host/client join handling should reuse the same slot-based `spawnPlayer(...)` path so local and networked co-op do not diverge. The registry, spawn request decoding, and controller-port mapping are shaped for four slots now; camera/render sidecars and diagnostics remain proven only for slot 1 until later plans extend them.

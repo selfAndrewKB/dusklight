@@ -219,7 +219,6 @@ void ImGuiMenuTools::ShowActorSpawner() {
         secondaryAlinkProbeCheckbox("Skip execute", dusk::coop::SecondaryAlinkProbe_SkipExecute);
         secondaryAlinkProbeCheckbox("Skip draw", dusk::coop::SecondaryAlinkProbe_SkipDraw);
         secondaryAlinkProbeCheckbox("Skip wait animation bind", dusk::coop::SecondaryAlinkProbe_SkipWaitAnimeBind);
-        secondaryAlinkProbeCheckbox("Skip start proc init", dusk::coop::SecondaryAlinkProbe_SkipStartProcInit);
         secondaryAlinkProbeCheckbox("Skip set matrix", dusk::coop::SecondaryAlinkProbe_SkipSetMatrix);
         secondaryAlinkProbeCheckbox("Skip create animation play", dusk::coop::SecondaryAlinkProbe_SkipCreateAnimePlay);
         secondaryAlinkProbeCheckbox("Skip create model calc", dusk::coop::SecondaryAlinkProbe_SkipCreateModelCalc);

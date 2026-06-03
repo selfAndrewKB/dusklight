@@ -3,8 +3,10 @@
 #include "dusk/coop/camera.h"
 #include "dusk/coop/horse_owner.h"
 #include "dusk/coop/player_item_selection.h"
+#include "dusk/diagnostics.h"
 #include "dusk/logging.h"
 #include "d/actor/d_a_alink.h"
+#include "d/d_com_inf_game.h"
 #include "f_pc/f_pc_layer.h"
 #include "f_pc/f_pc_manager.h"
 #include "f_pc/f_pc_node.h"
@@ -23,6 +25,9 @@ aurora::Module CoopLog("dusk::coop");
 // Co-op: records actor identity only. Actor lifetime stays owned by the game.
 fopAc_ac_c* s_players[kPlayerSlotCount] = {};
 bool s_requestedPlayers[kPlayerSlotCount] = {};
+bool s_sessionRestoreQueued = false;
+
+constexpr u32 kPrimaryCameraStartupFramesBeforeRestore = 12;
 
 constexpr bool isValidSlot(PlayerSlot slot) {
     return slot == PlayerSlot::Slot0 || slot == PlayerSlot::Slot1 ||
@@ -31,6 +36,19 @@ constexpr bool isValidSlot(PlayerSlot slot) {
 
 constexpr int slotIndex(PlayerSlot slot) {
     return static_cast<int>(slot);
+}
+
+bool isPrimaryCameraReadyForSessionRestore() {
+    camera_process_class* camera = dComIfGp_getCamera(0);
+    if (camera == nullptr || camera->mCamera.field_0xb0c == 0) {
+        return false;
+    }
+
+    if (!camera->mCamera.Active()) {
+        return false;
+    }
+
+    return camera->mCamera.mFrameCounter >= kPrimaryCameraStartupFramesBeforeRestore;
 }
 
 }  // namespace
@@ -178,6 +196,11 @@ unsigned int spawnPlayer(PlayerSlot slot, daAlink_c* primary) {
 
     // Co-op: requested additional slots are session intent and must be rebuilt after area loads.
     s_requestedPlayers[slotIndex(slot)] = true;
+    if (!isPrimaryCameraReadyForSessionRestore()) {
+        // Co-op: P2 camera creation must not interrupt P1's native area-entry camera startup.
+        s_sessionRestoreQueued = true;
+        return 0;
+    }
 
     cXyz pos = primary->current.pos;
     pos.x += 120.0f;
@@ -217,6 +240,36 @@ void restoreRequestedPlayers(daAlink_c* primary) {
             spawnPlayer(slot, primary);
         }
     }
+}
+
+void queueSessionRestoreAfterPrimaryCameraReady() {
+    s_sessionRestoreQueued = true;
+}
+
+void tryRestoreQueuedSession(daAlink_c* primary) {
+    if (!s_sessionRestoreQueued || primary == nullptr || !isPrimaryPlayer(primary)) {
+        return;
+    }
+
+    if (!isPrimaryCameraReadyForSessionRestore()) {
+        return;
+    }
+
+    s_sessionRestoreQueued = false;
+    camera_process_class* primary_camera = dComIfGp_getCamera(0);
+    dusk::diagnostics::recordCameraAreaLoadCheckpoint(
+        "alink.primary-ready", "restore-session-now", 0, primary, nullptr, nullptr,
+        primary_camera != nullptr ? primary_camera->mCamera.U() : primary->shape_angle.y,
+        -1,
+        primary_camera != nullptr ? static_cast<int>(primary_camera->mCamera.mFrameCounter) : -1);
+    camera::restoreSplitScreenCameraState();
+    restoreRequestedPlayers(primary);
+    primary_camera = dComIfGp_getCamera(0);
+    dusk::diagnostics::recordCameraAreaLoadCheckpoint(
+        "alink.primary-ready", "session-restored", 0, primary, nullptr, nullptr,
+        primary_camera != nullptr ? primary_camera->mCamera.U() : primary->shape_angle.y,
+        -1,
+        primary_camera != nullptr ? static_cast<int>(primary_camera->mCamera.mFrameCounter) : -1);
 }
 
 bool isPlayerRequested(PlayerSlot slot) {

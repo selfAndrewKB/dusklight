@@ -238,7 +238,8 @@ Do these after the audit stops changing shape:
 - Move temporary secondary ALINK probe flags out of `player_slots.*` if they survive beyond this audit.
 - Model-data ownership flags graduated into `dusk::coop::alink_model_data_owner`; keep that runtime
   invariant out of the probe bitmask and Actor Spawner UI.
-- Remove or hide dangerous toggles such as `Skip start proc init` once no longer needed; it is known to crash.
+- `Skip start proc init` is retired. Additional runtime Links now receive an ordinary local action
+  proc after structural initialization instead of replaying P1's authored area-entry proc.
 - Reduce `dusk::coop.alink` checkpoint logging once the next milestone no longer needs creation-phase traces.
 - Decide whether the Actor Spawner button remains a developer diagnostic, moves to a dedicated co-op debug panel, or is removed.
 - Revisit default probe flags so default behavior reflects the current safe harness, not stale historical tests.
@@ -262,7 +263,8 @@ Available toggles:
 - Skip secondary `execute()`.
 - Skip secondary `draw()`.
 - Skip secondary wait-animation binding.
-- Skip secondary `setStartProcInit()`.
+- Historical: skip secondary `setStartProcInit()`; retired after runtime joins gained an ordinary
+  local action-proc policy.
 - Skip secondary `setMatrix()`.
 - Skip secondary create-time `allAnimePlay()`.
 - Skip secondary create-time `mpLinkModel->calc()`.
@@ -292,7 +294,9 @@ Graduation result: `dusk::coop::alink_model_data_owner` now owns this invariant.
 startup evaluation, execute, and draw install that actor's calculators only for the matching native
 lifecycle scope, then restore P1. Requested additional slots and split-screen intent also survive
 area loads: scene-local actor/camera pointers reset normally, and the completed new primary ALINK
-rebuilds the requested session slots.
+rebuilds the requested session slots. Reconstructed additional ALINKs keep structural
+`playerInit()` work, but do not register P1's global scene-start demo again or replay P1's authored
+area-entry action proc.
 
 Purpose:
 

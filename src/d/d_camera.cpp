@@ -33,6 +33,7 @@
 #include "dusk/coop/horse_owner.h"
 #include "dusk/coop/player_attention.h"
 #include "dusk/coop/player_camera_status.h"
+#include "dusk/diagnostics.h"
 #include "dusk/frame_interpolation.h"
 #include "dusk/logging.h"
 #include "dusk/action_bindings.h"
@@ -646,9 +647,15 @@ void dCamera_c::initialize(camera_class* i_camera, fopAc_ac_c* i_player, u32 i_c
     OS_REPORT("camera: init: type %d mode %d style %d\n", mCurType, mCurMode, mCamStyle);
 
     mCamParam.Change(mCamStyle);
+#if TARGET_PC
+    const char* coopStartupSource = "player-facing-default";
+#endif
     if (daPy_py_c::checkPeepEndSceneChange() || dComIfGp_getStartStagePoint() == -2 ||
         dComIfGp_getStartStagePoint() == -3)
     {
+#if TARGET_PC
+        coopStartupSource = "turn-restart";
+#endif
         mCenter = mViewCache.mCenter = dComIfGs_getTurnRestart().getCameraCtr();
         mEye = mViewCache.mEye = dComIfGs_getTurnRestart().getCameraEye();
 
@@ -662,6 +669,9 @@ void dCamera_c::initialize(camera_class* i_camera, fopAc_ac_c* i_player, u32 i_c
         mViewCache.mFovy = mFovy = dComIfGs_getTurnRestart().getCameraFvy();
     // Co-op: secondary cameras must query the viewport-owned player for startup state.
     } else if (camera_player_link(mpPlayerActor)->checkStartFall()) {
+#if TARGET_PC
+        coopStartupSource = "start-fall-turn-restart-direction";
+#endif
         cXyz attn_pos = attentionPos(mpPlayerActor);
         if (mCamParam.Algorythmn() == 1) {
             attn_pos.y += -20.0f;
@@ -699,6 +709,13 @@ void dCamera_c::initialize(camera_class* i_camera, fopAc_ac_c* i_player, u32 i_c
         mUp.set(0.0f, 1.0f, 0.0f);
         mViewCache.mBank = mBank = cSAngle::_0;
     }
+
+#if TARGET_PC
+    // Co-op: record which native camera-start branch established each area-load orientation.
+    dusk::diagnostics::recordCameraAreaLoadCheckpoint(
+        "camera.initialize", coopStartupSource, static_cast<int>(mCameraID), mpPlayerActor,
+        &mCenter, &mEye, mControlledYaw);
+#endif
 
     mFakeAngleSys.field_0x0 = 0;
     field_0x670 = field_0x674 = 0xFF;
@@ -11486,6 +11503,17 @@ static int camera_execute(camera_process_class* i_this) {
     store(i_this);
 
 #ifdef TARGET_PC
+    if (i_this->mCamera.CameraID() == 0 && i_this->mCamera.mFrameCounter >= 1 &&
+        i_this->mCamera.mFrameCounter <= 12)
+    {
+        // Co-op: retain P1's first native post-load camera runs so orientation handoffs are visible.
+        cXyz center = i_this->mCamera.Center();
+        cXyz eye = i_this->mCamera.Eye();
+        dusk::diagnostics::recordCameraAreaLoadCheckpoint(
+            "camera.primary-post-run", "initial-execute", 0, i_this->mCamera.mpPlayerActor,
+            &center, &eye, i_this->mCamera.U(), -1, i_this->mCamera.mFrameCounter);
+    }
+
     widezoom_correction(i_this, i_this->mCamera.TrimHeight());
 
     if (dusk::frame_interp::is_enabled()) {
@@ -11733,6 +11761,15 @@ static int init_phase2(camera_class* i_this) {
     view_setup(camera);
 
     camera->mCamera.field_0xb0c = 1;
+#if TARGET_PC
+    {
+        // Co-op: retain the fully initialized native camera orientation for area-load diagnosis.
+        cXyz center = body->Center();
+        cXyz eye = body->Eye();
+        dusk::diagnostics::recordCameraAreaLoadCheckpoint(
+            "camera.ready", "init-phase2", body->CameraID(), player, &center, &eye, body->U());
+    }
+#endif
     if (body->CameraID() == 0) {
 #if DEBUG
         dDbgCamera.Init(body);

@@ -312,6 +312,10 @@ The smallest useful implementation starts with:
 - `render.stats`: existing Aurora frame/backend stats.
 - `render.windows`: split-screen layout, active render-window count, viewport/scissor rectangles, and camera id per window.
 - `camera.state`: camera 0/1 assignment, readiness, player/window ids, camera mode/type, FOV/aspect, latest eye/center vectors, and native map-tool sources for camera type selection.
+- `camera.area_load`: bounded native startup checkpoints for camera initialization, camera readiness,
+  primary-ALINK session restoration, and camera 0's first twelve native post-load runs. Rich
+  snapshots retain stage, actor, turn-restart camera, camera vector, and split-screen facts; JSONL
+  change detection is driven only by explicit checkpoint revision.
 - `player.slots`: sidecar co-op slots, actor UID/pointer, profile, room, position, angle, speed.
 - `input.pad`: raw pad state and current co-op input snapshot for player slots 0 and 1.
 - `coop.probes`: current secondary ALINK probe flags.

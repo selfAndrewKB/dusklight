@@ -5,6 +5,9 @@
 #include <cstdint>
 #include <filesystem>
 
+class cXyz;
+class fopAc_ac_c;
+
 namespace dusk::diagnostics {
 
 struct SecondaryAlinkState {
@@ -65,6 +68,9 @@ void tick(u32 frame);
 void flush(const char* reason);
 
 void recordSecondaryAlinkState(const char* phase, const SecondaryAlinkState& state);
+void recordCameraAreaLoadCheckpoint(const char* phase, const char* startupSource, int cameraId,
+                                    const fopAc_ac_c* actor, const cXyz* center, const cXyz* eye,
+                                    s16 cameraYaw, int startMode = -1, int cameraFrame = -1);
 
 const std::filesystem::path& getOutputPath();
 
