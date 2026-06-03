@@ -17,6 +17,18 @@ namespace dusk::coop::horse_owner {
 constexpr int kFirstAdditionalHorseSpawnArgument = -2;
 constexpr int kHorseReinSimulationMaxPoints = 75;
 
+enum class HorseSummonDecision : u8 {
+    None,
+    NoPlayer,
+    DeferredPlayer,
+    DeferredSpawn,
+    AppliedDeferred,
+    CalledParked,
+    CalledPresented,
+    SkippedRidden,
+    InvalidState,
+};
+
 struct HorseReinSimulationState {
     cXyz previous[kHorseReinSimulationMaxPoints];
     cXyz current[kHorseReinSimulationMaxPoints];
@@ -55,9 +67,24 @@ void forEachRegisteredHorse(Func fn) {
 
 void ensureHorseForSlot(PlayerSlot slot);
 void ensureAdditionalHorses();
-void callParkedAdditionalHorsesForCanonicalSummon();
+void callParkedAdditionalHorsesForCanonicalSummon(const cXyz& summonPos);
 void presentParkedAdditionalHorsesForCanonicalPlacement(const cXyz& pos, s16 angle);
 void releaseHorseForSlot(PlayerSlot slot);
+
+void setCallTarget(daHorse_c* horse, const cXyz& pos);
+void clearCallTarget(daHorse_c* horse);
+const cXyz* getCallTarget(const daHorse_c* horse);
+const cXyz* getCallTarget(PlayerSlot slot);
+void updateDeferredSummonForHorse(daHorse_c* horse);
+void setNextSummonActivator(PlayerSlot slot);
+bool isCallDeferred(PlayerSlot slot);
+f32 getCallDelaySeconds(PlayerSlot slot);
+bool isPlacementDeferred(PlayerSlot slot);
+u32 getLastSummonRevision();
+PlayerSlot getLastSummonActivator();
+const cXyz* getLastSummonPos();
+HorseSummonDecision getLastSummonDecision(PlayerSlot slot);
+const char* getHorseSummonDecisionName(HorseSummonDecision decision);
 
 fpc_ProcID getPendingHorseSpawnId(PlayerSlot slot);
 J3DAnmTransform* localizeAnimationTransform(daHorse_c* horse, J3DAnmTransform* animation);

@@ -4,6 +4,7 @@
 #include "d/actor/d_a_alink.h"
 #include "d/actor/d_a_horse.h"
 #include "d/d_com_inf_game.h"
+#include "dusk/game_clock.h"
 #include "dusk/frame_interpolation.h"
 #include "dusk/logging.h"
 #include "f_op/f_op_actor_mng.h"
@@ -20,6 +21,7 @@ namespace dusk::coop::horse_owner {
 namespace {
 
 aurora::Module CoopHorseLog("dusk::coop::horse_owner");
+constexpr f32 kAdditionalSummonDelaySeconds = game_clock::period_for_original_frames(18.0f);
 
 struct HorseAnimationClone {
     J3DAnmTransform* source = nullptr;
@@ -31,6 +33,9 @@ struct HorseSlotState {
     fpc_ProcID pendingSpawnId = fpcM_ERROR_PROCESS_ID_e;
     bool callWhenRegistered = false;
     bool placeWhenRegistered = false;
+    f32 callDelaySeconds = 0.0f;
+    bool callTargetValid = false;
+    cXyz callTargetPos;
     cXyz placementPos;
     s16 placementAngle = 0;
     std::vector<HorseAnimationClone> animations;
@@ -38,6 +43,12 @@ struct HorseSlotState {
 };
 
 HorseSlotState s_horses[kPlayerSlotCount];
+u32 s_lastSummonRevision = 0;
+bool s_lastSummonPosValid = false;
+cXyz s_lastSummonPos;
+PlayerSlot s_nextSummonActivator = PlayerSlot::Invalid;
+PlayerSlot s_lastSummonActivator = PlayerSlot::Invalid;
+HorseSummonDecision s_lastSummonDecisions[kPlayerSlotCount] = {};
 
 constexpr bool isValidSlot(PlayerSlot slot) {
     return slot == PlayerSlot::Slot0 || slot == PlayerSlot::Slot1 ||
@@ -77,6 +88,27 @@ cXyz additionalHorsePosition(PlayerSlot slot, const cXyz& basePos, s16 angle) {
     return pos;
 }
 
+void callHorseForSlot(PlayerSlot slot, HorseSlotState* state, const cXyz& summonPos) {
+    if (state == nullptr || state->horse == nullptr) {
+        return;
+    }
+
+    state->horse->callHorse(&summonPos);
+    s_lastSummonDecisions[slotIndex(slot)] = HorseSummonDecision::AppliedDeferred;
+    state->callWhenRegistered = false;
+}
+
+void queueSummonForSlot(PlayerSlot slot, HorseSlotState* state, const cXyz& summonPos) {
+    if (state == nullptr) {
+        return;
+    }
+
+    state->callTargetPos = summonPos;
+    state->callTargetValid = true;
+    state->callWhenRegistered = true;
+    state->callDelaySeconds = kAdditionalSummonDelaySeconds * slotIndex(slot);
+}
+
 void applyDeferredPresentation(PlayerSlot slot, HorseSlotState* state) {
     if (state == nullptr || state->horse == nullptr) {
         return;
@@ -88,14 +120,12 @@ void applyDeferredPresentation(PlayerSlot slot, HorseSlotState* state) {
         state->horse->offNoDrawWait();
         CoopHorseLog.debug("applied deferred horse slot {} placement", slotIndex(slot));
     } else if (state->callWhenRegistered) {
-        daAlink_c* player = static_cast<daAlink_c*>(getPlayer(slot));
-        if (player != nullptr) {
-            state->horse->callHorse(&player->current.pos);
+        if (state->callTargetValid) {
             CoopHorseLog.debug("applied deferred horse slot {} summon", slotIndex(slot));
         }
+        return;
     }
 
-    state->callWhenRegistered = false;
     state->placeWhenRegistered = false;
 }
 
@@ -121,6 +151,8 @@ void clearSlot(HorseSlotState* state) {
     state->pendingSpawnId = fpcM_ERROR_PROCESS_ID_e;
     state->callWhenRegistered = false;
     state->placeWhenRegistered = false;
+    state->callDelaySeconds = 0.0f;
+    state->callTargetValid = false;
     state->reins = {};
 }
 
@@ -307,21 +339,48 @@ void ensureAdditionalHorses() {
     }
 }
 
-void callParkedAdditionalHorsesForCanonicalSummon() {
+void callParkedAdditionalHorsesForCanonicalSummon(const cXyz& summonPos) {
+    s_lastSummonRevision++;
+    s_lastSummonPos = summonPos;
+    s_lastSummonPosValid = true;
+    s_lastSummonActivator = s_nextSummonActivator;
+    s_nextSummonActivator = PlayerSlot::Invalid;
+    for (int i = 0; i < kPlayerSlotCount; i++) {
+        s_lastSummonDecisions[i] = HorseSummonDecision::None;
+    }
+
     for (int i = 1; i < kPlayerSlotCount; i++) {
         const PlayerSlot slot = static_cast<PlayerSlot>(i);
         HorseSlotState* state = stateForSlot(slot);
         daAlink_c* player = static_cast<daAlink_c*>(getPlayer(slot));
-        if (state == nullptr || player == nullptr) {
+        if (state == nullptr) {
+            s_lastSummonDecisions[i] = HorseSummonDecision::InvalidState;
+            continue;
+        }
+        if (player == nullptr) {
+            if (isPlayerRequested(slot)) {
+                queueSummonForSlot(slot, state, summonPos);
+                s_lastSummonDecisions[i] = HorseSummonDecision::DeferredPlayer;
+            } else {
+                s_lastSummonDecisions[i] = HorseSummonDecision::NoPlayer;
+            }
             continue;
         }
 
         if (state->horse == nullptr) {
-            state->callWhenRegistered = true;
+            queueSummonForSlot(slot, state, summonPos);
             ensureHorseForSlot(slot);
+            s_lastSummonDecisions[i] = HorseSummonDecision::DeferredSpawn;
             CoopHorseLog.debug("queued deferred horse slot {} summon", slotIndex(slot));
         } else if (state->horse->checkHorseCallWait()) {
-            state->horse->callHorse(&player->current.pos);
+            // Co-op: stagger clone call release so native path-point starts do not collide.
+            queueSummonForSlot(slot, state, summonPos);
+            s_lastSummonDecisions[i] = HorseSummonDecision::CalledParked;
+        } else if (state->horse->isRidden()) {
+            s_lastSummonDecisions[i] = HorseSummonDecision::SkippedRidden;
+        } else {
+            queueSummonForSlot(slot, state, summonPos);
+            s_lastSummonDecisions[i] = HorseSummonDecision::CalledPresented;
         }
     }
 }
@@ -367,6 +426,126 @@ void releaseHorseForSlot(PlayerSlot slot) {
         CoopHorseLog.debug("requested horse slot {} pending delete id {}", slotIndex(slot),
                            static_cast<unsigned int>(pendingSpawnId));
         fopAcM_delete(pendingSpawnId);
+    }
+}
+
+void setCallTarget(daHorse_c* horse, const cXyz& pos) {
+    HorseSlotState* state = stateForHorse(horse);
+    if (state == nullptr) {
+        return;
+    }
+
+    state->callTargetPos = pos;
+    state->callTargetValid = true;
+}
+
+void clearCallTarget(daHorse_c* horse) {
+    HorseSlotState* state = stateForHorse(horse);
+    if (state == nullptr) {
+        return;
+    }
+
+    state->callTargetValid = false;
+}
+
+const cXyz* getCallTarget(const daHorse_c* horse) {
+    const HorseSlotState* state = stateForSlotConst(getSlotForHorse(horse));
+    if (state == nullptr || !state->callTargetValid) {
+        return nullptr;
+    }
+
+    return &state->callTargetPos;
+}
+
+const cXyz* getCallTarget(PlayerSlot slot) {
+    const HorseSlotState* state = stateForSlotConst(slot);
+    if (state == nullptr || !state->callTargetValid) {
+        return nullptr;
+    }
+
+    return &state->callTargetPos;
+}
+
+void updateDeferredSummonForHorse(daHorse_c* horse) {
+    const PlayerSlot slot = getSlotForHorse(horse);
+    HorseSlotState* state = stateForSlot(slot);
+    if (state == nullptr || state->horse != horse || !state->callWhenRegistered ||
+        !state->callTargetValid)
+    {
+        return;
+    }
+
+    if (state->callDelaySeconds > 0.0f) {
+        state->callDelaySeconds -= game_clock::consume_interval(state);
+        if (state->callDelaySeconds > 0.0f) {
+            return;
+        }
+    }
+
+    callHorseForSlot(slot, state, state->callTargetPos);
+}
+
+void setNextSummonActivator(PlayerSlot slot) {
+    s_nextSummonActivator = slot;
+}
+
+bool isCallDeferred(PlayerSlot slot) {
+    const HorseSlotState* state = stateForSlotConst(slot);
+    return state != nullptr && state->callWhenRegistered;
+}
+
+f32 getCallDelaySeconds(PlayerSlot slot) {
+    const HorseSlotState* state = stateForSlotConst(slot);
+    return state != nullptr ? state->callDelaySeconds : 0.0f;
+}
+
+bool isPlacementDeferred(PlayerSlot slot) {
+    const HorseSlotState* state = stateForSlotConst(slot);
+    return state != nullptr && state->placeWhenRegistered;
+}
+
+u32 getLastSummonRevision() {
+    return s_lastSummonRevision;
+}
+
+PlayerSlot getLastSummonActivator() {
+    return s_lastSummonActivator;
+}
+
+const cXyz* getLastSummonPos() {
+    return s_lastSummonPosValid ? &s_lastSummonPos : nullptr;
+}
+
+HorseSummonDecision getLastSummonDecision(PlayerSlot slot) {
+    if (!isValidSlot(slot)) {
+        return HorseSummonDecision::InvalidState;
+    }
+
+    return s_lastSummonDecisions[slotIndex(slot)];
+}
+
+const char* getHorseSummonDecisionName(HorseSummonDecision decision) {
+    switch (decision) {
+    case HorseSummonDecision::None:
+        return "none";
+    case HorseSummonDecision::NoPlayer:
+        return "no_player";
+    case HorseSummonDecision::DeferredPlayer:
+        return "deferred_player";
+    case HorseSummonDecision::DeferredSpawn:
+        return "deferred_spawn";
+    case HorseSummonDecision::AppliedDeferred:
+        return "applied_deferred";
+    case HorseSummonDecision::CalledParked:
+        return "called_parked";
+    case HorseSummonDecision::CalledPresented:
+        return "called_presented";
+    case HorseSummonDecision::SkippedRidden:
+        return "skipped_ridden";
+    case HorseSummonDecision::InvalidState:
+        return "invalid_state";
+    default:
+        return "unknown";
     }
 }
 

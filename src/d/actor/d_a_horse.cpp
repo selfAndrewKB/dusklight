@@ -86,6 +86,18 @@ static daAlink_c* daHorse_getAssignedPlayer(const daHorse_c* horse) {
 #endif
 }
 
+#if TARGET_PC
+static f32 daHorse_callTargetDistanceSq(const daHorse_c* horse) {
+    // Co-op: grass call-run arrival is measured against the retained accepted summon point.
+    const cXyz* callTarget = dusk::coop::horse_owner::getCallTarget(horse);
+    if (callTarget != nullptr) {
+        return callTarget->abs2XZ(horse->current.pos);
+    }
+
+    return daHorse_getAssignedPlayer(horse)->current.pos.abs2XZ(horse->current.pos);
+}
+#endif
+
 static int daHorse_getAssignedCameraID(const daHorse_c* horse) {
 #if TARGET_PC
     dusk::coop::PlayerSlot slot = dusk::coop::horse_owner::getSlotForHorse(horse);
@@ -1179,7 +1191,16 @@ int daHorse_c::checkDemoAction() {
         offStateFlg0(FLG0_CALL_HORSE);
         onStateFlg0(FLG0_UNK_10000000);
 
+#if TARGET_PC
+        const cXyz* callTarget = dusk::coop::horse_owner::getCallTarget(this);
+        if (callTarget == nullptr) {
+            callTarget = &player->current.pos;
+        }
+        // Co-op: the grass whistle's accepted call point owns this delayed native call-run target.
+        shape_angle.y = cLib_targetAngleY(&current.pos, callTarget);
+#else
         shape_angle.y = cLib_targetAngleY(&current.pos, &player->current.pos);
+#endif
         current.angle.y = shape_angle.y;
         field_0x1728 = 0;
         field_0x16b8 = 0;
@@ -1338,7 +1359,15 @@ void daHorse_c::setStickCallMove() {
     m_padStickValue = 1.0f;
 
     u32 mode = 3;
+#if TARGET_PC
+    const cXyz* callTarget = dusk::coop::horse_owner::getCallTarget(this);
+    if (callTarget == nullptr) {
+        callTarget = &daHorse_getAssignedPlayer(this)->current.pos;
+    }
+    setDemoMoveData(&mode, callTarget);
+#else
     setDemoMoveData(&mode, &daHorse_getAssignedPlayer(this)->current.pos);
+#endif
     m_padStickAngleY = m_demoMoveAngle;
 
     if (m_callMoveTimer != 0) {
@@ -3573,6 +3602,15 @@ void daHorse_c::savePos() {
 int daHorse_c::callHorseSubstance(cXyz const* i_pos) {
     static const f32 initDistance2 = SQUARE(2000.0f);
 
+#if TARGET_PC
+    if (i_pos != nullptr) {
+        // Co-op: retain the native call target for the delayed call-run movement phase.
+        dusk::coop::horse_owner::setCallTarget(this, *i_pos);
+    } else {
+        dusk::coop::horse_owner::clearCallTarget(this);
+    }
+#endif
+
     int room_no = dComIfGp_roomControl_getStayNo();
     if (checkStateFlg0(FLG0_RODEO_MODE) ||
         (daAlink_c::checkStageName("F_SP108") && (room_no == 5 || room_no == 6 || room_no == 11 || room_no == 14)) ||
@@ -3642,8 +3680,9 @@ int daHorse_c::callHorseSubstance(cXyz const* i_pos) {
     changeDemoMode(12, 0);
 #if TARGET_PC
     if (dusk::coop::horse_owner::isCanonicalHorse(this)) {
-        // Co-op: a shared campaign-Epona summon releases parked clones through their native call flow.
-        dusk::coop::horse_owner::callParkedAdditionalHorsesForCanonicalSummon();
+        // Co-op: a shared campaign-Epona summon releases parked clones toward the same accepted call point.
+        dusk::coop::horse_owner::callParkedAdditionalHorsesForCanonicalSummon(
+            i_pos != nullptr ? *i_pos : current.pos);
     }
 #endif
     return rt;
@@ -3930,7 +3969,21 @@ int daHorse_c::procMove() {
         } else {
             procWaitInit();
         }
-    } else if (checkStateFlg0(FLG0_UNK_10000000) && field_0x171a != 0 && (m_cc_stts.GetCCMoveP()->abs() > 1.0f || checkStateFlg0(FLG0_UNK_4) || m_acch.ChkWallHit() || m_callMoveTimer == 0 || daHorse_getAssignedPlayer(this)->current.pos.abs2XZ(current.pos) < 640000.0f)) {
+    } else if (checkStateFlg0(FLG0_UNK_10000000) && field_0x171a != 0 &&
+               (m_cc_stts.GetCCMoveP()->abs() > 1.0f ||
+                checkStateFlg0(FLG0_UNK_4) || m_acch.ChkWallHit() || m_callMoveTimer == 0 ||
+#if TARGET_PC
+                // Co-op: grass summons stop near the retained call point, not each horse owner.
+                daHorse_callTargetDistanceSq(this) < 640000.0f))
+#else
+                daHorse_getAssignedPlayer(this)->current.pos.abs2XZ(current.pos) < 640000.0f))
+#endif
+    {
+#if TARGET_PC
+        if (daHorse_callTargetDistanceSq(this) < 640000.0f) {
+            dusk::coop::horse_owner::clearCallTarget(this);
+        }
+#endif
         procStopInit();
         offStateFlg0(FLG0_UNK_10000000);
     } else {
@@ -4536,6 +4589,11 @@ int daHorse_c::execute() {
     m_scnChg_num = 0;
     fopAcIt_Executor((fopAcIt_ExecutorFunc)daHorse_searchSceneChangeArea, this);
     m_zeldaActorKeep.setActor();
+
+#if TARGET_PC
+    // Co-op: parked runtime Eponas may be waiting for a staggered native grass summon.
+    dusk::coop::horse_owner::updateDeferredSummonForHorse(this);
+#endif
 
     if (checkStateFlg0(FLG0_NO_DRAW_WAIT)) {
         if (checkStateFlg0(FLG0_CALL_HORSE)) {

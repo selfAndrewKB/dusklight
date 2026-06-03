@@ -489,6 +489,11 @@ json horseOwnerEventKey(const json& data) {
                 {"spawn_pending", slot.value("spawn_pending", false)},
                 {"pending_spawn_id", slot.value("pending_spawn_id", 0u)},
                 {"riding", slot.value("riding", false)},
+                {"call_wait", slot.value("call_wait", false)},
+                {"call_deferred", slot.value("call_deferred", false)},
+                {"placement_deferred", slot.value("placement_deferred", false)},
+                {"call_target_valid", slot.value("call_target_valid", false)},
+                {"last_summon_decision", slot.value("last_summon_decision", "")},
                 {"localized_animation_count", slot.value("localized_animation_count", 0)},
                 {"owner_mismatch", slot.value("owner_mismatch", false)},
                 {"retained_horse_mismatch", slot.value("retained_horse_mismatch", false)},
@@ -500,6 +505,9 @@ json horseOwnerEventKey(const json& data) {
         {"schema_version", data.value("schema_version", 1)},
         {"canonical_horse", data.value("canonical_horse", "0x0")},
         {"duplicate_retained_horse", data.value("duplicate_retained_horse", false)},
+        {"last_summon_revision", data.value("last_summon_revision", 0u)},
+        {"last_summon_activator", data.value("last_summon_activator", -1)},
+        {"last_summon_pos_valid", data.value("last_summon_pos_valid", false)},
         {"slots", slots},
     };
 }
@@ -1371,6 +1379,14 @@ json actorSummary(const fopAc_ac_c* actor) {
     return data;
 }
 
+json vecSummary(const cXyz* pos) {
+    if (pos == nullptr) {
+        return json::array();
+    }
+
+    return json::array({pos->x, pos->y, pos->z});
+}
+
 json attentionListEntry(dAttList_c& entry) {
     fopAc_ac_c* actor = entry.getActor();
     return {
@@ -1442,6 +1458,7 @@ json collectHorseOwner() {
     json slots = json::array();
     daHorse_c* retainedHorses[coop::kPlayerSlotCount] = {};
     bool duplicateRetainedHorse = false;
+    const cXyz* lastSummonPos = coop::horse_owner::getLastSummonPos();
     for (int i = 0; i < coop::kPlayerSlotCount; i++) {
         const coop::PlayerSlot slot = static_cast<coop::PlayerSlot>(i);
         daHorse_c* horse = coop::horse_owner::getHorse(slot);
@@ -1460,6 +1477,9 @@ json collectHorseOwner() {
         const fpc_ProcID pendingSpawnId = coop::horse_owner::getPendingHorseSpawnId(slot);
         const coop::horse_owner::HorseReinSimulationState* reins =
             coop::horse_owner::getReinSimulationState(horse);
+        const cXyz* callTarget = coop::horse_owner::getCallTarget(slot);
+        const coop::horse_owner::HorseSummonDecision lastSummonDecision =
+            coop::horse_owner::getLastSummonDecision(slot);
 
         json slotData = {
             {"slot", i},
@@ -1470,6 +1490,14 @@ json collectHorseOwner() {
             {"runtime_clone", coop::horse_owner::isAdditionalHorse(horse)},
             {"spawn_pending", pendingSpawnId != fpcM_ERROR_PROCESS_ID_e},
             {"pending_spawn_id", static_cast<unsigned int>(pendingSpawnId)},
+            {"call_deferred", coop::horse_owner::isCallDeferred(slot)},
+            {"call_delay_seconds", coop::horse_owner::getCallDelaySeconds(slot)},
+            {"placement_deferred", coop::horse_owner::isPlacementDeferred(slot)},
+            {"call_target_valid", callTarget != nullptr},
+            {"call_target", vecSummary(callTarget)},
+            {"last_summon_decision",
+             coop::horse_owner::getHorseSummonDecisionName(lastSummonDecision)},
+            {"last_summon_decision_id", static_cast<unsigned int>(lastSummonDecision)},
             {"owner_mismatch", horse != nullptr &&
                                    coop::horse_owner::getPlayerForHorse(horse) != player},
             {"retained_horse_mismatch", retainedHorse != nullptr && retainedHorse != horse},
@@ -1480,6 +1508,15 @@ json collectHorseOwner() {
             slotData["process"] = static_cast<unsigned int>(horse->getProcID());
             slotData["riding"] = horse->isRidden();
             slotData["call_wait"] = horse->checkHorseCallWait() != 0;
+            if (callTarget != nullptr) {
+                slotData["call_target_distance_xz"] = horse->current.pos.absXZ(*callTarget);
+            }
+            if (lastSummonPos != nullptr) {
+                slotData["last_summon_distance_xz"] = horse->current.pos.absXZ(*lastSummonPos);
+            }
+            if (player != nullptr) {
+                slotData["owner_distance_xz"] = horse->current.pos.absXZ(player->current.pos);
+            }
             slotData["lash_count"] = static_cast<int>(horse->getLashCount());
             const int reinPointCount = horse->getReinPointCount();
             slotData["rein_point_count"] = reinPointCount;
@@ -1524,9 +1561,14 @@ json collectHorseOwner() {
     }
 
     return {
-        {"schema_version", 3},
+        {"schema_version", 4},
         {"canonical_horse", ptrString(reinterpret_cast<uintptr_t>(dComIfGp_getHorseActor()))},
         {"duplicate_retained_horse", duplicateRetainedHorse},
+        {"last_summon_revision", coop::horse_owner::getLastSummonRevision()},
+        {"last_summon_activator",
+         static_cast<int>(coop::horse_owner::getLastSummonActivator())},
+        {"last_summon_pos_valid", lastSummonPos != nullptr},
+        {"last_summon_pos", vecSummary(lastSummonPos)},
         {"slots", slots},
     };
 }
@@ -2486,7 +2528,7 @@ Provider s_providers[] = {
     {"camera.state", 2, "cheap", 1, true, 20, 8192, collectCameraState},
     {"camera.area_load", 1, "cheap", 1, true, 120, 32768, collectCameraAreaLoad},
     {"player.slots", 2, "cheap", 1, true, 120, 8192, collectPlayerSlots},
-    {"horse.owner", 3, "cheap", 1, true, 120, 12288, collectHorseOwner},
+    {"horse.owner", 4, "cheap", 1, true, 120, 12288, collectHorseOwner},
     {"event.presentation", 2, "cheap", 1, true, 120, 4096, collectEventPresentation},
     {"render.lines", 2, "cheap", 1, true, 120, 32768, collectRenderLines},
     {"input.pad", 1, "cheap", 1, true, 120, 4096, collectInputPad},

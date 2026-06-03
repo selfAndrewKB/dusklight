@@ -23,8 +23,13 @@ slot-assigned runtime Epona, current rider, any active horse, or horse-local col
   Epona may exist as a parked actor in eligible areas without being presented; clone registration
   must not make an additional horse visible until its own native call-horse flow releases that wait.
 - When an ordinary canonical Epona summon is accepted, parked runtime clones enter their own native
-  call-horse flow against their assigned players. Do not expose clones by clearing draw state
-  directly, and do not pull already-present clones toward P1's summon.
+  call-horse flow toward the accepted summon point. Horse ownership remains slot-local, but the
+  delayed call-run movement must retain the grass/caller target rather than retargeting each horse
+  to its assigned player. Do not expose clones by clearing draw state directly. Additional horses
+  use a staggered native call release so the canonical horse can clear shared path-point starts
+  before clones begin their own call-run. The stagger is expressed as Dusk game-clock seconds, not
+  raw execute-frame counts, so unlocked presentation FPS does not collapse it. Already-present idle
+  clones may accept the same native summon, while mounted clones stay with their rider.
 - When an authored horse-initialization tag explicitly presents canonical Epona, parked runtime
   clones receive the matching placement lifecycle with deterministic slot offsets. Already-present
   clones keep their rider-local state.
@@ -122,9 +127,22 @@ bool anyHorseNeedsLashMeter();
 
 void ensureHorseForSlot(PlayerSlot slot);
 void ensureAdditionalHorses();
-void callParkedAdditionalHorsesForCanonicalSummon();
+void callParkedAdditionalHorsesForCanonicalSummon(const cXyz& summonPos);
 void presentParkedAdditionalHorsesForCanonicalPlacement(const cXyz& pos, s16 angle);
 void releaseHorseForSlot(PlayerSlot slot);
+
+void setCallTarget(daHorse_c* horse, const cXyz& pos);
+void clearCallTarget(daHorse_c* horse);
+const cXyz* getCallTarget(const daHorse_c* horse);
+const cXyz* getCallTarget(PlayerSlot slot);
+void setNextSummonActivator(PlayerSlot slot);
+bool isCallDeferred(PlayerSlot slot);
+bool isPlacementDeferred(PlayerSlot slot);
+u32 getLastSummonRevision();
+PlayerSlot getLastSummonActivator();
+const cXyz* getLastSummonPos();
+HorseSummonDecision getLastSummonDecision(PlayerSlot slot);
+const char* getHorseSummonDecisionName(HorseSummonDecision decision);
 
 J3DAnmTransform* localizeAnimationTransform(daHorse_c* horse, J3DAnmTransform* animation);
 int getLocalizedAnimationCount(const daHorse_c* horse);
