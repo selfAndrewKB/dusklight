@@ -54,6 +54,7 @@
 
 #if TARGET_PC
 #include "dusk/action_bindings.h"
+#include "dusk/coop/alink_form_resources.h"
 #include "dusk/coop/alink_model_data_owner.h"
 #include "dusk/coop/alink_probes.h"
 #include "dusk/coop/camera.h"
@@ -5327,12 +5328,22 @@ int daAlink_c::create() {
             return cPhs_INIT_e;
         }
 
+#if TARGET_PC
+        // Co-op: body form archives are retained by slot so one Link cannot free another's model data.
+        dusk::coop::alink_form_resources::applyDesiredFormOnCreate(this);
+#endif
         setArcName(checkWolf());
+#if TARGET_PC
+        if (dusk::coop::alink_form_resources::loadInitial(this, mArcName) != cPhs_COMPLEATE_e) {
+            return cPhs_INIT_e;
+        }
+#else
         setOriginalHeap(&mpArcHeap, 0xA2800);
         JKRHEAP_NAME(mpArcHeap, "Alink ArcHeap");
         if (dComIfG_resLoad(&mPhaseReq, mArcName, mpArcHeap) != cPhs_COMPLEATE_e) {
             return cPhs_INIT_e;
         }
+#endif
 #if TARGET_PC
         coop_log_primary_state("after-arc-load");
 #endif
@@ -20654,7 +20665,14 @@ daAlink_c::~daAlink_c() {
         changeWarpMaterial(WARP_MAT_MODE_1);
     }
 
+#if TARGET_PC
+    // Co-op: release only this slot's body form retain; shared backing heaps live until final release.
+    if (!dusk::coop::alink_form_resources::releaseActor(this)) {
+        dComIfG_resDelete(&mPhaseReq, mArcName);
+    }
+#else
     dComIfG_resDelete(&mPhaseReq, mArcName);
+#endif
     if (mpArcHeap != NULL) {
         mDoExt_destroyExpHeap(mpArcHeap);
     }

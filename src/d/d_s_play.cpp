@@ -41,6 +41,7 @@
 
 #if TARGET_PC
 #include "dusk/autosave.h"
+#include "dusk/coop/alink_form_resources.h"
 #include "dusk/coop/camera.h"
 #include "dusk/coop/event_presentation.h"
 #include "dusk/coop/player_attention.h"
@@ -918,6 +919,7 @@ static int dScnPly_Delete(dScnPly_c* i_this) {
     dComIfGp_setWindowNum(0);
 #if TARGET_PC
     // Co-op: scene teardown clears transient presentation and camera pointers, but session intent survives.
+    dusk::coop::alink_form_resources::resetRuntime();
     dusk::coop::event_presentation::reset();
     dusk::coop::camera::resetSplitScreenCameraState();
 #endif
@@ -1477,6 +1479,7 @@ static int phase_4(dScnPly_c* i_this) {
     dComIfGp_setCameraInfo(0, NULL, 0, 0, -1);
 #if TARGET_PC
     // Co-op: each play scene starts with clean runtime sidecars; primary ALINK rebuilds requested slots.
+    dusk::coop::alink_form_resources::resetRuntime();
     dusk::coop::event_presentation::reset();
     dusk::coop::camera::resetSplitScreenCameraState();
 #endif

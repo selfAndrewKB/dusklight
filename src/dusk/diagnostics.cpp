@@ -5,6 +5,7 @@
 #include "d/actor/d_a_horse.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_item.h"
+#include "dusk/coop/alink_form_resources.h"
 #include "dusk/coop/alink_probes.h"
 #include "dusk/coop/bokoblin_attack_probe.h"
 #include "dusk/coop/camera.h"
@@ -1608,6 +1609,45 @@ json collectEventPresentation() {
     };
 }
 
+json collectAlinkFormResources() {
+    const coop::alink_form_resources::DebugState& state =
+        coop::alink_form_resources::getDebugState();
+
+    json arcs = json::array();
+    for (int i = 0; i < state.arcCount; i++) {
+        const coop::alink_form_resources::DebugArcState& arc = state.arcs[i];
+        arcs.push_back({
+            {"arc", arc.arcName != nullptr ? arc.arcName : ""},
+            {"heap", ptrString(arc.heap)},
+            {"retain_count", arc.retainCount},
+            {"phase_id", arc.phaseId},
+            {"loaded", arc.loaded},
+        });
+    }
+
+    json slots = json::array();
+    for (int i = 0; i < coop::kPlayerSlotCount; i++) {
+        const coop::alink_form_resources::DebugSlotState& slot = state.slots[i];
+        slots.push_back({
+            {"slot", static_cast<int>(slot.slot)},
+            {"actor", ptrString(slot.actor)},
+            {"current_arc", slot.currentArc != nullptr ? slot.currentArc : ""},
+            {"pending_release_arc",
+             slot.pendingReleaseArc != nullptr ? slot.pendingReleaseArc : ""},
+            {"desired_wolf", slot.desiredWolf},
+            {"desired_known", slot.desiredKnown},
+            {"swapping", slot.swapping},
+        });
+    }
+
+    return {
+        {"schema_version", 1},
+        {"revision", state.revision},
+        {"arcs", arcs},
+        {"slots", slots},
+    };
+}
+
 json attentionObjectSummary(dAttention_c* attention, int slot) {
     json data = {
         {"slot", slot},
@@ -2530,6 +2570,7 @@ Provider s_providers[] = {
     {"player.slots", 2, "cheap", 1, true, 120, 8192, collectPlayerSlots},
     {"horse.owner", 4, "cheap", 1, true, 120, 12288, collectHorseOwner},
     {"event.presentation", 2, "cheap", 1, true, 120, 4096, collectEventPresentation},
+    {"alink.form_resources", 2, "cheap", 1, true, 120, 8192, collectAlinkFormResources},
     {"render.lines", 2, "cheap", 1, true, 120, 32768, collectRenderLines},
     {"input.pad", 1, "cheap", 1, true, 120, 4096, collectInputPad},
     {"attention.state", 2, "medium", 5, true, 60, 32768, collectAttentionState},

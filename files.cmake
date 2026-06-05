@@ -1448,6 +1448,7 @@ set(DUSK_FILES
         include/dusk/dvd_asset.hpp
         include/dusk/scope_guard.hpp
         src/dusk/coop/alink_model_data_owner.cpp
+        src/dusk/coop/alink_form_resources.cpp
         src/dusk/coop/alink_probes.cpp
         src/dusk/coop/bokoblin_attack_probe.cpp
         src/dusk/coop/camera.cpp

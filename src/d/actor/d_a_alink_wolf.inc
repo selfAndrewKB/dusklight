@@ -218,7 +218,18 @@ void daAlink_c::changeWolf() {
 
     mDoExt_setCurrentHeap(current_heap);
 
-    dComIfGs_setTransformStatus(1);
+#if TARGET_PC
+    if (dusk::coop::isAdditionalPlayer(this)) {
+        // Co-op: additional Links keep wolf state actor-local instead of rewriting P1's save/global form.
+        dusk::coop::alink_form_resources::setSlotWolf(this, true);
+    } else
+#endif
+    {
+        dComIfGs_setTransformStatus(1);
+#if TARGET_PC
+        dusk::coop::alink_form_resources::setSlotWolf(this, true);
+#endif
+    }
     mpLinkModel->setUserArea((uintptr_t)this);
     changeModelDataDirectWolf(0);
     mEyeHL1.entry(field_0x064C, "wl_eye_Hilight");
@@ -416,7 +427,18 @@ void daAlink_c::changeLink(int param_0) {
 
     mDoExt_setCurrentHeap(current_heap);
 
-    dComIfGs_setTransformStatus(0);
+#if TARGET_PC
+    if (dusk::coop::isAdditionalPlayer(this)) {
+        // Co-op: additional Links keep human state actor-local instead of rewriting P1's save/global form.
+        dusk::coop::alink_form_resources::setSlotWolf(this, false);
+    } else
+#endif
+    {
+        dComIfGs_setTransformStatus(0);
+#if TARGET_PC
+        dusk::coop::alink_form_resources::setSlotWolf(this, false);
+#endif
+    }
     mpLinkModel->setUserArea((uintptr_t)this);
     mpLinkHatModel->setUserArea((uintptr_t)this);
     changeModelDataDirect(param_0);

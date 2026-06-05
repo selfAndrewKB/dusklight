@@ -1,13 +1,14 @@
 #include "dusk/coop/alink_model_data_owner.h"
 
 #include "d/actor/d_a_alink.h"
+#include "dusk/coop/alink_form_resources.h"
 #include "dusk/coop/player_slots.h"
 
 namespace dusk::coop::alink_model_data_owner {
 namespace {
 
 void installForPlayer(daAlink_c* player) {
-    if (player == nullptr) {
+    if (player == nullptr || !alink_form_resources::canInstallModelDataOwner(player)) {
         return;
     }
 
