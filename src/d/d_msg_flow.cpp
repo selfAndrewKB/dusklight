@@ -13,6 +13,9 @@
 #include "d/actor/d_a_myna.h"
 #include "d/actor/d_a_obj_ss_base.h"
 #include "SSystem/SComponent/c_math.h"
+#if TARGET_PC
+#include "dusk/coop/midna_owner.h"
+#endif
 #include <cstring>
 
 dMsgFlow_c::dMsgFlow_c() {
@@ -653,6 +656,17 @@ int dMsgFlow_c::eventNodeProc(fopAc_ac_c* i_speaker_p, fopAc_ac_c** i_talkPartne
     case 9:
         if (getParam(node->params) == 0) {
             int msgNum;
+#if TARGET_PC
+            // Co-op: Midna's context message belongs to the retained service owner.
+            if (dusk::coop::midna_owner::isServicePartner(i_speaker_p)) {
+                msgNum = dusk::coop::midna_owner::currentMidnaMsgNum();
+                if (msgNum == 0xFFFF) {
+                    msgNum = dStage_FileList_dt_GetMsg(dComIfGp_roomControl_getStatusRoomDt(dComIfGp_roomControl_getStayNo())->getFileListInfo());
+                } else {
+                    dusk::coop::midna_owner::markCurrentMidnaMsgUsed();
+                }
+            } else
+#endif
             if (daAlink_getAlinkActorClass()->getMidnaMsgNum() == 0xFFFF) {
                 msgNum = dStage_FileList_dt_GetMsg(dComIfGp_roomControl_getStatusRoomDt(dComIfGp_roomControl_getStayNo())->getFileListInfo());
             } else {
@@ -781,6 +795,19 @@ u16 dMsgFlow_c::query001(mesg_flow_node_branch* i_flowNode_p, fopAc_ac_c* i_spea
 
 u16 dMsgFlow_c::query002(mesg_flow_node_branch* i_flowNode_p, fopAc_ac_c* i_speaker_p, int param_2) {
     u16 ret;
+#if TARGET_PC
+    // Co-op: Midna's singular flow must branch on the player who owns the active
+    // Midna service, not always P1's saved/global form state.
+    if (dusk::coop::midna_owner::isServicePartner(i_speaker_p)) {
+        if (dusk::coop::midna_owner::currentPlayerIsWolf()) {
+            ret = 1;
+        } else if (dusk::coop::midna_owner::currentPlayerRidesHorseOrBoar()) {
+            ret = 2;
+        } else {
+            ret = 0;
+        }
+    } else
+#endif
     if (daPy_py_c::checkNowWolf()) {
         ret = 1;
     } else if (daPy_getPlayerActorClass()->checkHorseRide() || daPy_getPlayerActorClass()->checkBoarRide()) {
@@ -1503,6 +1530,20 @@ u16 dMsgFlow_c::query041(mesg_flow_node_branch* i_flowNode_p, fopAc_ac_c* i_spea
 }
 
 u16 dMsgFlow_c::query042(mesg_flow_node_branch* i_flowNode_p, fopAc_ac_c* i_speaker_p, int param_2) {
+#if TARGET_PC
+    // Co-op: Midna transform blocking must be evaluated around the service owner.
+    if (dusk::coop::midna_owner::isServicePartner(i_speaker_p)) {
+        const u8 ret = static_cast<u8>(dusk::coop::midna_owner::currentTransformBlockReason());
+
+        if (param_2 != 0) {
+            // "Transform Range Check"
+            OS_REPORT("\x1B[44;33m:変身可能範囲チェック　　\x1B[m|:");
+            OS_REPORT("flow:%d, ret:%d\n", mFlow, ret);
+        }
+
+        return ret;
+    }
+#endif
     daMidna_c* midna_p = daPy_py_c::getMidnaActor();
 
     u8 ret = 0;

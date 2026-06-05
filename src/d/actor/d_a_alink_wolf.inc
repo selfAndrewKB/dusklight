@@ -6160,7 +6160,12 @@ f32 daAlink_c::getWolfLieMoveSpeed() {
 BOOL daAlink_c::checkMidnaDisappearMode() const {
     return mProcID == PROC_WOLF_DIG_THROUGH ||
            (checkWolf() && dComIfGp_checkPlayerStatus0(0, 0x8000000) &&
+#if TARGET_PC
+            // Co-op: Midna/talk disappearance checks use this ALINK's presentation state.
+            !dusk::coop::midna_owner::checkTalkStatus(this) &&
+#else
             !dComIfGp_checkPlayerStatus0(0, 0x10) &&
+#endif
             !(mTargetedActor != NULL &&
               mTargetedActor->attention_info.flags & fopAc_AttnFlag_UNK_0x800000));
 }
@@ -6589,7 +6594,12 @@ void daAlink_c::setSpeedAndAngleSwimWolf() {
 
     setNormalSpeedF(speed, mpHIO->mWolf.mWlSwim.m.mDeceleration);
 
+#if TARGET_PC
+    // Co-op: wolf swim talk freeze follows this ALINK's slot-local presentation state.
+    if (dusk::coop::midna_owner::checkTalkStatus(this)) {
+#else
     if (dComIfGp_checkPlayerStatus0(0, 0x10)) {
+#endif
         mNormalSpeed = 0.0f;
     }
 }

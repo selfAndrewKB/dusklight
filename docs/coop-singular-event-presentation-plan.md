@@ -47,6 +47,7 @@ enum class Source : u8 {
     FieldMap,
     DungeonMap,
     AgithaInsect,
+    MidnaService,
 };
 
 struct Options {
@@ -115,6 +116,20 @@ The shared howl sequence hooks the presentation API at its lifecycle boundary:
 
 The hook should remain small and event-specific. The reusable behavior belongs in
 `event_presentation`.
+
+## Midna Service
+
+Manual Midna service and wolf-transform requests use the same presentation layer with slot-local
+runtime Midna service actors:
+
+- `midna_owner` registers one canonical P1/global Midna plus runtime service actors for additional
+  slots;
+- `midna_owner` retains the requesting ALINK slot for prompt/message/transform ownership;
+- `event_presentation::Source::MidnaService` presents the requester fullscreen while the service is
+  active;
+- the active service actor reads its registered ALINK for position/no-draw and transform setup, while
+  unrelated P1/global Midna reads remain canonical; ordinary dialogue does not collapse split-screen
+  automatically.
 
 ## Captured Fullscreen Menus
 

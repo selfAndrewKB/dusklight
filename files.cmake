@@ -1431,6 +1431,7 @@ set(DUSK_FILES
         include/dusk/coop/interaction_owner.h
         include/dusk/coop/gibdo_state_probe.h
         include/dusk/coop/input.h
+        include/dusk/coop/midna_owner.h
         include/dusk/coop/player_attention.h
         include/dusk/coop/player_button_status.h
         include/dusk/coop/player_camera_status.h
@@ -1465,6 +1466,7 @@ set(DUSK_FILES
         src/dusk/coop/interaction_owner.cpp
         src/dusk/coop/line_render_diagnostics.cpp
         src/dusk/coop/gibdo_state_probe.cpp
+        src/dusk/coop/midna_owner.cpp
         src/dusk/coop/player_query.cpp
         src/dusk/coop/player_slots.cpp
         src/dusk/coop/player_button_status.cpp

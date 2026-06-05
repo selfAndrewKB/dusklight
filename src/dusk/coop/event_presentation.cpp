@@ -52,6 +52,7 @@ void refreshDebugState(Transition transition, Source source) {
     s_state.debug.fieldMapDepth = s_state.depths[sourceIndex(Source::FieldMap)];
     s_state.debug.dungeonMapDepth = s_state.depths[sourceIndex(Source::DungeonMap)];
     s_state.debug.agithaInsectDepth = s_state.depths[sourceIndex(Source::AgithaInsect)];
+    s_state.debug.midnaServiceDepth = s_state.depths[sourceIndex(Source::MidnaService)];
     s_state.debug.lastTransition = transition;
     s_state.debug.lastSource = source;
     s_state.debug.fullscreen = s_state.debug.totalDepth != 0;
@@ -171,6 +172,8 @@ const char* sourceName(Source source) {
         return "dungeon_map";
     case Source::AgithaInsect:
         return "agitha_insect";
+    case Source::MidnaService:
+        return "midna_service";
     default:
         return "unknown";
     }

@@ -11,6 +11,7 @@ dAttention_c* attentionForPlayer(daAlink_c* player);
 dAttention_c* existingAttentionForSlot(int slot);
 void updateForPlayer(daAlink_c* player);
 bool isLockOn(daAlink_c* player);
+fopAc_ac_c* zHintForPlayer(daAlink_c* player);
 void drawAll();
 void drawForCamera(int cameraId);
 bool isActorLockedByAnyPlayer(const fopAc_ac_c* actor);

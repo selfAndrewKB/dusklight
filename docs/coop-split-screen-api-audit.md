@@ -21,7 +21,7 @@ families, and which systems are intentionally deferred.
 | Which viewport owns real-shadow submission culling and baked shadow matrices? | `render_shadows` | Partially implemented through `dusk::coop::render_shadows` for shared-list culling bypass and per-viewport real-shadow refresh |
 | Which viewport should camera-facing 3D line/ribbon geometry use? | shared 3D-line material refresh | Implemented for `mDoExt_3DlineMat0_c` and `mDoExt_3DlineMat1_c` during the per-window painter pass |
 | Which player owns HUD, reticles, prompts, and message UI? | `hud_owner` / `ui_owner` | `hud_owner` presents slot-local prompts and assigned items; `ui_owner` owns transient overlay viewport context and the singular item wheel. Full inventory/menu/message UI remains deferred |
-| Should an explicitly classified singular event or captured menu surface temporarily present one fullscreen camera and hide non-presenting players? | `event_presentation` | Implemented opt-in override above the camera sidecar; howling stones and captured fullscreen menu surfaces are classified consumers |
+| Should an explicitly classified singular event or captured menu surface temporarily present one fullscreen camera and hide non-presenting players? | `event_presentation` | Implemented opt-in override above the camera sidecar; howling stones, Midna service, and captured fullscreen menu surfaces are classified consumers |
 | Which player activated an NPC/object/event trigger? | `interaction_owner` / `event_owner` | Initial knob/shutter prompt-side and accepted door-demo proofs implemented; generic ALINK talk/check/pickup actions already flow through slot-local attention/status, while remaining world-actor singleton prompts are audited case by case |
 | Which camera or player should audio listener state follow? | `audio_listener_owner` | Not implemented; audio listener stays camera 0/P1-owned |
 | Should this actor, world chunk, foliage/detail, or background part be draw-culled for local split-screen? | `render_visibility` | Initial PC split-screen bypass implemented for known P1-camera draw-culling paths |
@@ -189,6 +189,9 @@ Audit decision:
 - Keep per-viewport refresh centralized in `render_materials` and the painter loop.
 - Add future material families to that registry rather than scattering actor-local refresh calls.
 - Continue restoring a known global baseline after the split viewport loop.
+- Treat the current lighting fix as a valid V1, but a future `viewport_render_state` pass should
+  graduate this ownership boundary so environment/material setup asks for the active viewport camera
+  directly instead of relying on short-lived material registries and replay-window heuristics.
 
 ### HUD/2D pass
 
@@ -235,9 +238,12 @@ Audit decision:
 - Implemented as an opt-in `event_presentation` override above the camera/window sidecar. Do not
   call `setSplitScreenEnabled(false)` and do not mutate persistent actor `NODRAW` state as the
   default hiding mechanism.
-- Keep howling stones P1/global in V1. Captured fullscreen menu surfaces also opt in: item rings
-  present their retained `ui_owner` slot, while Start-menu descendants, field/dungeon maps, and
-  Agitha's insect screen remain P1/global.
+- Keep howling stones P1/global in V1. Midna keeps P1's canonical actor for story/save/global paths,
+  while additional slots use runtime service actors; the transient service opts in with the
+  requesting slot as presenter and reads that slot for active-service physical setup. Captured
+  fullscreen menu surfaces also opt in: item rings present their retained
+  `ui_owner` slot, while Start-menu descendants, field/dungeon maps, and Agitha's insect screen
+  remain P1/global.
 - Begin menu presentation before framebuffer capture and end it after capture deletion. Keep
   retained item-ring input and selection in `ui_owner`; presentation collapse does not broaden
   Start-menu or map input ownership.
@@ -324,6 +330,9 @@ Follow-up investigation:
   selection even though the split-screen painter has an active current viewport camera. The durable
   next step is a current-view/current-camera render-state API for environment code, not more
   visibility bypasses.
+- P2 first-person mode can show stars, clouds, or other sky layers shifting in response to P1's
+  camera. Treat this as another current-view render-state symptom: sky/environment placement should
+  use the active viewport camera when rendered, not camera 0 globals or P1-baked state.
 
 ## First Reopened Split-Screen Pass
 

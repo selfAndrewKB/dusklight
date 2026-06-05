@@ -98,6 +98,11 @@ bool isLockOn(daAlink_c* player) {
     return attention != nullptr && attention->Lockon();
 }
 
+fopAc_ac_c* zHintForPlayer(daAlink_c* player) {
+    dAttention_c* attention = attentionForPlayer(player);
+    return attention != nullptr ? attention->getZHintTarget() : nullptr;
+}
+
 void drawAll() {
     for (int i = 1; i < kPlayerSlotCount; i++) {
         SlotAttention& state = s_attention[i];

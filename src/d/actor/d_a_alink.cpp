@@ -61,6 +61,7 @@
 #include "dusk/coop/event_presentation.h"
 #include "dusk/coop/horse_owner.h"
 #include "dusk/coop/input.h"
+#include "dusk/coop/midna_owner.h"
 #include "dusk/coop/player_attention.h"
 #include "dusk/coop/player_button_status.h"
 #include "dusk/coop/player_camera_status.h"
@@ -316,6 +317,7 @@ BOOL checkCoopAttentionLock(daAlink_c* player) {
 }
 
 }
+
 #endif
 
 #if TARGET_PC
@@ -3225,7 +3227,14 @@ cXyz* daAlink_c::getNeckAimPos(cXyz* param_0, int* param_1, int param_2) {
         || mProcID == PROC_GOAT_STROKE)
     {
         look_actor = field_0x280c.getActor();
-    } else if (dComIfGp_checkPlayerStatus0(0, 0x10)) {
+    } else if (
+#if TARGET_PC
+        // Co-op: neck/talk presentation follows this ALINK's camera-local status.
+        dusk::coop::midna_owner::checkTalkStatus(this)
+#else
+        dComIfGp_checkPlayerStatus0(0, 0x10)
+#endif
+    ) {
         if (mProcID != PROC_NOD && mProcID != PROC_EYE_AWAY && mProcID != PROC_GLARE) {
             look_actor = fopAcM_getTalkEventPartner(this);
             if (look_actor != NULL) {
@@ -9911,9 +9920,11 @@ BOOL daAlink_c::spActionTrigger() {
 
 BOOL daAlink_c::midnaTalkTrigger() const {
 #if TARGET_PC
+    const dusk::coop::PlayerSlot slot = dusk::coop::getSlotForActor(this);
+    const int pad = dusk::coop::getPadForSlot(slot);
     // If we have a custom bind for Midna, check that instead
-    if (dusk::isActionBound(dusk::ActionBinds::CALL_MIDNA, 0)) {
-        return dusk::getActionBindTrig(dusk::ActionBinds::CALL_MIDNA, 0);
+    if (dusk::isActionBound(dusk::ActionBinds::CALL_MIDNA, pad)) {
+        return dusk::getActionBindTrig(dusk::ActionBinds::CALL_MIDNA, pad);
     }
 #endif
     return mItemTrigger & BTN_Z;
@@ -12168,8 +12179,19 @@ int daAlink_c::orderZTalk() {
         return 0;
     }
 
-    if (checkMidnaRide()) {
+    if (
+#if TARGET_PC
+        dusk::coop::midna_owner::canUseService(this)
+#else
+        checkMidnaRide()
+#endif
+    ) {
+#if TARGET_PC
+        // Co-op: each ALINK owns its own Z-hint scanner through player_attention.
+        fopAc_ac_c* zhint = dusk::coop::player_attention::zHintForPlayer(this);
+#else
         fopAc_ac_c* zhint = dComIfGp_att_getZHint();
+#endif
         if (zhint != NULL) {
             setMidnaTalkStatus(BUTTON_STATUS_CHECK);
         }
@@ -12184,8 +12206,14 @@ int daAlink_c::orderZTalk() {
         {
             if (zhint != NULL) {
                 if (fopAcM_GetName(zhint) == fpcNm_Tag_Mhint_e && ((daTagMhint_c*)zhint)->checkEventID()) {
+#if TARGET_PC
+                    dusk::coop::midna_owner::beginService(this, zhint);
+#endif
                     fopAcM_orderOtherEventId(zhint, ((daTagMhint_c*)zhint)->getEventID(), ((daTagMhint_c*)zhint)->getToolEventID(), 0xFFFF, 0, 1);
                 } else {
+#if TARGET_PC
+                    dusk::coop::midna_owner::beginService(this, zhint);
+#endif
                     fopAcM_orderTalkEvent(this, zhint, 0, 0);
                 }
             } else {
@@ -12193,7 +12221,16 @@ int daAlink_c::orderZTalk() {
                     dComIfGp_setMesgCameraInfoActor(mMidnaMsg, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
                 }
 
+#if TARGET_PC
+                // Co-op: manual Midna service must talk to the companion actor owned by this ALINK slot.
+                daMidna_c* midna = dusk::coop::midna_owner::getMidnaForPlayer(this);
+                if (midna != NULL) {
+                    dusk::coop::midna_owner::beginService(this, midna);
+                    fopAcM_orderTalkEvent(this, midna, 0, 0);
+                }
+#else
                 fopAcM_orderTalkEvent(this, getMidnaActor(), 0, 0);
+#endif
             }
 
             field_0x35a0 = field_0x3594;
@@ -13738,7 +13775,12 @@ void daAlink_c::posMove() {
         if (checkNoResetFlg0(FLG0_SWIM_UP) && mProcID != PROC_SWIM_DIVE) {
             current.pos.y = mWaterY;
         } else if (mDemo.getDemoType() == daPy_demo_c::DEMO_TYPE_START_e || mProcID == PROC_ELEC_DAMAGE ||
+#if TARGET_PC
+                   /* Co-op: swim talk freeze should follow the acting ALINK, not P1 globals. */
+                   dusk::coop::midna_owner::checkTalkStatus(this))
+#else
                    dComIfGp_checkPlayerStatus0(0, 0x10))
+#endif
         {
             speed.y = 0.0f;
         } else if (checkWolf()) {
@@ -18538,6 +18580,16 @@ int daAlink_c::execute() {
 
     if (dComIfGp_event_runCheck()) {
         mAlinkStaffId = dComIfGp_evmng_getMyStaffId("Alink", this, 0);
+#if TARGET_PC
+        // Co-op: generic Alink staff tracks are singular; Midna's retained service owner
+        // takes precedence over generic event_owner because Midna requests its own potential event.
+        if (!dusk::coop::midna_owner::shouldConsumeAlinkStaff(this) &&
+            (alinkShouldSkipNonOwnedEventStaff(this) ||
+             dusk::coop::midna_owner::shouldSkipAlinkStaff(this)))
+        {
+            mAlinkStaffId = -1;
+        }
+#endif
 
         if (eventInfo.checkCommandDoor() && !dComIfGp_event_chkEventFlag(4) &&
             mEquipItem == 0x102)

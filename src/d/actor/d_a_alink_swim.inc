@@ -284,7 +284,12 @@ void daAlink_c::setSpeedAndAngleSwim() {
 
     setNormalSpeedF(var_f30, var_f28);
 
+#if TARGET_PC
+    // Co-op: swim talk freeze follows this ALINK's slot-local presentation state.
+    if (dusk::coop::midna_owner::checkTalkStatus(this)) {
+#else
     if (dComIfGp_checkPlayerStatus0(0, 0x10)) {
+#endif
         mNormalSpeed = 0.0f;
     }
 

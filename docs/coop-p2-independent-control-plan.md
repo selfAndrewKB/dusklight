@@ -210,6 +210,27 @@ pass; the camera-status sidecar only covers gameplay camera state that the split
 consume. Viewport-local Hawkeye and boomerang overlays now route through `ui_owner`, separately
 from gameplay camera status.
 
+Midna transform ownership first pass:
+
+- P1's Midna remains the canonical story/save/global actor. Additional players get runtime Midna
+  service actors so physical position, no-draw, and transform setup follow the requesting ALINK
+  without borrowing P1's companion state.
+- `dusk::coop::midna_owner` owns slot-local Midna service actors while P1's Midna remains the
+  canonical story/save/global actor: prompt eligibility, message-branch player reads,
+  transform-blocking checks, accepted transform demo handoff, and the slot-local talk/camera status
+  bit follow the service actor's ALINK slot.
+- P2 Midna prompt eligibility uses the global unlocked Midna service state plus P2's runtime Midna
+  actor instead of P1's physical `checkMidnaRide()` bit, and the accepted transform/dialog/demo path
+  uses the retained service owner so only the requester consumes the singular `Alink` staff track.
+- Accepted Midna transforms choose the ALINK demo mode from the retained owner's current form;
+  singular message branches must not force P1/global form assumptions back into P2.
+- Midna service presentation opts into `event_presentation::Source::MidnaService` so the requesting
+  player's camera owns the fullscreen service presentation while P1/global Midna reads remain
+  canonical outside the slot-local service path.
+- Midna message tags now write their prompt context to every active ALINK in the tag volume.
+  Remaining Midna hint/stop tag behavior should be audited case by case if testing exposes
+  P2-specific failures.
+
 ### `interaction_owner`
 
 Owns "which player is using this prompt or object?" for talk, inspect, pick up, climb/enter, and
@@ -290,7 +311,7 @@ sequence.
 | First-person and item aim | `src/d/actor/d_a_alink_bow.inc`, `src/d/actor/d_a_alink_ironball.inc`, hookshot code in ALINK, `src/d/actor/d_a_arrow.cpp` | Bow/slingshot, Hawkeye, iron ball, hookshot, item cameras, and viewport-local item overlays have a first owner-aware pass. |
 | Interaction prompts | `src/d/actor/d_a_alink.cpp`, `src/f_op/f_op_actor_mng.cpp`, NPC/object actors with action prompts | Generic ALINK talk/check/pickup and carried-item actions are slot-local; knob/shutter door prompt side selection uses `interaction_owner`; event-owner door demos move the requester; HUD prompt rendering is owner-aware. Remaining world-actor singleton prompts should be audited case by case. |
 | Climb/hang camera hints | `src/d/actor/d_a_alink_hang.inc` | Hang, ladder, climb, and roof-hang camera status writes route through `player_camera_status` so P2 climb states do not write into P1's camera row. |
-| Howling/Hidden Skills | `src/d/actor/d_a_tag_howl.cpp`, `src/d/actor/d_a_obj_smw_stone.cpp`, `src/d/actor/d_a_npc_kn.cpp` | Howling intentionally remains P1/global and uses singular fullscreen `event_presentation`; Hidden Skill trainer ownership is deferred unless testing exposes a concrete P2 failure. |
+| Howling/Hidden Skills/Midna | `src/d/actor/d_a_tag_howl.cpp`, `src/d/actor/d_a_obj_smw_stone.cpp`, `src/d/actor/d_a_npc_kn.cpp`, `src/d/actor/d_a_alink.cpp`, Midna actor/helper paths | Howling intentionally remains P1/global and uses singular fullscreen `event_presentation`; Hidden Skill trainer ownership is deferred unless testing exposes a concrete P2 failure; Midna transform prompts use `midna_owner` for service owner, active-service physical setup, message branch, transform eligibility, accepted demo handoff, and slot-local talk status. |
 
 ## Test Plan
 

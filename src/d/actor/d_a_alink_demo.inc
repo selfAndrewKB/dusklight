@@ -26,21 +26,23 @@
 #include "dusk/imgui/ImGuiConsole.hpp"
 #if TARGET_PC
 #include "dusk/coop/event_owner.h"
+#include "dusk/coop/midna_owner.h"
 #endif
 #include "dusk/settings.h"
 #include "dusk/speedrun.h"
 
 #if TARGET_PC
-static bool alinkShouldSkipDoorEventDemo(const daAlink_c* player) {
-    fopAc_ac_c* door = dComIfGp_event_getPt2();
-    if (door == NULL || !door->eventInfo.checkCommandDoor()) {
+static bool alinkShouldSkipNonOwnedEventStaff(const daAlink_c* player) {
+    fopAc_ac_c* partner = dComIfGp_event_getPt2();
+    if (partner == NULL || !partner->eventInfo.checkCommandDoor()) {
         return false;
     }
 
-    // Co-op: door event scripts use a generic Alink staff track; only the requester should
-    // consume it, otherwise P1 also enters the door animation for P2-owned events.
+    // Co-op: door event scripts use a generic Alink staff track; only the retained
+    // requester should consume it, otherwise P1 also enters P2-owned event demos.
     return !dusk::coop::event_owner::isCurrentOwner(static_cast<const fopAc_ac_c*>(player));
 }
+
 #endif
 
 BOOL daAlink_c::checkEventRun() const {
@@ -97,7 +99,12 @@ int daAlink_c::checkDemoAction() {
     }
 
 #if TARGET_PC
-    if (alinkShouldSkipDoorEventDemo(this)) {
+    // Co-op: Midna's retained service owner must keep the Alink staff even after
+    // Midna becomes the potential-event requester.
+    if (!dusk::coop::midna_owner::shouldConsumeAlinkStaff(this) &&
+        (alinkShouldSkipNonOwnedEventStaff(this) ||
+         dusk::coop::midna_owner::shouldSkipAlinkStaff(this)))
+    {
         mAlinkStaffId = -1;
         return 0;
     }
@@ -840,10 +847,19 @@ void daAlink_c::setDemoData() {
             }
 
             if (checkModeFlg(0x80000) || mDemo.getDemoMode() == daPy_demo_c::DEMO_UNK_6_e || mDemo.getDemoMode() == daPy_demo_c::DEMO_UNK_8_e) {
+#if TARGET_PC
+                // Co-op: talk/Midna presentation status is camera-local for extra ALINKs.
+                dusk::coop::midna_owner::setTalkStatus(this);
+#else
                 dComIfGp_setPlayerStatus0(0, 0x10);
+#endif
                 mMidnaTalkDelayTimer = 30;
             } else {
+#if TARGET_PC
+                dusk::coop::midna_owner::clearTalkStatus(this);
+#else
                 dComIfGp_clearPlayerStatus0(0, 0x10);
+#endif
             }
 
             if (mAlinkStaffId != -1 &&
@@ -945,7 +961,12 @@ void daAlink_c::endDemoMode() {
     }
 
     offNoResetFlg0(FLG0_UNK_100000);
+#if TARGET_PC
+    // Co-op: clear the same slot-local talk/Midna status that this ALINK set.
+    dusk::coop::midna_owner::clearTalkStatus(this);
+#else
     dComIfGp_clearPlayerStatus0(0, 0x10);
+#endif
 
     BOOL isDemoTypeStart = mDemo.getDemoType() == daPy_demo_c::DEMO_TYPE_START_e;
     BOOL var_r0 = mDemo.getDemoMode() == daPy_demo_c::DEMO_UNK_14_e || mDemo.getDemoMode() == daPy_demo_c::DEMO_UNK_26_e;
@@ -1782,7 +1803,12 @@ int daAlink_c::procCoTalkInit() {
     }
 
     mProcVar0.field_0x3008 = 30;
+#if TARGET_PC
+    // Co-op: talk presentation status must not leak from one ALINK to another.
+    dusk::coop::midna_owner::setTalkStatus(this);
+#else
     dComIfGp_setPlayerStatus0(0, 0x10);
+#endif
     return 1;
 }
 
@@ -3772,7 +3798,12 @@ int daAlink_c::procTradeItemOutInit() {
     }
 
     mProcVar3.field_0x300e = 0;
+#if TARGET_PC
+    // Co-op: trade-item talk presentation status follows the acting ALINK slot.
+    dusk::coop::midna_owner::setTalkStatus(this);
+#else
     dComIfGp_setPlayerStatus0(0, 0x10);
+#endif
     mProcVar4.field_0x3010 = 1;
 
     if (mDemo.getParam0() != 1) {
@@ -4365,13 +4396,29 @@ bool daAlink_c::checkAcceptWarp() {
             !checkForestOldCentury()
            )
         {
-            if (checkMidnaRide() || ((daMidna_c*)getMidnaActor())->checkPortalObjRide()) {
+            if (
+#if TARGET_PC
+                dusk::coop::midna_owner::canUseService(this) ||
+#else
+                checkMidnaRide() ||
+#endif
+                ((daMidna_c*)getMidnaActor())->checkPortalObjRide())
+            {
                 if ((checkField() || checkCastleTown()) && !checkStageName("R_SP161")) {
+#if TARGET_PC
+                    // Co-op: portal warp eligibility must follow the ALINK using Midna's service.
+                    if ((checkWolf() && (checkModeFlg(MODE_UNK_1000) ||
+                                           dusk::coop::midna_owner::checkTalkStatus(this))) ||
+                        (!checkWolf() &&
+                         (checkEventRun() || dusk::coop::midna_owner::canTransformNow(this)) &&
+                         (checkModeFlg(4) || dusk::coop::midna_owner::checkTalkStatus(this))))
+#else
                     if ((checkWolf() && (checkModeFlg(MODE_UNK_1000) ||
                                            dComIfGp_checkPlayerStatus0(0, 0x10))) ||
                         (!checkWolf() &&
                          (checkEventRun() || getMidnaActor()->checkMetamorphoseEnable()) &&
                          (checkModeFlg(4) || dComIfGp_checkPlayerStatus0(0, 0x10))))
+#endif
                     {
                         return true;
                     }

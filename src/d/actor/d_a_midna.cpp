@@ -14,6 +14,9 @@
 #include "d/d_msg_object.h"
 #include "d/d_s_play.h"
 #include "d/d_debug_viewer.h"
+#if TARGET_PC
+#include "dusk/coop/midna_owner.h"
+#endif
 #include "dusk/frame_interpolation.h"
 
 static f32 dummy_lit_3777(int idx, u8 foo) {
@@ -24,6 +27,28 @@ static f32 dummy_lit_3777(int idx, u8 foo) {
         default: return dummy_vec.z;
     }
 }
+
+#if TARGET_PC
+static daAlink_c* getMidnaOwnerLink(const daMidna_c* midna) {
+    // Co-op: runtime Midna copies are slot-local service actors; their physical
+    // setup and accepted demos follow the ALINK registered to this Midna.
+    if (dusk::coop::midna_owner::isServiceActive() &&
+        dusk::coop::midna_owner::getMidna(dusk::coop::midna_owner::currentSlot()) == midna)
+    {
+        daAlink_c* player = dusk::coop::midna_owner::currentPlayer();
+        if (player != NULL) {
+            return player;
+        }
+    }
+
+    daAlink_c* player = dusk::coop::midna_owner::getPlayerForMidna(midna);
+    if (player != NULL) {
+        return player;
+    }
+
+    return daAlink_getAlinkActorClass();
+}
+#endif
 
 static char const l_arcName[6] = "Midna";
 
@@ -161,7 +186,15 @@ void daMidna_matAnm_c::calc(J3DMaterial* i_material) const {
 }
 
 int daMidna_McaMorfCB1_c::execute(u16 i_jointNo, J3DTransformInfo* transform) {
-    if (!daPy_py_c::getMidnaActor()->checkNoHairScale()) {
+    daMidna_c* midna = daPy_py_c::getMidnaActor();
+#if TARGET_PC
+    // Co-op: multiple Midna actors share this callback class, so resolve the
+    // current model owner instead of reading P1's global Midna singleton.
+    if (j3dSys.getModel() != NULL && j3dSys.getModel()->getUserArea() != 0) {
+        midna = reinterpret_cast<daMidna_c*>(j3dSys.getModel()->getUserArea());
+    }
+#endif
+    if (midna == NULL || !midna->checkNoHairScale()) {
         if (i_jointNo >= JNT_HAIR_1 && i_jointNo <= JNT_HAIR_5) {
             cXyz* scale = &mpScale[i_jointNo - JNT_HAIR_1];
             transform->mScale.x *= scale->x;
@@ -597,6 +630,12 @@ daMidna_hio_c::daMidna_hio_c() {
 
 cPhs_Step daMidna_c::create() {
     fopAcM_ct(this, daMidna_c);
+#if TARGET_PC
+    const dusk::coop::PlayerSlot coopMidnaSlot =
+        dusk::coop::midna_owner::isAdditionalMidnaSpawnRequest(this) ?
+            dusk::coop::midna_owner::getAdditionalMidnaSpawnRequestSlot(this) :
+            dusk::coop::PlayerSlot::Primary;
+#endif
     cPhs_Step step = dComIfG_resLoad(&mPhase, l_arcName);
 
     if (step == cPhs_COMPLEATE_e) {
@@ -670,7 +709,19 @@ cPhs_Step daMidna_c::create() {
         mVoiceFrame = -1.0f;
         setMatrix();
         setRoomInfo();
+#if TARGET_PC
+        // Co-op: only the authored Midna owns the vanilla global pointer; runtime
+        // copies are slot-local service actors registered in midna_owner.
+        if (coopMidnaSlot == dusk::coop::PlayerSlot::Primary) {
+            daPy_py_c::setMidnaActor(this);
+        }
+        dusk::coop::midna_owner::registerMidna(coopMidnaSlot, this);
+        if (coopMidnaSlot == dusk::coop::PlayerSlot::Primary) {
+            dusk::coop::midna_owner::ensureAdditionalMidnas();
+        }
+#else
         daPy_py_c::setMidnaActor(this);
+#endif
         mpMorf->setMorf(1.0f);
         
         if (fopAcM_GetParam(this) == 1 && checkMidnaRealBody() && !checkMidnaTired()) {
@@ -1187,8 +1238,17 @@ void daMidna_c::setBodyPartPos() {
     }
 
     if (field_0x84e == 1 || (checkSetAnime(0, ANM_S_APPEAR) && mpMorf->getFrame() < 3.0f)) {
+#if TARGET_PC
+        daAlink_c* link = getMidnaOwnerLink(this);
+#else
         daAlink_c* link = daAlink_getAlinkActorClass();
-        f32 fvar1 = daPy_py_c::checkNowWolf() ? 250.0f : 50.0f;
+#endif
+        f32 fvar1 =
+#if TARGET_PC
+            link->checkWolf() ? 250.0f : 50.0f;
+#else
+            daPy_py_c::checkNowWolf() ? 250.0f : 50.0f;
+#endif
         attention_info.position.set(
             link->current.pos.x + fvar1 * cM_ssin(link->shape_angle.y),
             link->current.pos.y - 30.0f,
@@ -1206,15 +1266,30 @@ void daMidna_c::setBodyPartPos() {
         cXyz item_pos;
         static Vec const localItemPos = { 0.0f, -68.0f, 0.0f };
         mDoMtx_multVec(mpShadowModel->getAnmMtx(JNT_HEAD), &localItemPos, &item_pos);
+#if TARGET_PC
+        getMidnaOwnerLink(this)->setItemPos(&item_pos);
+#else
         daAlink_getAlinkActorClass()->setItemPos(&item_pos);
+#endif
     }
 }
 
 BOOL daMidna_c::checkAppear() {
+#if TARGET_PC
+    daAlink_c* link = getMidnaOwnerLink(this);
+#else
+    daAlink_c* link = daAlink_getAlinkActorClass();
+#endif
+    BOOL appears_for_wolf =
+#if TARGET_PC
+        link->checkWolf();
+#else
+        daPy_py_c::checkNowWolf();
+#endif
     if (
-        daPy_py_c::checkNowWolf() && daPy_py_c::checkFirstMidnaDemo() &&
+        appears_for_wolf && daPy_py_c::checkFirstMidnaDemo() &&
         (
-            !daAlink_getAlinkActorClass()->checkMidnaDisappearMode() ||
+            !link->checkMidnaDisappearMode() ||
             checkStateFlg0(FLG0_WOLF_NO_POS) ||
             (checkSetAnime(0, ANM_RETURN) && !mpMorf->isStop())
         )
@@ -1225,7 +1300,11 @@ BOOL daMidna_c::checkAppear() {
 }
 
 void daMidna_c::checkMidnaPosState() {
+#if TARGET_PC
+    daAlink_c* link = getMidnaOwnerLink(this);
+#else
     daAlink_c* link = daAlink_getAlinkActorClass();
+#endif
 
     const cXyz* jump_point = link->checkMidnaLockJumpPoint();
     if (checkStateFlg1(FLG1_UNK_200) || checkSetAnime(0, ANM_LEADTOWAITA)) {
@@ -3080,6 +3159,11 @@ static void* daMidna_searchNpc(fopAc_ac_c* i_actor, void* o_far) {
 }
 
 void daMidna_c::setMidnaNoDrawFlg() {
+#if TARGET_PC
+    daAlink_c* link = getMidnaOwnerLink(this);
+#else
+    daAlink_c* link = daAlink_getAlinkActorClass();
+#endif
     if (
         (!checkStateFlg1((daMidna_FLG1)(FLG1_SHADOW_MODEL_DRAW_DEMO_FORCE | FLG1_UNK_1)) &&
         (!checkAppear() || !checkMidnaRealBody())) || daAlink_c::checkCloudSea()
@@ -3087,7 +3171,7 @@ void daMidna_c::setMidnaNoDrawFlg() {
         onStateFlg0(FLG0_NO_DRAW);
     } else if (
         !checkStateFlg1((daMidna_FLG1)(FLG1_SHADOW_MODEL_DRAW_DEMO_FORCE | FLG1_UNK_1)) &&
-        daAlink_getAlinkActorClass()->checkPlayerNoDraw() &&
+        link->checkPlayerNoDraw() &&
         !checkStateFlg0((daMidna_FLG0)(FLG0_TAG_WAIT | FLG0_UNK_100))
     ) {
         onStateFlg0((daMidna_FLG0)(FLG0_UNK_10000 | FLG0_NO_DRAW));
@@ -3105,21 +3189,22 @@ void daMidna_c::setMidnaNoDrawFlg() {
 }
 
 BOOL daMidna_c::checkMetamorphoseEnableBase() {
+#if TARGET_PC
+    // Co-op: Midna transform eligibility belongs to the player using this slot's service actor.
+    return dusk::coop::midna_owner::canTransformNow(
+        dusk::coop::midna_owner::messageFlowPlayer());
+#else
     BOOL tmp;
     if (!daAlink_getAlinkActorClass()->checkMidnaRide() || (g_env_light.mEvilInitialized & 0x80) ||
         /* dSv_event_flag_c::M_077 - Main Event - Get shadow crystal (can now transform) */
         !dComIfGs_isEventBit(0xD04) ||
-#if TARGET_PC
-        (fopAcIt_Judge((fopAcIt_JudgeFunc)daMidna_searchNpc, &tmp) &&
-         !dusk::getSettings().game.canTransformAnywhere)
-#else
         fopAcIt_Judge((fopAcIt_JudgeFunc)daMidna_searchNpc, &tmp)
-#endif
     )
     {
         return FALSE;
     }
     return TRUE;
+#endif
 }
 
 BOOL daMidna_c::checkNoDrawState() {
@@ -3203,9 +3288,21 @@ void daMidna_c::setSound() {
 }
 
 int daMidna_c::execute() {
+#if TARGET_PC
+    daAlink_c* link = getMidnaOwnerLink(this);
+    daAlink_c* event_link = link;
+#else
     daAlink_c* link = daAlink_getAlinkActorClass();
+    daAlink_c* event_link = link;
+#endif
     if (!link->checkMetamorphose()) {
-        if (daPy_py_c::checkNowWolf()) {
+        if (
+#if TARGET_PC
+            link->checkWolf()
+#else
+            daPy_py_c::checkNowWolf()
+#endif
+        ) {
             onStateFlg0(FLG0_UNK_40000000);
         } else {
             offStateFlg0(FLG0_UNK_40000000);
@@ -3277,7 +3374,12 @@ int daMidna_c::execute() {
         field_0x84e = 0;
     }
 
-    if (checkSetAnime(0, ANM_LEADTOWAITA) && mpMorf->checkFrame(2.0f) && daPy_py_c::checkNowWolf()
+    if (checkSetAnime(0, ANM_LEADTOWAITA) && mpMorf->checkFrame(2.0f) &&
+#if TARGET_PC
+        link->checkWolf()
+#else
+        daPy_py_c::checkNowWolf()
+#endif
                                      && mpKago == NULL) {
         dComIfGp_getVibration().StartShock(2, 0x1f, cXyz(0.0f, 1.0f, 0.0f));
     }
@@ -3296,9 +3398,18 @@ int daMidna_c::execute() {
     mSound.framework(0, mReverb);
 
     if (eventInfo.checkCommandTalk()) {
-        if (!checkShadowModeTalkWait() || fopAcM_getTalkEventPartner(link) == this) {
+        if (!checkShadowModeTalkWait() || fopAcM_getTalkEventPartner(event_link) == this) {
             if (!checkStateFlg0(FLG0_UNK_8000)) {
                 offStateFlg0((daMidna_FLG0)(FLG0_NPC_NEAR | FLG0_NPC_FAR));
+#if TARGET_PC
+                // Co-op: Midna blocker flags mirror the retained service owner.
+                const int block_reason = dusk::coop::midna_owner::currentTransformBlockReason();
+                if (block_reason == 1) {
+                    onStateFlg0(FLG0_NPC_NEAR);
+                } else if (block_reason == 2) {
+                    onStateFlg0(FLG0_NPC_FAR);
+                }
+#else
                 BOOL far_;
                 if (fopAcIt_Judge((fopAcIt_JudgeFunc)daMidna_searchNpc, &far_)) {
                     if (!far_) {
@@ -3307,6 +3418,7 @@ int daMidna_c::execute() {
                         onStateFlg0(FLG0_NPC_FAR);
                     }
                 }
+#endif
                 onStateFlg0(FLG0_UNK_8000);
                 mMsgFlow.init(this, 0xbb9, 0, NULL);
             } else if (mMsgFlow.doFlow(this, NULL, 0)) {
@@ -3323,39 +3435,78 @@ int daMidna_c::execute() {
                 if (event_id == 4 || event_id == 5) {
                     dComIfGp_getEvent()->reset(this);
                     offStateFlg0(FLG0_UNK_8000);
+                    // Co-op: each active slot has a Midna service actor; the accepted
+                    // transform demo targets the retained ALINK instead of vanilla P1.
+#if TARGET_PC
+                    dusk::coop::midna_owner::orderPotentialEvent(this, 0x400, 0xffff, 1);
+#else
                     fopAcM_orderPotentialEvent(this, 0x400, 0xffff, 1);
-                    link->changeOriginalDemo();
+#endif
+                    event_link->changeOriginalDemo();
+#if TARGET_PC
+                    // Co-op: choose the accepted demo from the retained ALINK's form.
+                    const u32 transform_demo_mode =
+                        event_link->checkWolf() ? daPy_demo_c::DEMO_METAMORPHOSE_UNK2_e :
+                                                  daPy_demo_c::DEMO_METAMORPHOSE_UNK1_e;
+                    event_link->changeDemoMode(transform_demo_mode, 0, 0, 0);
+                    if (transform_demo_mode == daPy_demo_c::DEMO_METAMORPHOSE_UNK2_e) {
+                        if (mpModel != NULL && !checkStateFlg0(FLG0_NO_DRAW)) {
+                            changeOriginalDemo();
+                            changeDemoMode(0xf);
+                        }
+                    }
+#else
                     if (event_id == 4) {
-                        link->changeDemoMode(0x3a, 0, 0, 0);
+                        event_link->changeDemoMode(0x3a, 0, 0, 0);
                         if (mpModel != NULL && !checkStateFlg0(FLG0_NO_DRAW)) {
                             changeOriginalDemo();
                             changeDemoMode(0xf);
                         }
                     } else {
-                        link->changeDemoMode(0x39, 0, 0, 0);
+                        event_link->changeDemoMode(0x39, 0, 0, 0);
                     }
+#endif
 
                     if (checkStateFlg0(FLG0_NO_DRAW)) {
                         onStateFlg0(FLG0_UNK_2000000);
                     }
+#if TARGET_PC
+                    dusk::coop::midna_owner::updateService();
+#endif
                 } else if (
                     !checkStateFlg0(FLG0_NO_DRAW) || (checkSetAnime(0, ANM_S_RETURN) && mpMorf->isStop())
                 ) {
                     if (event_id == 0xB) {
                         dMeter2Info_setPauseStatus(6);
-                        link->onPortalWarpMidnaAtnKeep();
+                        event_link->onPortalWarpMidnaAtnKeep();
                     } else {
-                        link->onMidnaTalkPolySpeed();
+                        event_link->onMidnaTalkPolySpeed();
                     }
 
                     dComIfGp_getEvent()->reset(this);
                     offStateFlg0(FLG0_UNK_8000);
+#if TARGET_PC
+                    dusk::coop::midna_owner::endService();
+#endif
                 }
             }
         }
-    } else if (eventInfo.checkCommandDemoAccrpt() && !link->checkMetamorphose()) {
+    } else if (eventInfo.checkCommandDemoAccrpt() && !event_link->checkMetamorphose()
+#if TARGET_PC
+               // Co-op: P2's retained service must survive the potential-event handoff
+               // until the owning ALINK consumes or exits its transform demo.
+               && !dusk::coop::midna_owner::isServiceActive()
+#endif
+              ) {
         dComIfGp_getEvent()->reset(this);
+#if TARGET_PC
+        dusk::coop::midna_owner::endService();
+#endif
     }
+
+#if TARGET_PC
+    dusk::coop::midna_owner::updateService();
+#endif
 
     if (link->checkMidnaRide()) {
         eventInfo.onCondition(1);
@@ -3412,11 +3563,15 @@ static int daMidna_Execute(daMidna_c* i_this) {
 }
 
 int daMidna_c::draw() {
+#if TARGET_PC
+    daAlink_c* link = getMidnaOwnerLink(this);
+#else
     daAlink_c* link = daAlink_getAlinkActorClass();
+#endif
 
     if (checkNoDrawState() ||
         (!checkStateFlg1((daMidna_FLG1)(FLG1_SHADOW_MODEL_DRAW_DEMO_FORCE | FLG1_UNK_1))
-            && daAlink_getAlinkActorClass()->checkPlayerNoDraw()
+            && link->checkPlayerNoDraw()
             && !checkStateFlg0((daMidna_FLG0)(FLG0_TAG_WAIT | FLG0_UNK_100))))
     {
         return 1;
@@ -3638,7 +3793,16 @@ daMidna_c::~daMidna_c() {
     #endif
 
     dComIfG_resDelete(&mPhase, l_arcName);
+#if TARGET_PC
+    const dusk::coop::PlayerSlot coopMidnaSlot =
+        dusk::coop::midna_owner::getSlotForMidna(this);
+    dusk::coop::midna_owner::unregisterMidna(coopMidnaSlot, this);
+    if (daPy_py_c::getMidnaActor() == this) {
+        daPy_py_c::setMidnaActor(NULL);
+    }
+#else
     daPy_py_c::setMidnaActor(NULL);
+#endif
     mSound.deleteObject();
 }
 

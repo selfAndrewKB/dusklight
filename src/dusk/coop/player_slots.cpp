@@ -2,6 +2,7 @@
 
 #include "dusk/coop/camera.h"
 #include "dusk/coop/horse_owner.h"
+#include "dusk/coop/midna_owner.h"
 #include "dusk/coop/player_item_selection.h"
 #include "dusk/diagnostics.h"
 #include "dusk/logging.h"
@@ -84,6 +85,7 @@ void registerPlayer(PlayerSlot slot, fopAc_ac_c* actor) {
 
     if (slot != PlayerSlot::Primary) {
         horse_owner::ensureHorseForSlot(slot);
+        midna_owner::ensureMidnaForSlot(slot);
     }
 }
 
@@ -97,6 +99,7 @@ void unregisterPlayer(PlayerSlot slot, const fopAc_ac_c* actor) {
     if (registered_actor == actor) {
         if (slot != PlayerSlot::Primary) {
             horse_owner::releaseHorseForSlot(slot);
+            midna_owner::releaseMidnaForSlot(slot);
         }
 
         registered_actor = nullptr;
