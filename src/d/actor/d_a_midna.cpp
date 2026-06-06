@@ -906,7 +906,18 @@ void daMidna_c::setMatrix() {
     }
     mpShadowModel->setBaseScale(scale);
 
+#if TARGET_PC
+    // Co-op: Midna placement follows the ALINK registered to this service actor.
+    daAlink_c* link = getMidnaOwnerLink(this);
+#else
     daAlink_c* link = daAlink_getAlinkActorClass();
+#endif
+    BOOL no_wolf_pos_model =
+#if TARGET_PC
+        !link->checkWolf() || checkShadowModelDrawSmode();
+#else
+        !daPy_py_c::checkNowWolf() || checkShadowModelDrawSmode();
+#endif
 
     if (mDemoMode == 0x200) {
         J3DTransformInfo transform;
@@ -926,7 +937,7 @@ void daMidna_c::setMatrix() {
         mDoMtx_stack_c::ZXYrotM(shape_angle);
         mDoMtx_stack_c::transM(0.0f, -98.0f, 17.0f);
         mpShadowModel->setBaseTRMtx(mDoMtx_stack_c::get());
-    } else if (!checkStateFlg0(FLG0_WOLF_NO_POS) && (!daPy_py_c::checkNowWolf() || checkShadowModelDrawSmode())) {
+    } else if (!checkStateFlg0(FLG0_WOLF_NO_POS) && no_wolf_pos_model) {
         if (field_0x84e != 4) {
             f32 sin_link_y = cM_ssin(link->shape_angle.y);
             f32 cos_link_y = cM_scos(link->shape_angle.y);
@@ -1276,6 +1287,7 @@ void daMidna_c::setBodyPartPos() {
 
 BOOL daMidna_c::checkAppear() {
 #if TARGET_PC
+    // Co-op: service Midna visibility follows the owning Link's wolf state.
     daAlink_c* link = getMidnaOwnerLink(this);
 #else
     daAlink_c* link = daAlink_getAlinkActorClass();
@@ -1301,6 +1313,7 @@ BOOL daMidna_c::checkAppear() {
 
 void daMidna_c::checkMidnaPosState() {
 #if TARGET_PC
+    // Co-op: service Midna position state follows the owning Link's state.
     daAlink_c* link = getMidnaOwnerLink(this);
 #else
     daAlink_c* link = daAlink_getAlinkActorClass();
@@ -1995,7 +2008,12 @@ void daMidna_c::setAnm() {
         return;
     }
 
+#if TARGET_PC
+    // Co-op: service Midna animation state follows the owning Link's wolf state.
+    daAlink_c* link = getMidnaOwnerLink(this);
+#else
     daAlink_c* link = daAlink_getAlinkActorClass();
+#endif
     BOOL bVar1;
     if (dComIfGp_event_runCheck() || checkEndResetStateFlg0(ERFLG0_NO_SERVICE_WAIT)) {
         bVar1 = TRUE;
@@ -2562,8 +2580,16 @@ s16 daMidna_c::getNeckAimAngle(cXyz const* i_atnPos, s16* o_neckX, s16* o_neckY,
         ANGLE_ADD(*o_eyeX, atn_angle_x - sVar7);
         ANGLE_ADD(*o_eyeY, atn_angle_y - sVar8);
     } else {
+#if TARGET_PC
+        // Co-op: owner-local neck proc state keeps runtime Midna copies from
+        // posing against P1 while sitting on another Link.
+        daAlink_c* link = getMidnaOwnerLink(this);
+        *o_neckX = link->getProcNeckX();
+        *o_neckY = link->getMidnaProcNeckY();
+#else
         *o_neckX = daAlink_getAlinkActorClass()->getProcNeckX();
         *o_neckY = daAlink_getAlinkActorClass()->getMidnaProcNeckY();
+#endif
     }
     return sVar2;
 }
@@ -2581,7 +2607,12 @@ void daMidna_c::clearEyeMove() {
 }
 
 void daMidna_c::setEyeMove(cXyz const* i_atnPos, s16 i_angleX, s16 i_angleY) {
+#if TARGET_PC
+    // Co-op: service Midna eye tracking follows the owning Link's state.
+    daAlink_c* link = getMidnaOwnerLink(this);
+#else
     daAlink_c* link = daAlink_getAlinkActorClass();
+#endif
     u8 timer = mEyeMoveTimer;
     f32 move_x = mEyeMoveX;
     f32 move_y = mEyeMoveY;
@@ -2676,7 +2707,12 @@ void daMidna_c::setEyeMove(cXyz const* i_atnPos, s16 i_angleX, s16 i_angleY) {
 }
 
 void daMidna_c::setNeckAngle() {
+#if TARGET_PC
+    // Co-op: service Midna neck tracking follows the owning Link's state.
+    daAlink_c* link = getMidnaOwnerLink(this);
+#else
     daAlink_c* link = daAlink_getAlinkActorClass();
+#endif
     BOOL clear_eye_move = mBtkHeap.getIdx() != 0x3A4 && !mBtkHeap.checkNoSetIdx() && mBtkHeap.getIdx() != 0x399;
     s16 neck_x = 0;
     s16 neck_y = 0;
@@ -2778,7 +2814,12 @@ void daMidna_c::setHairAngle() {
     field_0x872 += fVar2 * 0x1000 + 0x800;
 
     cXyz* atn_pos = NULL;
+#if TARGET_PC
+    // Co-op: Midna hair attention targets are actor-local rider state.
+    daAlink_c* link = getMidnaOwnerLink(this);
+#else
     daAlink_c* link = daAlink_getAlinkActorClass();
+#endif
     if (
         link->checkMidnaHairAtnPos() && !checkMidnaTired() &&
         !checkStateFlg0((daMidna_FLG0)(FLG0_NO_HAIR_SCALE | FLG0_UNK_200000 | FLG0_TAG_WAIT | FLG0_UNK_100))
@@ -3059,7 +3100,13 @@ J3DAnmTextureSRTKey* daMidna_c::setSimpleBtk(J3DModelData* i_modelData, u16 i_id
 }
 
 void daMidna_c::initMidnaModel() {
+#if TARGET_PC
+    // Co-op: runtime Midna service actors must bind to their owning ALINK's
+    // Midna body models instead of P1's global companion model.
+    daAlink_c* link = getMidnaOwnerLink(this);
+#else
     daAlink_c* link = daAlink_getAlinkActorClass();
+#endif
     if (checkStateFlg1(FLG1_UNK_1)) {
         if (mpDemoBDTmpBmd != NULL && mpModel != mpDemoBDTmpBmd) {
             mpModel = mpDemoBDTmpBmd;
@@ -3100,7 +3147,9 @@ void daMidna_c::initMidnaModel() {
         
         J3DModel* midna_model = link->getMidnaModel();
         if (mpModel != NULL) {
-            if (midna_model == NULL && !checkStateFlg1(FLG1_UNK_1)) {
+            if ((midna_model == NULL || midna_model != mpModel) && !checkStateFlg1(FLG1_UNK_1)) {
+                // Co-op: owner ALINK form swaps can replace the Midna body model
+                // without passing through NULL, so stale model pointers must rebind.
                 mpModel = NULL;
                 mpMaskBmd = NULL;
                 mpHandsBmd = NULL;
@@ -3108,7 +3157,9 @@ void daMidna_c::initMidnaModel() {
                 mpLeftHandShape = NULL;
                 mpRightHandShape = NULL;
             }
-        } else if (midna_model != NULL) {
+        }
+
+        if (mpModel == NULL && midna_model != NULL) {
             mpModel = midna_model;
             mpMaskBmd = link->getMidnaMaskModel();
             mpHandsBmd = link->getMidnaHandModel();
@@ -3127,6 +3178,14 @@ void daMidna_c::initMidnaModel() {
             mBtpHeap.initData();
             mBtkHeap.initData();
         }
+    }
+
+    if (mpModel != NULL) {
+        // Co-op: Midna model data is shared, but eye material anim pointers are
+        // actor-local and must be restored before this service actor calculates.
+        J3DModelData* modelData = mpModel->getModelData();
+        modelData->getMaterialNodePointer(2)->setMaterialAnm(mpEyeMatAnm[0]);
+        modelData->getMaterialNodePointer(3)->setMaterialAnm(mpEyeMatAnm[1]);
     }
 }
 
