@@ -4,6 +4,8 @@
 #include "dusk/coop/player_button_status.h"
 #include "dusk/coop/player_slots.h"
 
+class daAlink_c;
+
 namespace dusk::coop::hud_owner {
 
 struct ItemPresentation {
@@ -14,6 +16,7 @@ struct ItemPresentation {
 };
 
 PlayerSlot currentSlot();
+daAlink_c* currentPlayer();
 void pushSlot(PlayerSlot slot);
 void popSlot();
 

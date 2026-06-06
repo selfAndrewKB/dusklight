@@ -13,6 +13,7 @@ enum class Source : u8 {
     DungeonMap,
     AgithaInsect,
     MidnaService,
+    Dialogue,
     Count,
 };
 
@@ -38,6 +39,7 @@ struct DebugState {
     int dungeonMapDepth = 0;
     int agithaInsectDepth = 0;
     int midnaServiceDepth = 0;
+    int dialogueDepth = 0;
     Transition lastTransition = Transition::None;
     Source lastSource = Source::WolfHowl;
     PlayerSlot presenterSlot = PlayerSlot::Primary;

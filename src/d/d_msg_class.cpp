@@ -576,6 +576,8 @@ void jmessage_tReference::pageSend() {
 
 void jmessage_tReference::selectMessage() {
     if (mSelectNum != 0) {
+        // Co-op: message choices use the retained dialogue owner pad.
+        mpStick->setPad(dusk::coop::player_button_status::messagePad());
         mpStick->checkTrigger();
 
         if (mSelectType == 0) {

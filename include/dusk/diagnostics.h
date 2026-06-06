@@ -24,10 +24,13 @@ struct SecondaryAlinkState {
     uintptr_t copyRodActor = 0;
     uintptr_t copyRodControlActor = 0;
     uintptr_t copyRodCameraActor = 0;
+    uintptr_t wolfLockActor = 0;
     int itemActorId = 0;
     int rideActorId = 0;
+    int wolfLockActorId = 0;
     s16 itemActorName = 0;
     s16 rideActorName = 0;
+    s16 wolfLockActorName = 0;
     u16 proc = 0;
     u16 equipItem = 0;
     u8 selectItemId = 0;
@@ -38,6 +41,7 @@ struct SecondaryAlinkState {
     u8 itemTrigger = 0;
     u8 useButtonFlags = 0;
     u8 previousUseButtonFlags = 0;
+    u8 wolfLockNum = 0;
     s16 stickAngle = 0;
     s16 moveAngle = 0;
     s16 currentAngleY = 0;
@@ -59,6 +63,8 @@ struct SecondaryAlinkState {
     bool itemButtonR = false;
     bool itemTriggerR = false;
     bool copyRodTopUse = false;
+    bool wolfLockDomeActive = false;
+    bool wolfLockAttackActive = false;
 };
 
 void setSecondaryAlinkActionMirrorProfileEnabled(bool enabled);

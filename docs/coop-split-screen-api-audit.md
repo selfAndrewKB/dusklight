@@ -20,8 +20,8 @@ families, and which systems are intentionally deferred.
 | Which fullscreen effect owns this viewport/framebuffer? | `viewport_effect_owner` | Partially implemented through `dusk::coop::render_effects` policy helpers and the central per-window painter replay |
 | Which viewport owns real-shadow submission culling and baked shadow matrices? | `render_shadows` | Partially implemented through `dusk::coop::render_shadows` for shared-list culling bypass and per-viewport real-shadow refresh |
 | Which viewport should camera-facing 3D line/ribbon geometry use? | shared 3D-line material refresh | Implemented for `mDoExt_3DlineMat0_c` and `mDoExt_3DlineMat1_c` during the per-window painter pass |
-| Which player owns HUD, reticles, prompts, and message UI? | `hud_owner` / `ui_owner` | `hud_owner` presents slot-local prompts and assigned items; `ui_owner` owns transient overlay viewport context and the singular item wheel. Full inventory/menu/message UI remains deferred |
-| Should an explicitly classified singular event or captured menu surface temporarily present one fullscreen camera and hide non-presenting players? | `event_presentation` | Implemented opt-in override above the camera sidecar; howling stones, Midna service, and captured fullscreen menu surfaces are classified consumers |
+| Which player owns HUD, reticles, prompts, and message UI? | `hud_owner` / `ui_owner` / `message_owner` | `hud_owner` presents slot-local prompts and assigned items; `ui_owner` owns transient overlay viewport context and the singular item wheel; `message_owner` retains the active interactive dialogue slot/pad/listener/speaker. Full inventory/menu and passive message UI remain deferred |
+| Should an explicitly classified singular event, interactive dialogue, or captured menu surface temporarily present one fullscreen camera and hide non-presenting players? | `event_presentation` | Implemented opt-in override above the camera sidecar; howling stones, Midna service, interactive dialogue, and captured fullscreen menu surfaces are classified consumers |
 | Which player activated an NPC/object/event trigger? | `interaction_owner` / `event_owner` | Initial knob/shutter prompt-side and accepted door-demo proofs implemented; generic ALINK talk/check/pickup actions already flow through slot-local attention/status, while remaining world-actor singleton prompts are audited case by case |
 | Which camera or player should audio listener state follow? | `audio_listener_owner` | Not implemented; audio listener stays camera 0/P1-owned |
 | Should this actor, world chunk, foliage/detail, or background part be draw-culled for local split-screen? | `render_visibility` | Initial PC split-screen bypass implemented for known P1-camera draw-culling paths |
@@ -72,8 +72,9 @@ File:
 Current behavior:
 
 - Normal 3D draw loops active render windows.
-- Action prompt HUD presentation is per viewport through `hud_owner` inside `dMeter2Draw_c`; full
-  HUD/menu/message presentation remains P1/global.
+- Action prompt HUD presentation is per viewport through `hud_owner` inside `dMeter2Draw_c`;
+  interactive dialogue presentation is owner-fullscreen through `message_owner` and
+  `event_presentation`. Full inventory/menu and passive message presentation remain P1/global.
 - The late world/effect draw-list tail now runs per active render window after that window's
   view/viewport/render state is installed. Fullscreen framebuffer captures/filters inside that
   tail remain gated during split-screen until they have explicit viewport framebuffer ownership.
@@ -197,7 +198,7 @@ Audit decision:
 
 Current behavior:
 
-- Health, rupees, keys, map, pause, save, and message presentation remain P1/global.
+- Health, rupees, keys, map, pause, save, and passive message presentation remain P1/global.
 - Action prompt presentation has a first `hud_owner` pass: `dMeter2Draw_c` can replay the button
   and assigned-item panes for secondary split-screen viewports from slot-local
   `player_button_status`, without replaying the whole 2D draw list.
@@ -247,8 +248,9 @@ Audit decision:
 - Begin menu presentation before framebuffer capture and end it after capture deletion. Keep
   retained item-ring input and selection in `ui_owner`; presentation collapse does not broaden
   Start-menu or map input ownership.
-- Evaluate message-camera scenes, Hidden Skill training, minigames, and cutscenes case by case.
-  Ordinary dialogue must not collapse split-screen automatically.
+- Interactive talk/choice dialogue is now an explicit `Dialogue` presentation consumer through
+  `message_owner`. Other message-camera scenes, Hidden Skill training, minigames, and cutscenes
+  still need case-by-case classification and must not collapse split-screen automatically.
 
 ## Render Visibility And Culling Decision
 

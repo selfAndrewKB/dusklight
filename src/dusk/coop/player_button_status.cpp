@@ -3,6 +3,7 @@
 #include "d/actor/d_a_alink.h"
 #include "d/d_com_inf_game.h"
 #include "dusk/coop/event_owner.h"
+#include "dusk/coop/message_owner.h"
 #include "m_Do/m_Do_controller_pad.h"
 
 namespace dusk::coop::player_button_status {
@@ -236,7 +237,7 @@ void set3DStatusForPlayer(const daAlink_c* player, u8 status, u8 direction, u8 f
 }
 
 int messagePad() {
-    return event_owner::currentOwnerPad();
+    return message_owner::isActive() ? message_owner::currentPad() : event_owner::currentOwnerPad();
 }
 
 bool messageTrigA() {

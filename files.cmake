@@ -1466,6 +1466,7 @@ set(DUSK_FILES
         src/dusk/coop/interaction_owner.cpp
         src/dusk/coop/line_render_diagnostics.cpp
         src/dusk/coop/gibdo_state_probe.cpp
+        src/dusk/coop/message_owner.cpp
         src/dusk/coop/midna_owner.cpp
         src/dusk/coop/player_query.cpp
         src/dusk/coop/player_slots.cpp

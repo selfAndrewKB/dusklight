@@ -11,9 +11,10 @@ seamless controller-port switching when they want to trade control briefly. Capt
 menu surfaces are the second classified family: the item ring, Start-menu collection tree, field
 map, dungeon map, and Agitha's standalone insect screen now reuse the same presentation override.
 
-This is a presentation policy, not a broad event-ownership conversion. Ordinary dialogue,
-interaction prompts, item cameras, and gameplay events should continue to use their existing narrow
-ownership APIs unless a specific sequence is classified as singular.
+This is a presentation policy, not a broad event-ownership conversion. Interactive dialogue is now
+an explicit classified consumer through `message_owner`; passive message overlays, interaction
+prompts, item cameras, and gameplay events should continue to use their existing narrow ownership
+APIs unless a specific sequence is classified as singular.
 
 ## Ownership Question
 
@@ -26,7 +27,7 @@ It does not answer:
 
 - which player is eligible to activate an interaction prompt;
 - which player requested an accepted event;
-- which controller advances ordinary dialogue;
+- which controller advances dialogue outside interactive `message_owner` surfaces;
 - which camera owns ordinary split-screen gameplay;
 - whether the co-op feature itself is enabled.
 
@@ -128,8 +129,11 @@ runtime Midna service actors:
 - `event_presentation::Source::MidnaService` presents the requester fullscreen while the service is
   active;
 - the active service actor reads its registered ALINK for position/no-draw and transform setup, while
-  unrelated P1/global Midna reads remain canonical; ordinary dialogue does not collapse split-screen
-  automatically.
+  unrelated P1/global Midna reads remain canonical.
+
+Interactive Midna dialogue uses `message_owner` and `event_presentation::Source::Dialogue` after the
+message surface begins. The retained owner supplies the listener ALINK, speaker Midna, and input pad;
+native global dialogue movement locking remains in place.
 
 ## Captured Fullscreen Menus
 
@@ -155,10 +159,12 @@ Evaluate later consumers case by case:
 - Hidden Skill training;
 - minigames with a single authored screen;
 - selected cutscenes or scripted demonstrations;
-- message-camera scenes that visibly assume one camera.
+- passive or scripted message-camera scenes that visibly assume one camera.
 
-Do not collapse split-screen for all messages, NPC conversations, signs, shops, or demos by
-default. Many can remain split-screen, and some should become correctly owner-routed instead.
+Interactive talk/choice messages now opt into `event_presentation::Source::Dialogue` through
+`message_owner`. Do not collapse split-screen for every passive message overlay, item-get surface,
+boss-name/title card, shop-special surface, or demo by default. Many can remain split-screen, and
+some should become correctly owner-routed instead.
 
 ## Implemented Slice
 
@@ -171,6 +177,8 @@ default. Many can remain split-screen, and some should become correctly owner-ro
   persistent actor flags.
 - `event.presentation` diagnostics record source depths, transition, split capability, presenter
   slot/window, active presentation layout, hiding policy, and hidden slots.
+- Interactive dialogue begins a `Dialogue` presentation through `message_owner`, retaining the
+  slot, pad, listener, and speaker while leaving native global dialogue movement locking intact.
 - Wolf howl begins after the global event is accepted and ends on its explicit close, scene-change,
   Sun's Song, horse-call, and Golden Wolf handoffs. Scene lifecycle reset remains interruption
   insurance.
@@ -193,13 +201,15 @@ default. Many can remain split-screen, and some should become correctly owner-ro
 - Ending or aborting the presentation restores both split viewports and P2 presentation.
 - Nested begin/end calls do not restore split-screen until the outermost presentation ends.
 - Howling stones preserve their vanilla global behavior and present the authored fullscreen effect.
-- Ordinary dialogue, doors, HUD prompts, Hawkeye, boomerang, and fishing rod behavior remain
-  unchanged unless explicitly classified as singular consumers.
+- Interactive dialogue fullscreen-presents the retained owner. Doors, HUD prompts, Hawkeye,
+  boomerang, fishing rod, and passive message overlays remain unchanged unless explicitly
+  classified as singular consumers.
 
 ## Non-Goals
 
 - Do not make howling stones independently usable by P2 in this pass.
 - Do not duplicate singular message or minigame screens.
 - Do not pause, despawn, teleport, or otherwise mutate additional players merely to hide them.
-- Do not treat all message-camera scenes as singular automatically.
+- Do not treat all message-camera scenes as singular automatically; interactive dialogue is the
+  explicit V1 consumer.
 - Do not broaden this into a general cutscene rewrite.

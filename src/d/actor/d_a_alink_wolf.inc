@@ -1408,7 +1408,7 @@ int daAlink_c::checkWolfLandAction(BOOL param_0) {
 }
 
 BOOL daAlink_c::checkMidnaUseAbility() const {
-    return dComIfGp_checkPlayerStatus1(0, 0x800000) || dKy_withwarp_capture_check();
+    return daAlink_checkOwnerCameraStatus1(this, 0x800000) || dKy_withwarp_capture_check();
 }
 
 void daAlink_c::checkWolfUseAbility() {
@@ -6934,7 +6934,7 @@ void daAlink_c::setWolfLockDomeModel() {
     mItemVar0.field_0x3018 = 0;
     mSearchBallScale = mpHIO->mWolf.mWlAttack.mWlAtLock.m.mStartRadius;
 
-    dComIfGp_setPlayerStatus1(0, 0x800000);
+    daAlink_setOwnerCameraStatus1(this, 0x800000);
     seStartOnlyReverb(Z2SE_MIDNA_BIND_AREA_OPEN);
 
     if (dKy_darkworld_check()) {
@@ -7050,13 +7050,26 @@ void daAlink_c::searchWolfLockEnemy(fopAc_ac_c* i_actor, void* i_data) {
     }
 }
 
+struct daAlink_wolfLockSearch_c {
+    daAlink_c* owner;
+    fopAc_ac_c* actor;
+};
+
 static int daAlink_searchWolfLockEnemy(fopAc_ac_c* i_actor, void* i_data) {
-    daAlink_getAlinkActorClass()->searchWolfLockEnemy(i_actor, i_data);
+    daAlink_wolfLockSearch_c* search = static_cast<daAlink_wolfLockSearch_c*>(i_data);
+    if (search != NULL && search->owner != NULL) {
+        fopAc_ac_c* actor = NULL;
+        // Co-op: wolf lock scans use the charging ALINK's actor-local lock list.
+        search->owner->searchWolfLockEnemy(i_actor, &actor);
+        if (actor != NULL) {
+            search->actor = actor;
+        }
+    }
     return 0;
 }
 
 void daAlink_c::checkWolfComboCnt() {
-    if (!dComIfGp_checkPlayerStatus1(0, 0x1000000)) {
+    if (!daAlink_checkOwnerCameraStatus1(this, 0x1000000)) {
         if (mComboCutCount == 2 && checkAttentionLock()
             && (mAtCyl.ChkAtHit()
                 #if DEBUG
@@ -7223,7 +7236,7 @@ int daAlink_c::procWolfRollAttackMoveInit() {
     field_0x3198 = 0;
     field_0x2fe4 = shape_angle.y;
     voiceStartLevel(Z2SE_WL_V_ROAR);
-    dComIfGp_setPlayerStatus0(0, 0x40000000);
+    daAlink_setOwnerCameraStatus0(this, 0x40000000);
     return 1;
 }
 
@@ -7275,8 +7288,9 @@ int daAlink_c::procWolfRollAttackMove() {
             if (mWolfLockNum < 10) {
                 field_0x3478 = mSearchBallScale * mSearchBallScale;
 
-                fopAc_ac_c* lock_actor_p = NULL;
-                fopAcIt_Executor((fopAcIt_ExecutorFunc)daAlink_searchWolfLockEnemy, &lock_actor_p);
+                daAlink_wolfLockSearch_c search = {this, NULL};
+                fopAcIt_Executor((fopAcIt_ExecutorFunc)daAlink_searchWolfLockEnemy, &search);
+                fopAc_ac_c* lock_actor_p = search.actor;
 
                 if (lock_actor_p != NULL) {
                     for (int i = mWolfLockNum - 1; i >= 0; i--) {
@@ -8143,7 +8157,7 @@ int daAlink_c::procWolfLockAttackInit(int param_0) {
     setCutType(CUT_TYPE_WOLF_LOCK);
     voiceStart(Z2SE_WL_V_ATTACK_THRUST);
 
-    dComIfGp_setPlayerStatus1(0, 0x1000000);
+    daAlink_setOwnerCameraStatus1(this, 0x1000000);
     dComIfGp_particle_set(ID_ZI_J_WL_LOCKATDASH_A, &current.pos, &current.angle, 0);
     return 1;
 }
@@ -8234,7 +8248,7 @@ int daAlink_c::procWolfLockAttackTurnInit(int param_0) {
     setFootEffectProcType(1);
     mNormalSpeed *= 0.5f;
     field_0x2f99 = 4;
-    dComIfGp_setPlayerStatus1(0, 0x1000000);
+    daAlink_setOwnerCameraStatus1(this, 0x1000000);
     offResetFlg0(RFLG0_UNK_8000000);
     mComboCutCount++;
     mProcVar1.field_0x300a = param_0;

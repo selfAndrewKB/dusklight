@@ -19,6 +19,7 @@
 #include "dusk/coop/horse_owner.h"
 #include "dusk/coop/input.h"
 #include "dusk/coop/line_render_diagnostics.h"
+#include "dusk/coop/message_owner.h"
 #include "dusk/coop/player_attention.h"
 #include "dusk/coop/player_query.h"
 #include "dusk/coop/player_slots.h"
@@ -1603,10 +1604,26 @@ json collectEventPresentation() {
             {"dungeon_map", state.dungeonMapDepth},
             {"agitha_insect", state.agithaInsectDepth},
             {"midna_service", state.midnaServiceDepth},
+            {"dialogue", state.dialogueDepth},
         }},
         {"last_transition", coop::event_presentation::transitionName(state.lastTransition)},
         {"last_source", coop::event_presentation::sourceName(state.lastSource)},
         {"hidden_slots", hiddenSlots},
+    };
+}
+
+json collectMessageOwner() {
+    const coop::message_owner::DebugState& state = coop::message_owner::getDebugState();
+    return {
+        {"schema_version", 1},
+        {"revision", state.revision},
+        {"active", state.active},
+        {"presentation_active", state.presentationActive},
+        {"slot", static_cast<int>(state.slot)},
+        {"pad", state.pad},
+        {"listener", ptrString(state.listener)},
+        {"speaker", ptrString(state.speaker)},
+        {"last_transition", coop::message_owner::transitionName(state.lastTransition)},
     };
 }
 
@@ -1781,6 +1798,10 @@ json collectPlayerStatus() {
         data["secondary_item_trigger_r"] = static_cast<bool>(state.itemTriggerR);
         data["secondary_raw_mask"] = static_cast<unsigned int>(state.rawMask);
         data["secondary_target"] = ptrString(state.target);
+        data["secondary_wolf_lock_num"] = static_cast<unsigned int>(state.wolfLockNum);
+        data["secondary_wolf_lock_actor"] = ptrString(state.wolfLockActor);
+        data["secondary_wolf_lock_dome"] = static_cast<bool>(state.wolfLockDomeActive);
+        data["secondary_wolf_lock_attack"] = static_cast<bool>(state.wolfLockAttackActive);
     } else {
         data["secondary_attention_lock"] = false;
         data["secondary_raw_mask"] = 0;
@@ -2571,6 +2592,7 @@ Provider s_providers[] = {
     {"player.slots", 2, "cheap", 1, true, 120, 8192, collectPlayerSlots},
     {"horse.owner", 4, "cheap", 1, true, 120, 12288, collectHorseOwner},
     {"event.presentation", 2, "cheap", 1, true, 120, 4096, collectEventPresentation},
+    {"message.owner", 1, "cheap", 1, true, 120, 4096, collectMessageOwner},
     {"alink.form_resources", 2, "cheap", 1, true, 120, 8192, collectAlinkFormResources},
     {"render.lines", 2, "cheap", 1, true, 120, 32768, collectRenderLines},
     {"input.pad", 1, "cheap", 1, true, 120, 4096, collectInputPad},

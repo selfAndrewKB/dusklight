@@ -1,5 +1,6 @@
 #include "dusk/coop/hud_owner.h"
 
+#include "d/actor/d_a_alink.h"
 #include "d/actor/d_a_horse.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_item_data.h"
@@ -33,6 +34,15 @@ bool usesSelectionCounter(u8 item) {
 
 PlayerSlot currentSlot() {
     return ui_owner::currentSlot();
+}
+
+daAlink_c* currentPlayer() {
+    fopAc_ac_c* player = getPlayer(currentSlot());
+    if (player == nullptr) {
+        player = dComIfGp_getPlayer(0);
+    }
+
+    return static_cast<daAlink_c*>(player);
 }
 
 void pushSlot(PlayerSlot slot) {

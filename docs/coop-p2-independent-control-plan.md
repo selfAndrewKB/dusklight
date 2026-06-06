@@ -230,6 +230,20 @@ Midna transform ownership first pass:
 - Midna message tags now write their prompt context to every active ALINK in the tag volume.
   Remaining Midna hint/stop tag behavior should be audited case by case if testing exposes
   P2-specific failures.
+- `dusk::coop::message_owner` now retains the active interactive dialogue slot, pad, listener, and
+  speaker. Midna service conversations prefer `midna_owner`; ordinary accepted messages fall back to
+  `event_owner`. A/B and choice input use the retained pad while the game's native global dialogue
+  movement/input lock remains in place.
+- Interactive dialogue is an explicit `event_presentation::Source::Dialogue` consumer. The retained
+  presenter camera expands fullscreen, non-presenters skip the singular talk-camera update, and
+  passive message overlays remain out of scope until separately classified.
+- Midna talk cameras resolve the listener ALINK and speaker Midna from the retained message owner
+  instead of borrowing P1's global Midna/form state.
+- Wolf lock/AOE state now uses actor-local lock target fields plus slot-local
+  `player_camera_status` bits for dome/lock-attack camera state. The wolf enemy-search thunk calls
+  the acting ALINK's `searchWolfLockEnemy()` rather than P1's global ALINK.
+- Wolf upper-right HUD predicates read through the active `hud_owner` slot so P2 does not inherit
+  P1's wolf button presentation, and P1 does not inherit P2's.
 
 ### `interaction_owner`
 

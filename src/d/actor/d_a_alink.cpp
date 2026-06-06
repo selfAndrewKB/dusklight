@@ -146,6 +146,7 @@ void populateCoopSecondaryAlinkState(const char* phase, daAlink_c* player,
     diag->copyRodActor = reinterpret_cast<uintptr_t>(player->mCopyRodAcKeep.getActor());
     diag->copyRodControlActor = reinterpret_cast<uintptr_t>(player->getCopyRodControllActor());
     diag->copyRodCameraActor = reinterpret_cast<uintptr_t>(player->getCopyRodCameraActor());
+    diag->wolfLockActor = reinterpret_cast<uintptr_t>(player->getWolfLockActorEnd());
     if (player->mItemAcKeep.getActor() != NULL) {
         diag->itemActorId = fopAcM_GetID(player->mItemAcKeep.getActor());
         diag->itemActorName = fopAcM_GetName(player->mItemAcKeep.getActor());
@@ -153,6 +154,10 @@ void populateCoopSecondaryAlinkState(const char* phase, daAlink_c* player,
     if (player->mRideAcKeep.getActor() != NULL) {
         diag->rideActorId = fopAcM_GetID(player->mRideAcKeep.getActor());
         diag->rideActorName = fopAcM_GetName(player->mRideAcKeep.getActor());
+    }
+    if (player->getWolfLockActorEnd() != NULL) {
+        diag->wolfLockActorId = fopAcM_GetID(player->getWolfLockActorEnd());
+        diag->wolfLockActorName = fopAcM_GetName(player->getWolfLockActorEnd());
     }
     diag->proc = player->mProcID;
     diag->equipItem = player->mEquipItem;
@@ -164,6 +169,7 @@ void populateCoopSecondaryAlinkState(const char* phase, daAlink_c* player,
     diag->itemTrigger = player->mItemTrigger;
     diag->useButtonFlags = player->mUseButtonFlags;
     diag->previousUseButtonFlags = player->field_0x2faf;
+    diag->wolfLockNum = player->mWolfLockNum;
     diag->stickAngle = player->mStickAngle;
     diag->moveAngle = player->mMoveAngle;
     diag->currentAngleY = player->current.angle.y;
@@ -203,6 +209,11 @@ void populateCoopSecondaryAlinkState(const char* phase, daAlink_c* player,
     diag->copyRodTopUse = (diag->copyRodActor != 0 || diag->copyRodControlActor != 0 ||
                            diag->copyRodCameraActor != 0 || player->mEquipItem == dItemNo_COPY_ROD_e) &&
                           player->checkCopyRodTopUse();
+    // Co-op: wolf AOE diagnostics track the slot-local camera bits that used to be P1 globals.
+    diag->wolfLockDomeActive =
+        dusk::coop::player_camera_status::checkStatus1ForPlayer(player, 0x800000) != 0;
+    diag->wolfLockAttackActive =
+        dusk::coop::player_camera_status::checkStatus1ForPlayer(player, 0x1000000) != 0;
 }
 
 void coopLogSecondaryExecuteState(const char* phase, daAlink_c* player) {
@@ -331,6 +342,11 @@ static void daAlink_setOwnerCameraStatus1(daAlink_c* i_player, u32 i_flag) {
     dusk::coop::player_camera_status::setStatus1ForPlayer(i_player, i_flag);
 }
 
+static bool daAlink_checkOwnerCameraStatus1(const daAlink_c* i_player, u32 i_flag) {
+    // Co-op: wolf lock camera/state reads belong to the ALINK actor changing state.
+    return dusk::coop::player_camera_status::checkStatus1ForPlayer(i_player, i_flag) != 0;
+}
+
 #else
 
 static void daAlink_setOwnerCameraStatus0(daAlink_c*, u32 i_flag) {
@@ -339,6 +355,10 @@ static void daAlink_setOwnerCameraStatus0(daAlink_c*, u32 i_flag) {
 
 static void daAlink_setOwnerCameraStatus1(daAlink_c*, u32 i_flag) {
     dComIfGp_setPlayerStatus1(0, i_flag);
+}
+
+static bool daAlink_checkOwnerCameraStatus1(const daAlink_c*, u32 i_flag) {
+    return dComIfGp_checkPlayerStatus1(0, i_flag) != 0;
 }
 
 #endif
@@ -18867,7 +18887,7 @@ int daAlink_c::execute() {
             || mProcID == PROC_WOLF_DIG
             || mProcID == PROC_WOLF_DIG_THROUGH
             || checkNoResetFlg0(FLG0_UNK_4000)
-            || dComIfGp_checkPlayerStatus1(0, 0x1000000)
+            || daAlink_checkOwnerCameraStatus1(this, 0x1000000)
             || (checkEventRun() && partner != NULL && (partner->attention_info.flags & fopAc_AttnFlag_UNK_0x400000))
             || strcmp(dComIfGp_getEventManager().getRunEventName(), l_defaultGetEventName) == 0)
         {

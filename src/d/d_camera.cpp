@@ -31,6 +31,8 @@
 #if TARGET_PC
 #include "dusk/coop/camera.h"
 #include "dusk/coop/horse_owner.h"
+#include "dusk/coop/message_owner.h"
+#include "dusk/coop/midna_owner.h"
 #include "dusk/coop/player_attention.h"
 #include "dusk/coop/player_camera_status.h"
 #include "dusk/diagnostics.h"
@@ -70,6 +72,21 @@ inline static daAlink_c* camera_player_link(fopAc_ac_c* actor) {
     (void)actor;
 #endif
     return daAlink_getAlinkActorClass();
+}
+
+inline static daMidna_c* camera_player_midna(fopAc_ac_c* actor) {
+#if TARGET_PC
+    // Co-op: viewport-local talk and riding camera state follows the player's Midna.
+    if (actor != NULL && is_player(actor)) {
+        daMidna_c* midna = dusk::coop::midna_owner::getMidnaForPlayer(static_cast<daAlink_c*>(actor));
+        if (midna != NULL) {
+            return midna;
+        }
+    }
+#else
+    (void)actor;
+#endif
+    return daPy_py_c::getMidnaActor();
 }
 
 static daHorse_c* horseForCameraPlayer(fopAc_ac_c* actor) {
@@ -543,7 +560,7 @@ void dCamera_c::initialize(camera_class* i_camera, fopAc_ac_c* i_player, u32 i_c
     specialType[CAM_TYPE_PEEP] = GetCameraTypeFromCameraName("Peep");
     field_0x698 = 0xFF;
     field_0x69c = 0;
-    mIsWolf = daPy_py_c::checkNowWolf() != 0 ? TRUE : FALSE;
+    mIsWolf = camera_player_link(mpPlayerActor)->checkWolf() ? TRUE : FALSE;
     mCurMode = 0;
     mEngineHoldState = 0;
     mForcedMode = 11;
@@ -749,9 +766,9 @@ void dCamera_c::initialize(camera_class* i_camera, fopAc_ac_c* i_player, u32 i_c
     setFlag(0x1000);
 
     daAlink_c* player = camera_player_link(mpPlayerActor);
-    daMidna_c* midna = daPy_py_c::getMidnaActor();
+    daMidna_c* midna = camera_player_midna(mpPlayerActor);
 
-    mMidnaRidingAndVisible = player->checkMidnaRide() && !midna->checkNoDraw();
+    mMidnaRidingAndVisible = player->checkMidnaRide() && midna != NULL && !midna->checkNoDraw();
     mLastBumpCase = 0;
     field_0x95c = cXyz::Zero;
     f32 unusedFloat1 = 0.2f;
@@ -1186,8 +1203,8 @@ bool dCamera_c::Run() {
 #endif
 
     daAlink_c* link = camera_player_link(mpPlayerActor);
-    daMidna_c* midna = daPy_py_c::getMidnaActor();
-    mMidnaRidingAndVisible = link->checkMidnaRide() && !midna->checkNoDraw();
+    daMidna_c* midna = camera_player_midna(mpPlayerActor);
+    mMidnaRidingAndVisible = link->checkMidnaRide() && midna != NULL && !midna->checkNoDraw();
     bool sp10 = false;
     bool sp0F = false;
     clrComStat(mCameraID, 0x804);
@@ -1196,7 +1213,7 @@ bool dCamera_c::Run() {
     dDbgCamera.InitlChk();
 #endif
     int iVar8 = mIsWolf;
-    mIsWolf = daPy_py_c::checkNowWolf() ? 1 : 0;
+    mIsWolf = link->checkWolf() ? 1 : 0;
     mFocusLine.Off();
     clrFlag(0x10168C21);
     clrFlag(0x10);
@@ -1526,8 +1543,8 @@ bool dCamera_c::Run() {
 
 bool dCamera_c::NotRun() {
     daAlink_c* link = camera_player_link(mpPlayerActor);
-    daMidna_c* midna = daPy_py_c::getMidnaActor();
-    mMidnaRidingAndVisible = link->checkMidnaRide() && !midna->checkNoDraw();
+    daMidna_c* midna = camera_player_midna(mpPlayerActor);
+    mMidnaRidingAndVisible = link->checkMidnaRide() && midna != NULL && !midna->checkNoDraw();
     clrComStat(mCameraID, 0x804);
     clrFlag(0x10168C21);
     checkGroundInfo();
@@ -2096,12 +2113,13 @@ s32 dCamera_c::nextType(s32 i_curType) {
                 next_type = iVar14;
                 mRoomMapTool = mTagCamTool;
                 var_r28 = 0x74;
-            } else if (link->checkMidnaLockJumpPoint() &&
-                                        (daPy_py_c::getMidnaActor()->checkFlyWaitAnime()
-                                        || daPy_py_c::getMidnaActor()->checkNoInput())) {
+            } else if (link->checkMidnaLockJumpPoint() && camera_player_midna(mpPlayerActor) != NULL &&
+                                        (camera_player_midna(mpPlayerActor)->checkFlyWaitAnime()
+                                        || camera_player_midna(mpPlayerActor)->checkNoInput())) {
                 next_type = specialType[CAM_TYPE_MIDNA_TAG];
                 var_r28 = 0x78;
-            } else if (daPy_py_c::getMidnaActor()->checkPortalObjCall()) {
+            } else if (camera_player_midna(mpPlayerActor) != NULL &&
+                       camera_player_midna(mpPlayerActor)->checkPortalObjCall()) {
                 next_type = specialType[CAM_TYPE_WARP_OBJ];
                 var_r28 = 0x58;
             } else if (link->checkGoatStopGame()) {
@@ -3702,7 +3720,7 @@ bool dCamera_c::chaseCamera(s32 param_0) {
     f32 charge_b_ratio = mCamSetup.ChargeBRatio();
     static cSAngle LatitudeLimitMax = 80.0f;
     daAlink_c* player = (daAlink_c*)mpPlayerActor;
-    daMidna_c* midna = daPy_py_c::getMidnaActor();
+    daMidna_c* midna = camera_player_midna(mpPlayerActor);
     dAttention_c* attention = attentionForCameraPlayer(mpPlayerActor);
 
     if (attention->GetCheckObjectCount() != 0) {
@@ -5469,6 +5487,21 @@ s32 dCamera_c::getMsgCmdCut(s32 param_0) {
 }
 
 bool dCamera_c::talktoCamera(s32 param_0) {
+#if TARGET_PC
+    if (dusk::coop::message_owner::isActive()) {
+        dusk::coop::PlayerSlot slot = dusk::coop::getSlotForActor(mpPlayerActor);
+        if (slot == dusk::coop::PlayerSlot::Invalid) {
+            slot = dusk::coop::PlayerSlot::Primary;
+        }
+
+        // Co-op: only the dialogue presenter consumes the singular talk camera.
+        if (!dusk::coop::message_owner::isPresenterSlot(slot)) {
+            mStyleSettle.mFinished = true;
+            return false;
+        }
+    }
+#endif
+
     f32 val0 = mCamParam.Val(param_0, 0);
     f32 val2 = mCamParam.Val(param_0, 2);
     f32 val1 = mCamParam.Val(param_0, 1);
@@ -5557,6 +5590,17 @@ bool dCamera_c::talktoCamera(s32 param_0) {
         speaker = mpLockonTarget;
     }
 
+#if TARGET_PC
+    if (dusk::coop::message_owner::isActive()) {
+        // Co-op: talk camera actors come from the retained message owner so P2
+        // dialogue never resolves through P1's listener or Midna singleton.
+        listener = dusk::coop::message_owner::listener();
+        if (dusk::coop::message_owner::speaker() != NULL) {
+            speaker = dusk::coop::message_owner::speaker();
+        }
+    }
+#endif
+
 #if DEBUG
     JUT_ASSERT(7287, listener != speaker);
 #else
@@ -5602,8 +5646,13 @@ bool dCamera_c::talktoCamera(s32 param_0) {
         daTagMwait_c* tagMwait = (daTagMwait_c*)speaker;
         if (tagMwait->checkEndMessage()) {
             talk->field_0x3c = 35;
-            speaker = daPy_py_c::getMidnaActor();
+            speaker = camera_player_midna(mpPlayerActor);
         }
+    }
+
+    if (speaker == NULL) {
+        mStyleSettle.mFinished = true;
+        return false;
     }
 
     if (talk->field_0x86 != 0) {
@@ -6847,7 +6896,7 @@ bool dCamera_c::talktoCamera(s32 param_0) {
             }
 
             int i = 0;
-            fopAc_ac_c* midna = daPy_py_c::getMidnaActor();
+            fopAc_ac_c* midna = camera_player_midna(mpPlayerActor);
             for (i = 0; i < 18; i++) {
                 mViewCache.mEye = mViewCache.mCenter + mViewCache.mDirection.Xyz();
                 if (!lineBGCheck(&sp1358, &mViewCache.mEye, talk->field_0x8c)

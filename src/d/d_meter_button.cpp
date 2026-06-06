@@ -22,6 +22,7 @@
 #if TARGET_PC
 #include "dusk/coop/event_presentation.h"
 #include "dusk/coop/player_button_status.h"
+#include "dusk/coop/player_slots.h"
 #include "dusk/coop/ui_owner.h"
 #include "dusk/string.hpp"
 #endif
@@ -68,6 +69,12 @@ u8 coopAStatusFor(const dMeterButton_c* button) {
 
 u8 coop3DDirectionFor(const dMeterButton_c* button) {
     return dusk::coop::player_button_status::get3DDirection(button->mCoopHudSlot);
+}
+
+// Co-op: prompt packet presentation reads the ALINK retained with that HUD packet.
+daPy_py_c* coopPlayerFor(const dMeterButton_c* button) {
+    fopAc_ac_c* player = dusk::coop::getPlayer(button->mCoopHudSlot);
+    return player != NULL ? static_cast<daPy_py_c*>(player) : daPy_getPlayerActorClass();
 }
 
 }  // namespace
@@ -465,7 +472,7 @@ void dMeterButton_c::draw() {
                         mDoAud_seStart(Z2SE_SY_HINT_BUTTON_BLINK, NULL, 0, 0);
                     }
 
-                    if (daPy_getPlayerActorClass()->getSumouMode()) {
+                    if (coopPlayerFor(this)->getSumouMode()) {
                         dMeter2Info_getMeterClass()->getMeterDrawPtr()->drawPikari(
                             vtx.x, vtx.y, &field_0x2e8[i], 1.8f,
                             g_drawHIO.mEmpButton.mPikariListenFrontOuter,

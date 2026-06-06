@@ -100,7 +100,8 @@ to the requesting player slot.
 | "Which player owns this prompt/object interaction?" | `dusk::coop::interaction_owner` | Selects active-player prompt owners for knob/shutter door side fields. Generic ALINK talk/check/pickup and carried-item actions already work through slot-local attention/status; use this API for remaining world actors with their own P1-only eligibility scans. Howling stones intentionally remain P1/global |
 | "Which player requested this accepted event/demo?" | `dusk::coop::event_owner` | Initial implementation derives from event `Pt1`; message input, ALINK door-demo staff consumption, and knob/shutter door demos use it so P2-started scripted interactions do not animate or move P1 |
 | "Which player owns the transient Midna service and manual wolf-transform request?" | `dusk::coop::midna_owner` | P1's Midna remains canonical for story/save/global paths, while active additional slots get runtime Midna service actors; active-service position/no-draw setup, prompt eligibility, message branch reads, transform blocking, accepted transform demo handoff, and the talk/camera status bit follow the service actor's ALINK slot |
-| "Should this explicitly classified singular event or captured menu surface temporarily present one fullscreen camera and hide non-presenting players?" | `dusk::coop::event_presentation` | Implemented as an opt-in presentation override above the camera sidecar; P1/global howling stones, Midna service, item ring, Start-menu tree, field/dungeon maps, and Agitha's insect screen are classified consumers |
+| "Which player owns this active interactive dialogue/message surface?" | `dusk::coop::message_owner` | Retains the dialogue slot, pad, listener, and speaker; prefers active `midna_owner` service, otherwise falls back to `event_owner`; A/B and choice input read the retained pad while native global movement/input locking remains intact |
+| "Should this explicitly classified singular event, interactive dialogue, or captured menu surface temporarily present one fullscreen camera and hide non-presenting players?" | `dusk::coop::event_presentation` | Implemented as an opt-in presentation override above the camera sidecar; P1/global howling stones, Midna service, interactive dialogue, item ring, Start-menu tree, field/dungeon maps, and Agitha's insect screen are classified consumers |
 | "Which player is retained by this training sequence?" | future `training_owner` | Deferred unless Hidden Skill / `NPC_KN` playtesting exposes a concrete P2 ownership failure |
 | "Which player owns camera/HUD/message/story/save state?" | camera/HUD/story-specific APIs | Partially implemented for split-screen camera only |
 | "Which viewport owns this render pass, post effect, lighting, fog, or culling decision?" | split-screen viewport/render ownership APIs | Initial audit in `coop-split-screen-api-audit.md`; `render_visibility` implemented for known draw-culling paths |
@@ -157,20 +158,27 @@ to the requesting player slot.
   from `dComIfGp_event_getPt1()` where possible so scripted interaction placement, input, and
   animation follow the requesting player. Do not use it for raw prompt eligibility before an event is
   accepted; that is `interaction_owner`.
+- **Message owner:** active interactive dialogue/message ownership after a talk/message surface
+  begins. It retains the presenter slot, pad, listener, and speaker; Midna service conversations
+  prefer `midna_owner`, while ordinary accepted messages fall back to `event_owner`. Use it for
+  message input and talk-camera presentation. Keep the native global dialogue movement/input lock
+  unless a concrete co-op bug proves it must be split.
 - **Training owner:** retained instructional/event combat sequences such as Hidden Skills. Once a
   trainer binds to a slot, required move checks and forced placement should follow that slot.
 - **Singular event presentation:** opt-in fullscreen presentation for authored sequences and
   captured menu surfaces. It expands the retained presenter's existing render window and hides
   non-presenting player visuals without disabling co-op simulation. Howling stones remain P1/global;
   the item ring presents its retained `ui_owner` slot; Start menus, maps, and Agitha's insect screen
-  remain P1/global. Do not treat every dialogue or message-camera scene as singular automatically.
+  remain P1/global. Interactive dialogue opts in through `message_owner`, but passive overlays,
+  item-get surfaces, boss names, stage titles, and unaudited message-camera scenes must not silently
+  become singular consumers.
 - **Viewport/render ownership:** split-screen render passes, post effects, lighting, fog, HUD
   projection, draw-time visibility culling, and shadows should be owned by viewport/render policy.
   Use `render_visibility` for shared draw-culling decisions, `render_materials` for viewport-owned
   kankyo/J3D material state, `render_effects` for late world/effect versus fullscreen framebuffer
   ownership, and `render_shadows` for real-shadow culling or baked shadow matrix ownership. Do not
   scatter actor-specific render fixes when a central PC split-screen policy can answer the question.
-- **Primary/global state:** story protagonist, demo/cutscene, save/restart, HUD, message, or
+- **Primary/global state:** story protagonist, demo/cutscene, save/restart, HUD, passive message, or
   single-camera state. Keep P1/global until a dedicated milestone proves otherwise.
 
 ## Enemy Conversion Rule

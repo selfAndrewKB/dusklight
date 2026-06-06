@@ -27,6 +27,8 @@
 
 #include "JSystem/JKernel/JKRExpHeap.h"
 #include "dusk/version.hpp"
+#include "dusk/coop/event_owner.h"
+#include "dusk/coop/message_owner.h"
 #include "dusk/coop/player_button_status.h"
 #include "m_Do/m_Do_controller_pad.h"
 #include "m_Do/m_Do_lib.h"
@@ -1266,6 +1268,11 @@ void dMsgObject_c::endProc() {
 }
 
 void dMsgObject_c::deleteProc() {
+    // Co-op: dialogue fullscreen presentation lives with the message screen.
+    if (dusk::coop::message_owner::isActive()) {
+        dusk::coop::message_owner::end();
+    }
+
     if (field_0x148 != NULL) {
         mDoExt_setCurrentHeap(field_0x148);
         field_0x148 = NULL;
@@ -1325,6 +1332,16 @@ void dMsgObject_c::textmodeProc() {
 }
 
 void dMsgObject_c::talkStartInit() {
+    if (isTalkMessage()) {
+        // Co-op: interactive dialogue is a singular surface presented by the
+        // player that accepted it; native dialogue input locking remains global.
+        dusk::coop::message_owner::begin(
+            dusk::coop::event_owner::ownerSlotForActor(mpTalkActor),
+            static_cast<fopAc_ac_c*>(dusk::coop::event_owner::ownerPlayerForActor(mpTalkActor)),
+            mpTalkActor,
+            true);
+    }
+
     f32 dVar19 = 0.0f;
     JUTFont* local_30 = mDoExt_getMesgFont();
     field_0x19b = 0;

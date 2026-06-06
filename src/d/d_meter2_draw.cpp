@@ -2461,7 +2461,8 @@ void dMeter2Draw_c::drawButtonA(u8 i_action, f32 i_posX, f32 i_posY, f32 i_textP
 
     JUT_ASSERT(0, strlen(mp_string) < (64));
 
-    if (daPy_getPlayerActorClass()->getSumouMode()) {
+    // Co-op: A-button prompt text uses the HUD slot's ALINK presentation state.
+    if (dusk::coop::hud_owner::currentPlayer()->getSumouMode()) {
         mpTextA->show();
         mp_string = getActionString(0x15, 1, NULL);
 
@@ -4152,8 +4153,10 @@ bool dMeter2Draw_c::isBButtonShow(bool param_0) {
     }
 
     if (dMeter2Info_isShopTalkFlag() || dMsgObject_getMsgObjectClass()->isHowlMessage() ||
-        daPy_getPlayerActorClass()->checkHawkWait() || dMeter2Info_getItemExplainWindowStatus() ||
-        (daPy_getPlayerActorClass()->checkGrassWhistle() && param_0) ||
+        // Co-op: B-button prompt scale/visibility follows the HUD slot being drawn.
+        dusk::coop::hud_owner::currentPlayer()->checkHawkWait() ||
+        dMeter2Info_getItemExplainWindowStatus() ||
+        (dusk::coop::hud_owner::currentPlayer()->checkGrassWhistle() && param_0) ||
         (!dComIfGp_event_checkHind(4) && dComIfGp_event_runCheck()))
     {
         return true;
