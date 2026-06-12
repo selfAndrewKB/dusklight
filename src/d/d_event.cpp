@@ -11,6 +11,9 @@
 #include "d/actor/d_a_tag_mstop.h"
 #include "d/d_event_debug.h"
 #include "SSystem/SComponent/c_counter.h"
+#if TARGET_PC
+#include "dusk/coop/midna_owner.h"
+#endif
 #include <cstring>
 
 namespace {
@@ -35,6 +38,48 @@ static void clear_tmpflag_for_message() {
     dComIfGs_offTmpBit(dSv_event_tmp_flag_c::tempBitLabels[54]);
     dComIfGs_offTmpBit(dSv_event_tmp_flag_c::tempBitLabels[55]);
 }
+
+#if TARGET_PC
+static daMidna_c* getTalkEventMidna(fopAc_ac_c* requestActor, fopAc_ac_c* targetActor) {
+    if (targetActor != NULL && fopAcM_GetName(targetActor) == fpcNm_MIDNA_e) {
+        return static_cast<daMidna_c*>(targetActor);
+    }
+
+    if (dusk::coop::midna_owner::isServiceActive()) {
+        return dusk::coop::midna_owner::getMidna(dusk::coop::midna_owner::currentSlot());
+    }
+
+    if (requestActor != NULL && fopAcM_GetName(requestActor) == fpcNm_ALINK_e) {
+        return dusk::coop::midna_owner::getMidnaForPlayer(static_cast<daAlink_c*>(requestActor));
+    }
+
+    return daPy_py_c::getMidnaActor();
+}
+
+static bool checkTalkEventMidnaHidden(fopAc_ac_c* requestActor, fopAc_ac_c* targetActor) {
+    daMidna_c* midna = getTalkEventMidna(requestActor, targetActor);
+    return midna == NULL || midna->checkNoDraw();
+}
+
+static bool checkTalkEventPlayerWolf(fopAc_ac_c* requestActor, fopAc_ac_c* targetActor) {
+    if (targetActor != NULL && fopAcM_GetName(targetActor) == fpcNm_MIDNA_e) {
+        daAlink_c* player = dusk::coop::midna_owner::getPlayerForMidna(static_cast<daMidna_c*>(targetActor));
+        if (player != NULL) {
+            return player->checkWolf();
+        }
+    }
+
+    if (dusk::coop::midna_owner::isServiceActive()) {
+        return dusk::coop::midna_owner::currentPlayerIsWolf();
+    }
+
+    if (requestActor != NULL && fopAcM_GetName(requestActor) == fpcNm_ALINK_e) {
+        return static_cast<daAlink_c*>(requestActor)->checkWolf();
+    }
+
+    return daPy_py_c::checkNowWolf();
+}
+#endif
 };  // namespace
 
 dEvt_control_c::dEvt_control_c() {
@@ -235,10 +280,20 @@ int dEvt_control_c::talkCheck(dEvt_order_c* order) {
         (fopAcM_GetName(actor) == fpcNm_Tag_Mstop_e && ((daTagMstop_c*)actor)->checkNoAttention()) ||
         fopAcM_GetName(actor) == fpcNm_MIDNA_e)
     {
+#if TARGET_PC
+        // Co-op: Midna/M-hint event selection follows the Link that owns this
+        // conversation, not P1's global form or canonical Midna visibility.
+        if (!checkTalkEventPlayerWolf(order->mpRequestActor, actor) ||
+            checkTalkEventMidnaHidden(order->mpRequestActor, actor))
+        {
+            eventname = "MHINT_TALK";
+        }
+#else
         daMidna_c* midna = (daMidna_c*)daPy_py_c::getMidnaActor();
         if (!daPy_py_c::checkNowWolf() || midna->checkNoDraw()) {
             eventname = "MHINT_TALK";
         }
+#endif
     }
 
     if (commonCheck(order, dEvtCnd_CANTALK_e, dEvtCmd_INTALK_e)) {

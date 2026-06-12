@@ -6,6 +6,7 @@
 #include "dusk/coop/event_owner.h"
 #include "dusk/coop/event_presentation.h"
 #include "dusk/coop/midna_owner.h"
+#include "dusk/diagnostics.h"
 
 namespace dusk::coop::message_owner {
 namespace {
@@ -37,8 +38,12 @@ void refreshDebug(Transition transition) {
     s_state.debug.active = s_state.slot != PlayerSlot::Invalid;
     s_state.debug.presentationActive = s_state.presentationActive;
     s_state.debug.lastTransition = transition;
+    if (transition == Transition::Reset) {
+        s_state.debug.lastBeginSource = BeginSource::None;
+    }
     s_state.debug.slot = currentSlot();
     s_state.debug.pad = currentPad();
+    s_state.debug.presenter = reinterpret_cast<uintptr_t>(presenterActor());
     s_state.debug.listener = reinterpret_cast<uintptr_t>(s_state.listener);
     s_state.debug.speaker = reinterpret_cast<uintptr_t>(s_state.speaker);
     s_state.debug.revision++;
@@ -46,7 +51,8 @@ void refreshDebug(Transition transition) {
 
 }  // namespace
 
-void begin(PlayerSlot slot, fopAc_ac_c* listenerActor, fopAc_ac_c* speakerActor, bool fullscreen) {
+void begin(PlayerSlot slot, fopAc_ac_c* listenerActor, fopAc_ac_c* speakerActor, bool fullscreen,
+           BeginSource source) {
     if (midna_owner::isServiceActive()) {
         slot = midna_owner::currentSlot();
         listenerActor = static_cast<fopAc_ac_c*>(midna_owner::currentPlayer());
@@ -64,6 +70,9 @@ void begin(PlayerSlot slot, fopAc_ac_c* listenerActor, fopAc_ac_c* speakerActor,
                        static_cast<fopAc_ac_c*>(playerForSlot(s_state.slot));
     s_state.speaker = speakerActor;
     s_state.presentationActive = false;
+    s_state.debug.lastBeginSource = source;
+    s_state.debug.fallbackActor = 0;
+    s_state.debug.talkCut = -1;
 
     if (fullscreen) {
         event_presentation::Options options;
@@ -74,12 +83,21 @@ void begin(PlayerSlot slot, fopAc_ac_c* listenerActor, fopAc_ac_c* speakerActor,
     }
 
     refreshDebug(Transition::Begin);
+    diagnostics::recordMessageOwnerCheckpoint(
+        "begin", static_cast<int>(currentSlot()), currentPad(), presenterActor(), listener(),
+        speaker(), fullscreen, s_state.presentationActive, event_presentation::isFullscreen(),
+        event_presentation::presenterWindowIndex(), beginSourceName(source));
 }
 
 void end() {
     if (s_state.presentationActive) {
         event_presentation::end(event_presentation::Source::Dialogue);
     }
+
+    diagnostics::recordMessageOwnerCheckpoint(
+        "end", static_cast<int>(currentSlot()), currentPad(), presenterActor(), listener(),
+        speaker(), false, s_state.presentationActive, event_presentation::isFullscreen(),
+        event_presentation::presenterWindowIndex(), beginSourceName(s_state.debug.lastBeginSource));
 
     s_state.slot = PlayerSlot::Invalid;
     s_state.listener = nullptr;
@@ -92,6 +110,11 @@ void reset() {
     if (s_state.presentationActive) {
         event_presentation::end(event_presentation::Source::Dialogue);
     }
+
+    diagnostics::recordMessageOwnerCheckpoint(
+        "reset", static_cast<int>(currentSlot()), currentPad(), presenterActor(), listener(),
+        speaker(), false, s_state.presentationActive, event_presentation::isFullscreen(),
+        event_presentation::presenterWindowIndex(), beginSourceName(s_state.debug.lastBeginSource));
 
     s_state = State{};
     refreshDebug(Transition::Reset);
@@ -113,6 +136,10 @@ daAlink_c* currentPlayer() {
     return playerForSlot(currentSlot());
 }
 
+fopAc_ac_c* presenterActor() {
+    return static_cast<fopAc_ac_c*>(currentPlayer());
+}
+
 fopAc_ac_c* listener() {
     return s_state.listener != nullptr ? s_state.listener :
            static_cast<fopAc_ac_c*>(currentPlayer());
@@ -124,6 +151,15 @@ fopAc_ac_c* speaker() {
 
 bool isPresenterSlot(PlayerSlot slot) {
     return isActive() && normalizeSlot(slot) == currentSlot();
+}
+
+void recordTalkCameraDebug(fopAc_ac_c* fallbackActor, int talkCut) {
+    s_state.debug.fallbackActor = reinterpret_cast<uintptr_t>(fallbackActor);
+    s_state.debug.talkCut = talkCut;
+    s_state.debug.presenter = reinterpret_cast<uintptr_t>(presenterActor());
+    s_state.debug.listener = reinterpret_cast<uintptr_t>(listener());
+    s_state.debug.speaker = reinterpret_cast<uintptr_t>(speaker());
+    s_state.debug.revision++;
 }
 
 const DebugState& getDebugState() {
@@ -138,6 +174,23 @@ const char* transitionName(Transition transition) {
         return "end";
     case Transition::Reset:
         return "reset";
+    default:
+        return "none";
+    }
+}
+
+const char* beginSourceName(BeginSource source) {
+    switch (source) {
+    case BeginSource::MessageAccept:
+        return "message_accept";
+    case BeginSource::MessageAcceptDemo:
+        return "message_accept_demo";
+    case BeginSource::TalkStartFallback:
+        return "talk_start_fallback";
+    case BeginSource::MidnaLocalString:
+        return "midna_local_string";
+    case BeginSource::MidnaService:
+        return "midna_service";
     default:
         return "none";
     }

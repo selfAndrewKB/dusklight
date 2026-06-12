@@ -192,7 +192,14 @@ int daAlink_c::checkDemoAction() {
             }
 
             if (checkHorseRide()) {
-                if (fopAcM_getTalkEventPartner(this) == daPy_py_c::getMidnaActor()) {
+#if TARGET_PC
+                // Co-op: horseback Midna talk checks use this ALINK's retained Midna partner.
+                if (dusk::coop::midna_owner::talkPartnerForPlayer(this) ==
+                    static_cast<fopAc_ac_c*>(dusk::coop::midna_owner::getMidnaForPlayer(this)))
+#else
+                if (fopAcM_getTalkEventPartner(this) == daPy_py_c::getMidnaActor())
+#endif
+                {
                     daHorse_c* horse_p = dComIfGp_getHorseActor();
 
                     if (!horse_p->checkOriginalDemo()) {
@@ -210,8 +217,13 @@ int daAlink_c::checkDemoAction() {
 
         fopAc_ac_c* grabActor = mGrabItemAcKeep.getActor();
         if (grabActor != NULL) {
-            if (fopAcM_getTalkEventPartner(this) != NULL &&
-                checkGrabTalkActor(fopAcM_getTalkEventPartner(this)))
+#if TARGET_PC
+            // Co-op: held-item talk setup follows the retained owner partner for this ALINK.
+            fopAc_ac_c* talk_partner = dusk::coop::midna_owner::talkPartnerForPlayer(this);
+#else
+            fopAc_ac_c* talk_partner = fopAcM_getTalkEventPartner(this);
+#endif
+            if (talk_partner != NULL && checkGrabTalkActor(talk_partner))
             {
                 return procGrabWaitInit();
             } else {
@@ -1016,7 +1028,9 @@ void daAlink_c::endDemoMode() {
                 procHawkSubjectInit();
             } else if (mProcID == PROC_GRASS_WHISTLE_WAIT || (mDemo.getDemoMode() != daPy_demo_c::DEMO_UNK_45_e && mProcID == PROC_WARP)) {
                 return;
-            } else if (mProcID == PROC_TALK && dComIfGp_checkPlayerStatus0(0, 0x8000000)) {
+            } else if (mProcID == PROC_TALK &&
+                       daAlink_checkOwnerCameraStatus0(this, 0x8000000)) {
+                // Co-op: crawl/talk posture status belongs to this ALINK slot.
                 procWolfLieMoveInit(0);
             } else {
                 checkWaitAction();
@@ -1045,9 +1059,19 @@ fopAc_ac_c* daAlink_c::getDemoLookActor() {
     } else if (mDemo.getParam0() == 2) {
         return dComIfGp_event_getPt2();
     } else if (mDemo.getParam0() == 3) {
+#if TARGET_PC
+        // Co-op: owned dialogue demo-look uses the retained speaker instead of P1's global partner.
+        return dusk::coop::midna_owner::talkPartnerForPlayer(this);
+#else
         return fopAcM_getTalkEventPartner(this);
+#endif
     } else if (mDemo.getParam0() == 4) {
+#if TARGET_PC
+        // Co-op: Midna demo-look resolves to the Midna instance owned by this ALINK.
+        return static_cast<fopAc_ac_c*>(dusk::coop::midna_owner::getMidnaForPlayer(this));
+#else
         return getMidnaActor();
+#endif
     }
 
     return NULL;
@@ -1091,7 +1115,13 @@ BOOL daAlink_c::checkGrabTalkActor(fopAc_ac_c* i_actor) {
 }
 
 int daAlink_c::setTalkStartBack(cXyz* param_0) {
+#if TARGET_PC
+    // Co-op: owned Midna/message dialogue keeps the retained speaker as this ALINK's
+    // talk partner, matching the native path that avoids turning Link toward Midna.
+    fopAc_ac_c* partner_p = dusk::coop::midna_owner::talkPartnerForPlayer(this);
+#else
     fopAc_ac_c* partner_p = fopAcM_getTalkEventPartner(this);
+#endif
     if (partner_p != NULL) {
         s16 partner_name = fopAcM_GetName(partner_p);
         if (partner_name == fpcNm_MIDNA_e || partner_name == fpcNm_Tag_Wljump_e ||
@@ -1123,7 +1153,13 @@ int daAlink_c::setTalkStartBack(cXyz* param_0) {
 }
 
 void daAlink_c::setShapeAngleToTalkActor() {
+#if TARGET_PC
+    // Co-op: P2 Midna service must resolve to P2's Midna here, not the global hint tag,
+    // so the native Midna case preserves Link's summon-facing angle.
+    fopAc_ac_c* partner_p = dusk::coop::midna_owner::talkPartnerForPlayer(this);
+#else
     fopAc_ac_c* partner_p = fopAcM_getTalkEventPartner(this);
+#endif
     if (partner_p != NULL) {
         s16 partner_name = fopAcM_GetName(partner_p);
 
@@ -1792,7 +1828,8 @@ int daAlink_c::procCoTalkInit() {
                 field_0x2060->initOldFrameMorf(3.0f, 0, 40);
             }
 
-            dComIfGp_setPlayerStatus0(0, 0x8000000);
+            // Co-op: wolf prone-talk posture state must not leak to a human P2 talk proc.
+            daAlink_setOwnerCameraStatus0(this, 0x8000000);
         }
     } else {
         field_0x3198 = setTalkStartBack(&field_0x37c8);
@@ -1813,7 +1850,8 @@ int daAlink_c::procCoTalkInit() {
 }
 
 int daAlink_c::procCoTalk() {
-    if (dComIfGp_checkPlayerStatus0(0, 0x8000000)) {
+    // Co-op: talk posture reads follow the ALINK that entered PROC_TALK.
+    if (daAlink_checkOwnerCameraStatus0(this, 0x8000000)) {
         field_0x2f99 = 13;
     }
 

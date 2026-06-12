@@ -16,6 +16,7 @@
 #include "d/d_debug_viewer.h"
 #if TARGET_PC
 #include "dusk/coop/midna_owner.h"
+#include "dusk/coop/player_camera_status.h"
 #endif
 #include "dusk/frame_interpolation.h"
 
@@ -47,6 +48,33 @@ static daAlink_c* getMidnaOwnerLink(const daMidna_c* midna) {
     }
 
     return daAlink_getAlinkActorClass();
+}
+
+static bool checkMidnaOwnerCameraStatus1(const daMidna_c* midna, u32 flag) {
+    // Co-op: service Midna wolf-lock poses follow the owning Link's camera state.
+    return dusk::coop::player_camera_status::checkStatus1ForPlayer(getMidnaOwnerLink(midna), flag) != 0;
+}
+
+static bool checkMidnaOwnerCameraStatus0(const daMidna_c* midna, u32 flag) {
+    // Co-op: service Midna appear/talk staging follows the owning Link's camera state.
+    return dusk::coop::player_camera_status::checkStatus0ForPlayer(getMidnaOwnerLink(midna), flag) != 0;
+}
+
+static fopAc_ac_c* getMidnaOwnerWolfLockActor(const daMidna_c* midna) {
+    // Co-op: runtime Midna copies point their hand/hair at the owning Link's lock target.
+    return getMidnaOwnerLink(midna)->getWolfLockActorEnd();
+}
+#else
+static bool checkMidnaOwnerCameraStatus1(const daMidna_c*, u32 flag) {
+    return dComIfGp_checkPlayerStatus1(0, flag) != 0;
+}
+
+static bool checkMidnaOwnerCameraStatus0(const daMidna_c*, u32 flag) {
+    return dComIfGp_checkPlayerStatus0(0, flag) != 0;
+}
+
+static fopAc_ac_c* getMidnaOwnerWolfLockActor(const daMidna_c*) {
+    return daAlink_getAlinkActorClass()->getWolfLockActorEnd();
 }
 #endif
 
@@ -971,7 +999,7 @@ void daMidna_c::setMatrix() {
 
             if (link->checkHorseRide() || link->checkBoarRide()) {
                 current.pos.y -= 100.0f;
-            } else if (dComIfGp_checkPlayerStatus0(0, 0x100000)) {
+            } else if (checkMidnaOwnerCameraStatus0(this, 0x100000)) {
                 current.pos.y -= 150.0f;
             }
 
@@ -1072,10 +1100,10 @@ void daMidna_c::setBodyPartMatrix() {
         mDoMtx_multVecZero(mpShadowModel->getAnmMtx(JNT_HAIR_5), &vec2);
         vec2 -= vec1;
         mDoMtx_stack_c::XYZrotM(0, mHairAngleY[4], mHairAngleZ[4] - vec2.atan2sY_XZ());
-    } else if (daAlink_getAlinkActorClass()->getWolfLockActorEnd() != NULL) {
+    } else if (getMidnaOwnerWolfLockActor(this) != NULL) {
         cXyz vec;
         mDoMtx_stack_c::multVecZero(&vec);
-        vec = daAlink_getAlinkActorClass()->getWolfLockActorEnd()->eyePos - vec;
+        vec = getMidnaOwnerWolfLockActor(this)->eyePos - vec;
         mDoMtx_stack_c::XrotM(vec.atan2sX_Z() - shape_angle.y);
         bvar8 = true;
     }
@@ -1096,7 +1124,7 @@ void daMidna_c::setBodyPartMatrix() {
         checkStateFlg0(FLG0_UNK_10000000) || mBckHeap[2].getIdx() == m_anmDataTable[ANM_HAIR].mResID ||
         mBckHeap[2].getIdx() == m_anmDataTable[ANM_S_TAKES].mResID || mBckHeap[2].getIdx() == m_anmDataTable[ANM_S_WAITS].mResID ||
         mBckHeap[2].getIdx() == m_anmDataTable[ANM_S_PACKAWAY].mResID || mBckHeap[2].getIdx() == m_anmDataTable[ANM_GRABST].mResID ||
-        checkEndResetStateFlg0(ERFLG0_UNK_40) || dComIfGp_checkPlayerStatus1(0, 0x800000)
+        checkEndResetStateFlg0(ERFLG0_UNK_40) || checkMidnaOwnerCameraStatus1(this, 0x800000)
     ) {
         if (bvar8) {
             modelData->getMaterialNodePointer(2)->getShape()->show();
@@ -1431,7 +1459,13 @@ void daMidna_c::checkMidnaPosState() {
     }
 
     if (mDemoMode == 12) {
-        if (daPy_py_c::checkNowWolf()) {
+        if (
+#if TARGET_PC
+            link->checkWolf()
+#else
+            daPy_py_c::checkNowWolf()
+#endif
+        ) {
             onStateFlg0(FLG0_WOLF_NO_POS);
             Vec vec1 = {0.0f, mpHIO->m.y_pos, mpHIO->m.z_pos};
             cXyz vec2;
@@ -2194,7 +2228,7 @@ void daMidna_c::setAnm() {
                 offStateFlg0(FLG0_NO_DRAW);
             }
             bVar2 = TRUE;
-        } else if (dComIfGp_checkPlayerStatus1(0, 0x800000)) {
+        } else if (checkMidnaOwnerCameraStatus1(this, 0x800000)) {
             anm = ANM_WAITA;
             offStateFlg0(FLG0_UNK_1);
         } else if (tired) {
@@ -2287,7 +2321,13 @@ void daMidna_c::setAnm() {
         }
 
         if (anm == ANM_WARPIN) {
-            if (daPy_py_c::checkNowWolf()) {
+            if (
+#if TARGET_PC
+                link->checkWolf()
+#else
+                daPy_py_c::checkNowWolf()
+#endif
+            ) {
                 u32 sound_id;
                 if (checkStateFlg1(FLG1_SIDE_WARP)) {
                     sound_id = Z2SE_MDN_WARP_IN_YOKO;
@@ -2342,7 +2382,7 @@ void daMidna_c::setAnm() {
         mMotionNum == 0 &&
         ((anm == ANM_WAITA && !dComIfGp_event_runCheck()) || anm == ANM_LEADWAIT)
     ) {
-        if (dComIfGp_checkPlayerStatus1(0, 0x800000)) {
+        if (checkMidnaOwnerCameraStatus1(this, 0x800000)) {
             onStateFlg0(FLG0_UNK_2);
             offStateFlg0(FLG0_UNK_1);
             if (setUpperAnimeAndSe(ANM_WAITTP)) {
@@ -2384,7 +2424,11 @@ void daMidna_c::setAnm() {
                 setBckAnime(bck, J3DFrameCtrl::EMode_NONE, 0.0f);
             }
         } else if (
+#if TARGET_PC
+            link->checkWolf() && !bVar1 &&
+#else
             daPy_py_c::checkNowWolf() && !bVar1 &&
+#endif
             ((mNeckAngle.y == 0 && mNeckAngle.x == 0 && anm != ANM_LEADWAIT && cM_rnd() < 0.01f) ||
             (anm == ANM_LEADWAIT && !checkStateFlg0(FLG0_NO_HAIR_LEAD) && cM_rnd() < 0.0125f))
         ) {
@@ -2516,7 +2560,7 @@ void daMidna_c::setAnm() {
         u16 tex_id;
         if (face_anm != ANM_NONE) {
             tex_id = m_anmDataTable[face_anm].mTexID;
-        } else if (dComIfGp_checkPlayerStatus1(0, 0x800000)) {
+        } else if (checkMidnaOwnerCameraStatus1(this, 0x800000)) {
             tex_id = 0x10;
         } else if (checkSetAnime(1, ANM_GRAB)) {
             tex_id = 0x13;
@@ -2629,7 +2673,7 @@ void daMidna_c::setEyeMove(cXyz const* i_atnPos, s16 i_angleX, s16 i_angleY) {
         tmp_x = link->getMidnaEyeMoveRateX();
     } else if (
         !dComIfGp_event_runCheck() && checkStateFlg0(FLG0_UNK_40) &&
-        !dComIfGp_checkPlayerStatus1(0, 0x800000) && fabsf(speedF) < 0.01f
+        !checkMidnaOwnerCameraStatus1(this, 0x800000) && fabsf(speedF) < 0.01f
     ) {
         if (timer != 0) {
             mEyeMoveTimer = timer - 1;
@@ -2877,7 +2921,11 @@ void daMidna_c::setHairAngle() {
             }
         } else {
             vec = *pos - prev_pos + *dir;
+#if TARGET_PC
+            vec += getMidnaOwnerLink(this)->getWindSpeed();
+#else
             vec += daAlink_getAlinkActorClass()->getWindSpeed();
+#endif
             if (checkEndResetStateFlg0(ERFLG0_UNK_20)) {
                 vec = cXyz::Zero;
             }
@@ -3333,7 +3381,7 @@ void daMidna_c::setSound() {
     }
 
     if (idx != 4) {
-        u32 sound_id = anmSoundLabel[idx][dComIfGp_checkPlayerStatus0(0, 0x100000) ? 1 : 0];
+        u32 sound_id = anmSoundLabel[idx][checkMidnaOwnerCameraStatus0(this, 0x100000) ? 1 : 0];
         mSound.startCreatureSound(sound_id, 0, -1);
     }
 
@@ -3341,7 +3389,7 @@ void daMidna_c::setSound() {
         mSound.updateAnime(mpMorf->getFrame(), mpMorf->getPlaySpeed());
     }
 
-    if (checkMidnaTired() && !dComIfGp_checkPlayerStatus0(0, 0x20000000)) {
+    if (checkMidnaTired() && !checkMidnaOwnerCameraStatus0(this, 0x20000000)) {
         mSound.startCreatureVoiceLevel(Z2SE_MDN_V_WAITD, -1);
     }
 }
@@ -3545,7 +3593,9 @@ int daMidna_c::execute() {
                     dComIfGp_getEvent()->reset(this);
                     offStateFlg0(FLG0_UNK_8000);
 #if TARGET_PC
-                    dusk::coop::midna_owner::endService();
+                    // Co-op: cancel/ordinary Midna talk ends during actor execution,
+                    // before the talk camera consumes this frame's retained speaker.
+                    dusk::coop::midna_owner::requestEndService();
 #endif
                 }
             }
@@ -3559,7 +3609,8 @@ int daMidna_c::execute() {
               ) {
         dComIfGp_getEvent()->reset(this);
 #if TARGET_PC
-        dusk::coop::midna_owner::endService();
+        // Co-op: demo-accept cleanup can precede same-frame camera execution.
+        dusk::coop::midna_owner::requestEndService();
 #endif
     }
 

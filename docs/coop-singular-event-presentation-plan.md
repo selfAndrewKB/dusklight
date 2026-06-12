@@ -49,6 +49,7 @@ enum class Source : u8 {
     DungeonMap,
     AgithaInsect,
     MidnaService,
+    Dialogue,
 };
 
 struct Options {
@@ -132,8 +133,9 @@ runtime Midna service actors:
   unrelated P1/global Midna reads remain canonical.
 
 Interactive Midna dialogue uses `message_owner` and `event_presentation::Source::Dialogue` after the
-message surface begins. The retained owner supplies the listener ALINK, speaker Midna, and input pad;
-native global dialogue movement locking remains in place.
+native message controller accepts the message. The retained owner supplies the
+listener ALINK, speaker Midna, input pad, and talk-camera fallback actor; native global dialogue
+movement locking remains in place.
 
 ## Captured Fullscreen Menus
 
@@ -177,8 +179,10 @@ some should become correctly owner-routed instead.
   persistent actor flags.
 - `event.presentation` diagnostics record source depths, transition, split capability, presenter
   slot/window, active presentation layout, hiding policy, and hidden slots.
-- Interactive dialogue begins a `Dialogue` presentation through `message_owner`, retaining the
-  slot, pad, listener, and speaker while leaving native global dialogue movement locking intact.
+- Interactive dialogue begins a `Dialogue` presentation through `message_owner` after the native
+  message controller accepts the message, retaining the slot, pad, listener, speaker, and presenter
+  actor while leaving native global dialogue movement locking intact. `talkStartInit()` is fallback
+  insurance, not the primary presentation timing boundary.
 - Wolf howl begins after the global event is accepted and ends on its explicit close, scene-change,
   Sun's Song, horse-call, and Golden Wolf handoffs. Scene lifecycle reset remains interruption
   insurance.

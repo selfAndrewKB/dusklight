@@ -34,6 +34,7 @@
 #include "dusk/coop/defender_owner.h"
 #include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/gibdo_state_probe.h"
+#include "dusk/coop/midna_owner.h"
 #include "dusk/coop/young_gohma_state_probe.h"
 #include <dusk/gamepad_color.h>
 #include <dusk/autosave.h>
@@ -745,6 +746,9 @@ static void fapGm_Before() {
 
 static void fapGm_AfterRecord() {
     dusk::frame_interp::end_record();
+    // Co-op: Midna/message service teardown waits until cameras have consumed
+    // the current management pass's retained talk actors.
+    dusk::coop::midna_owner::finishPendingEndService();
     fapGm_After();
 }
 

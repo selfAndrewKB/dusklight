@@ -61,6 +61,7 @@
 #include "dusk/coop/event_presentation.h"
 #include "dusk/coop/horse_owner.h"
 #include "dusk/coop/input.h"
+#include "dusk/coop/message_owner.h"
 #include "dusk/coop/midna_owner.h"
 #include "dusk/coop/player_attention.h"
 #include "dusk/coop/player_button_status.h"
@@ -210,6 +211,9 @@ void populateCoopSecondaryAlinkState(const char* phase, daAlink_c* player,
                            diag->copyRodCameraActor != 0 || player->mEquipItem == dItemNo_COPY_ROD_e) &&
                           player->checkCopyRodTopUse();
     // Co-op: wolf AOE diagnostics track the slot-local camera bits that used to be P1 globals.
+    diag->wolfSearchBallScale = player->getSearchBallScale();
+    diag->wolfLockChargeActive =
+        dusk::coop::player_camera_status::checkStatus0ForPlayer(player, 0x40000000) != 0;
     diag->wolfLockDomeActive =
         dusk::coop::player_camera_status::checkStatus1ForPlayer(player, 0x800000) != 0;
     diag->wolfLockAttackActive =
@@ -332,19 +336,64 @@ BOOL checkCoopAttentionLock(daAlink_c* player) {
 #endif
 
 #if TARGET_PC
+static void daAlink_recordWolfAoeStatus(const char* i_phase, daAlink_c* i_player, u32 i_status0,
+                                        u32 i_status1) {
+    constexpr u32 kWolfAoeStatus0Mask = 0x40000000;
+    constexpr u32 kWolfAoeStatus1Mask = 0x800000 | 0x1000000;
+    if ((i_status0 & kWolfAoeStatus0Mask) == 0 && (i_status1 & kWolfAoeStatus1Mask) == 0) {
+        return;
+    }
+
+    dusk::diagnostics::recordWolfAoeCheckpoint(
+        i_phase, i_player, -1, i_status0, i_status1,
+        i_player != NULL ? i_player->getSearchBallScale() : 0.0f,
+        0.0f, 0.0f,
+        i_player != NULL ? static_cast<int>(i_player->mWolfLockNum) : 0,
+        i_player != NULL ? i_player->getWolfLockActorEnd() : NULL);
+}
+
 static void daAlink_setOwnerCameraStatus0(daAlink_c* i_player, u32 i_flag) {
     // Co-op: climb/hang/ladder camera hints belong to the ALINK actor changing state.
     dusk::coop::player_camera_status::setStatus0ForPlayer(i_player, i_flag);
+    daAlink_recordWolfAoeStatus("status0_set", i_player, i_flag, 0);
 }
 
 static void daAlink_setOwnerCameraStatus1(daAlink_c* i_player, u32 i_flag) {
     // Co-op: climb/hang/ladder camera hints belong to the ALINK actor changing state.
     dusk::coop::player_camera_status::setStatus1ForPlayer(i_player, i_flag);
+    daAlink_recordWolfAoeStatus("status1_set", i_player, 0, i_flag);
+}
+
+static void daAlink_clearOwnerCameraStatus0(daAlink_c* i_player, u32 i_flag) {
+    // Co-op: wolf charge/lock camera hints clear on the ALINK actor leaving that state.
+    dusk::coop::player_camera_status::clearStatus0ForPlayer(i_player, i_flag);
+    daAlink_recordWolfAoeStatus("status0_clear", i_player, i_flag, 0);
+}
+
+static void daAlink_clearOwnerCameraStatus1(daAlink_c* i_player, u32 i_flag) {
+    // Co-op: wolf dome/lock camera hints clear on the ALINK actor leaving that state.
+    dusk::coop::player_camera_status::clearStatus1ForPlayer(i_player, i_flag);
+    daAlink_recordWolfAoeStatus("status1_clear", i_player, 0, i_flag);
 }
 
 static bool daAlink_checkOwnerCameraStatus1(const daAlink_c* i_player, u32 i_flag) {
     // Co-op: wolf lock camera/state reads belong to the ALINK actor changing state.
     return dusk::coop::player_camera_status::checkStatus1ForPlayer(i_player, i_flag) != 0;
+}
+
+static bool daAlink_checkOwnerCameraStatus0(const daAlink_c* i_player, u32 i_flag) {
+    // Co-op: Midna appear/talk staging belongs to the ALINK actor that summoned her.
+    return dusk::coop::player_camera_status::checkStatus0ForPlayer(i_player, i_flag) != 0;
+}
+
+static void daAlink_endMidnaServiceForOwner(daAlink_c* i_player) {
+    if (dusk::coop::midna_owner::isServiceActive() &&
+        dusk::coop::midna_owner::currentPlayer() == i_player)
+    {
+        // Co-op: the transform proc, not the message screen, owns the final
+        // release of Midna-service presentation and hidden HUD state.
+        dusk::coop::midna_owner::endService();
+    }
 }
 
 #else
@@ -357,9 +406,23 @@ static void daAlink_setOwnerCameraStatus1(daAlink_c*, u32 i_flag) {
     dComIfGp_setPlayerStatus1(0, i_flag);
 }
 
+static void daAlink_clearOwnerCameraStatus0(daAlink_c*, u32 i_flag) {
+    dComIfGp_clearPlayerStatus0(0, i_flag);
+}
+
+static void daAlink_clearOwnerCameraStatus1(daAlink_c*, u32 i_flag) {
+    dComIfGp_clearPlayerStatus1(0, i_flag);
+}
+
 static bool daAlink_checkOwnerCameraStatus1(const daAlink_c*, u32 i_flag) {
     return dComIfGp_checkPlayerStatus1(0, i_flag) != 0;
 }
+
+static bool daAlink_checkOwnerCameraStatus0(const daAlink_c*, u32 i_flag) {
+    return dComIfGp_checkPlayerStatus0(0, i_flag) != 0;
+}
+
+static void daAlink_endMidnaServiceForOwner(daAlink_c*) {}
 
 #endif
 
@@ -3256,9 +3319,26 @@ cXyz* daAlink_c::getNeckAimPos(cXyz* param_0, int* param_1, int param_2) {
 #endif
     ) {
         if (mProcID != PROC_NOD && mProcID != PROC_EYE_AWAY && mProcID != PROC_GLARE) {
+#if TARGET_PC
+            if (dusk::coop::message_owner::isActive()) {
+                // Co-op: owned dialogue head aim follows the retained speaker for this ALINK only.
+                if (dusk::coop::message_owner::currentPlayer() != this) {
+                    look_actor = NULL;
+                } else {
+                    look_actor = dusk::coop::message_owner::speaker();
+                }
+            } else {
+                look_actor = fopAcM_getTalkEventPartner(this);
+            }
+#else
             look_actor = fopAcM_getTalkEventPartner(this);
+#endif
             if (look_actor != NULL) {
+#if TARGET_PC
+                daMidna_c* midna = dusk::coop::midna_owner::getMidnaForPlayer(this);
+#else
                 daMidna_c* midna = (daMidna_c*)getMidnaActor();
+#endif
                 s16 actor_name = fopAcM_GetName(look_actor);
 
                 if (actor_name == fpcNm_MIDNA_e
@@ -3268,10 +3348,19 @@ cXyz* daAlink_c::getNeckAimPos(cXyz* param_0, int* param_1, int param_2) {
                     || (actor_name == fpcNm_Tag_Mwait_e && ((daTagMwait_c*)look_actor)->checkEndMessage()))
                 {
                     *param_1 = 1;
-                    return &midna->eyePos;
+#if TARGET_PC
+                    if (actor_name == fpcNm_MIDNA_e) {
+                        return &static_cast<daMidna_c*>(look_actor)->eyePos;
+                    }
+#endif
+                    if (midna != NULL) {
+                        return &midna->eyePos;
+                    }
                 }
 
-                if (actor_name == fpcNm_Tag_Mhint_e || actor_name == fpcNm_Tag_Mstop_e) {
+                if (midna != NULL &&
+                    (actor_name == fpcNm_Tag_Mhint_e || actor_name == fpcNm_Tag_Mstop_e))
+                {
                     midna->setForceNeckAimPos(look_actor->eyePos);
                 }
             }
@@ -12185,9 +12274,12 @@ static void* daAlink_searchKolin(fopAc_ac_c* i_actor, void* i_data) {
 }
 
 int daAlink_c::orderZTalk() {
+    // Co-op: one Link's prone/talk posture should not block another Link's Midna call.
+    const bool prone_talk_status = daAlink_checkOwnerCameraStatus0(this, 0x8000000);
+
     if ((!checkReinRide() && !checkModeFlg(0x40000) && !checkMagneBootsOn() && (!mLinkAcch.ChkGroundHit() || checkModeFlg(0x70C52)))
         || mThrowBoomerangAcKeep.getActor() != NULL
-        || dComIfGp_checkPlayerStatus0(0, 0x8000000)
+        || prone_talk_status
         || mProcID == PROC_CRAWL_END
         || checkHorseZelda()
         || checkCloudSea()
@@ -18308,6 +18400,7 @@ int daAlink_c::procCoMetamorphose() {
 
                 field_0x2f99 = 0xC;
                 mProcVar1.field_0x300a = 1;
+                daAlink_endMidnaServiceForOwner(this);
                 return 1;
             }
 
@@ -18345,6 +18438,7 @@ int daAlink_c::procCoMetamorphose() {
 
             if (field_0x3198 != 0) {
                 resetSpecialEvent();
+                daAlink_endMidnaServiceForOwner(this);
                 return checkWaitAction();
             }
 
@@ -18358,6 +18452,7 @@ int daAlink_c::procCoMetamorphose() {
 
             field_0x2f99 = 0xC;
             mProcVar1.field_0x300a = 1;
+            daAlink_endMidnaServiceForOwner(this);
             return 1;
         }
 
@@ -18474,6 +18569,7 @@ int daAlink_c::procCoMetamorphoseOnly() {
         }
 
         dComIfGp_evmng_cutEnd(mAlinkStaffId);
+        daAlink_endMidnaServiceForOwner(this);
     }
 
     return 1;
@@ -19908,7 +20004,7 @@ int daAlink_c::initShadowScaleLight() {
     fopAc_ac_c* talkActor = fopAcM_getTalkEventPartner(this);
 
     f32 var_f30;
-    if (dComIfGp_checkPlayerStatus0(0, 0x100000)) {
+    if (daAlink_checkOwnerCameraStatus0(this, 0x100000)) {
         var_f30 = 0.0f;
     } else {
         var_f30 = 150.0f;

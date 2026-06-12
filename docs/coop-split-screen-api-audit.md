@@ -201,7 +201,8 @@ Current behavior:
 - Health, rupees, keys, map, pause, save, and passive message presentation remain P1/global.
 - Action prompt presentation has a first `hud_owner` pass: `dMeter2Draw_c` can replay the button
   and assigned-item panes for secondary split-screen viewports from slot-local
-  `player_button_status`, without replaying the whole 2D draw list.
+  `player_button_status`, including wolf X/Y prompts and the native human/wolf meter branch, without
+  replaying the whole 2D draw list.
 - The center emphasis prompt is separate from the right-side meter button panes. P2 uses a secondary
   `dMeterButton_c` instance so its state can be updated and drawn in P2's viewport without
   clobbering the P1 prompt packet.
@@ -249,8 +250,11 @@ Audit decision:
   retained item-ring input and selection in `ui_owner`; presentation collapse does not broaden
   Start-menu or map input ownership.
 - Interactive talk/choice dialogue is now an explicit `Dialogue` presentation consumer through
-  `message_owner`. Other message-camera scenes, Hidden Skill training, minigames, and cutscenes
-  still need case-by-case classification and must not collapse split-screen automatically.
+  `message_owner` after native message acceptance, with `talkStartInit()` as fallback insurance.
+  Owned talk cameras must use the retained presenter/listener actor for fallback focus paths instead
+  of camera `mpPlayerActor`.
+  Other message-camera scenes, Hidden Skill training, minigames, and cutscenes still need
+  case-by-case classification and must not collapse split-screen automatically.
 
 ## Render Visibility And Culling Decision
 

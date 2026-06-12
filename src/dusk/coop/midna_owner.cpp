@@ -12,6 +12,7 @@
 #include "dusk/settings.h"
 #include "dusk/coop/event_owner.h"
 #include "dusk/coop/event_presentation.h"
+#include "dusk/coop/message_owner.h"
 #include "dusk/coop/player_camera_status.h"
 #include "dusk/logging.h"
 #include "f_op/f_op_actor.h"
@@ -32,6 +33,7 @@ constexpr u32 kTalkStatusFlag = 0x10;
 
 struct MidnaSlotState {
     daMidna_c* midna = nullptr;
+    fpc_ProcID midnaId = fpcM_ERROR_PROCESS_ID_e;
     fpc_ProcID pendingSpawnId = fpcM_ERROR_PROCESS_ID_e;
 };
 
@@ -39,6 +41,10 @@ struct State {
     PlayerSlot slot = PlayerSlot::Invalid;
     fopAc_ac_c* partner = nullptr;
     bool presentationActive = false;
+    bool awaitingEventStart = false;
+    bool pendingEnd = false;
+    bool talkCameraSeededDuringStartup = false;
+    bool talkCameraStableReseeded = false;
 };
 
 struct TransformBlockSearch {
@@ -68,6 +74,24 @@ MidnaSlotState* stateForSlot(PlayerSlot slot) {
     }
 
     return &s_midnas[slotIndex(slot)];
+}
+
+daMidna_c* liveMidna(MidnaSlotState* state) {
+    if (state == nullptr || state->midna == nullptr ||
+        state->midnaId == fpcM_ERROR_PROCESS_ID_e)
+    {
+        return nullptr;
+    }
+
+    if (fpcM_SearchByID(state->midnaId) ==
+        static_cast<base_process_class*>(static_cast<fopAc_ac_c*>(state->midna)))
+    {
+        return state->midna;
+    }
+
+    state->midna = nullptr;
+    state->midnaId = fpcM_ERROR_PROCESS_ID_e;
+    return nullptr;
 }
 
 daAlink_c* playerForSlot(PlayerSlot slot) {
@@ -155,6 +179,7 @@ void registerMidna(PlayerSlot slot, daMidna_c* midna) {
     }
 
     state->midna = midna;
+    state->midnaId = fopAcM_GetID(midna);
     state->pendingSpawnId = fpcM_ERROR_PROCESS_ID_e;
     CoopMidnaLog.debug("registered Midna slot {} actor 0x{:x}", slotIndex(slot),
                        reinterpret_cast<uintptr_t>(midna));
@@ -167,6 +192,7 @@ void unregisterMidna(PlayerSlot slot, const daMidna_c* midna) {
     }
 
     state->midna = nullptr;
+    state->midnaId = fpcM_ERROR_PROCESS_ID_e;
     state->pendingSpawnId = fpcM_ERROR_PROCESS_ID_e;
     CoopMidnaLog.debug("unregistered Midna slot {} actor 0x{:x}", slotIndex(slot),
                        reinterpret_cast<uintptr_t>(midna));
@@ -180,8 +206,8 @@ void unregisterMidna(PlayerSlot slot, const daMidna_c* midna) {
 
 daMidna_c* getMidna(PlayerSlot slot) {
     MidnaSlotState* state = stateForSlot(slot);
-    if (state != nullptr && state->midna != nullptr) {
-        return state->midna;
+    if (daMidna_c* midna = liveMidna(state)) {
+        return midna;
     }
 
     return slot == PlayerSlot::Primary ? daPy_py_c::getMidnaActor() : nullptr;
@@ -308,14 +334,59 @@ void beginService(daAlink_c* player, fopAc_ac_c* partner) {
     PlayerSlot slot = normalizeSlot(getSlotForActor(player));
     s_state.slot = slot;
     s_state.partner = partner != nullptr ? partner : static_cast<fopAc_ac_c*>(getMidna(slot));
+    s_state.awaitingEventStart = true;
+    s_state.pendingEnd = false;
+    s_state.talkCameraSeededDuringStartup = false;
+    s_state.talkCameraStableReseeded = false;
     beginPresentation(slot);
+    // Co-op: Midna service acceptance is earlier than some transform-message
+    // controller setup paths, so it owns the first fullscreen dialogue handoff.
+    message_owner::begin(slot, static_cast<fopAc_ac_c*>(player),
+                         static_cast<fopAc_ac_c*>(getMidna(slot)), true,
+                         message_owner::BeginSource::MidnaService);
+}
+
+void requestEndService() {
+    if (s_state.slot == PlayerSlot::Invalid) {
+        return;
+    }
+
+    // Co-op: native Midna/message teardown can happen during actor execution,
+    // while the event camera still consumes the talk state later in the same
+    // management pass. Keep the retained owner actors alive until post-camera.
+    s_state.pendingEnd = true;
 }
 
 void endService() {
+    const PlayerSlot service_slot = s_state.slot;
+    if (service_slot != PlayerSlot::Invalid && message_owner::isActive() &&
+        message_owner::currentSlot() == normalizeSlot(service_slot))
+    {
+        // Co-op: Midna service owns the full transform prompt lifetime. Once
+        // native Midna accepts, cancels, or exits, release any refreshed message
+        // owner for the same slot before native actor pointers can be torn down.
+        message_owner::end();
+    }
+
     if (s_state.presentationActive) {
         event_presentation::end(event_presentation::Source::MidnaService);
     }
     s_state = State{};
+}
+
+void finishPendingEndService() {
+    if (!s_state.pendingEnd) {
+        return;
+    }
+
+    if (dComIfGp_evmng_cameraPlay()) {
+        // Co-op: cancelled Midna messages can leave the native TALK camera
+        // running after the message object closes; keep retained actors until
+        // the camera manager stops consuming talk state.
+        return;
+    }
+
+    endService();
 }
 
 void updateService() {
@@ -324,10 +395,23 @@ void updateService() {
     }
 
     daAlink_c* player = currentPlayer();
+    dEvt_control_c* event = dComIfGp_getEvent();
+    const bool event_active = dComIfGp_event_runCheck() || dMsgObject_isTalkNowCheck() ||
+                              (player != nullptr && player->checkPlayerDemoMode());
+    if (s_state.awaitingEventStart) {
+        if (event_active) {
+            s_state.awaitingEventStart = false;
+        } else if (event != nullptr && event->mNum > 0) {
+            // Co-op: native talk events are ordered before they run; keep the
+            // provisional Midna presentation alive through that queued state.
+            return;
+        }
+    }
+
     if (!dComIfGp_event_runCheck() && !dMsgObject_isTalkNowCheck() &&
         (player == nullptr || !player->checkPlayerDemoMode()))
     {
-        endService();
+        requestEndService();
     }
 }
 
@@ -337,6 +421,41 @@ void reset() {
 
 bool isServiceActive() {
     return s_state.slot != PlayerSlot::Invalid;
+}
+
+bool retainsTalkCamera() {
+    return isServiceActive() && currentPlayer() != nullptr && getMidna(currentSlot()) != nullptr;
+}
+
+void markTalkCameraSeed(daMidna_c* midna, bool startupUnstable) {
+    if (!retainsTalkCamera() || midna == nullptr || midna != getMidna(currentSlot())) {
+        return;
+    }
+
+    s_state.talkCameraSeededDuringStartup = startupUnstable;
+    if (!startupUnstable) {
+        s_state.talkCameraStableReseeded = true;
+    }
+}
+
+bool shouldReseedTalkCameraForStableMidna(daMidna_c* midna, bool poseReady) {
+    if (!retainsTalkCamera() || midna == nullptr || midna != getMidna(currentSlot())) {
+        return false;
+    }
+
+    // Co-op: manual Midna dialogue is presented as soon as the service is
+    // accepted, but the native talk camera can seed while Midna is still in her
+    // shadow-appear wait pose. Once the retained Midna reaches a usable talk
+    // pose, reseed the camera once instead of keeping the startup aim forever.
+    return s_state.talkCameraSeededDuringStartup && !s_state.talkCameraStableReseeded && poseReady;
+}
+
+void markTalkCameraStableReseeded() {
+    if (!retainsTalkCamera()) {
+        return;
+    }
+
+    s_state.talkCameraStableReseeded = true;
 }
 
 PlayerSlot currentSlot() {
@@ -354,6 +473,28 @@ daAlink_c* currentPlayer() {
 daAlink_c* messageFlowPlayer() {
     daAlink_c* player = isServiceActive() ? currentPlayer() : eventOwnerPlayer();
     return player != nullptr ? player : eventOwnerPlayer();
+}
+
+fopAc_ac_c* talkPartnerForPlayer(const daAlink_c* player) {
+    if (player == nullptr) {
+        return nullptr;
+    }
+
+    if (isServiceActive() && shouldConsumeAlinkStaff(player)) {
+        if (daMidna_c* midna = getMidnaForPlayer(player)) {
+            return static_cast<fopAc_ac_c*>(midna);
+        }
+
+        return s_state.partner;
+    }
+
+    if (message_owner::isActive() && message_owner::currentPlayer() == player) {
+        if (fopAc_ac_c* speaker = message_owner::speaker()) {
+            return speaker;
+        }
+    }
+
+    return fopAcM_getTalkEventPartner(const_cast<daAlink_c*>(player));
 }
 
 bool isServicePartner(const fopAc_ac_c* partner) {

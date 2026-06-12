@@ -18,6 +18,10 @@ struct SlotButtonStatus {
     u8 rFlag = 0;
     u8 zStatus = 0;
     u8 zFlag = 0;
+    u8 xStatus = 0;
+    u8 xFlag = 0;
+    u8 yStatus = 0;
+    u8 yFlag = 0;
     u8 threeDStatus = 0;
     u8 threeDDirection = 0;
     u8 threeDFlag = 0;
@@ -53,6 +57,10 @@ u8 getPrimaryStatus(ButtonStatusKind kind) {
         return dComIfGp_getRStatus();
     case ButtonStatusKind::Z:
         return dComIfGp_getZStatus();
+    case ButtonStatusKind::X:
+        return dComIfGp_getXStatus();
+    case ButtonStatusKind::Y:
+        return dComIfGp_getYStatus();
     }
 
     return 0;
@@ -81,6 +89,16 @@ u8 getPrimaryFlag(ButtonStatusKind kind) {
         flag |= dComIfGp_isZSetFlag(2) ? 2 : 0;
         flag |= dComIfGp_isZSetFlag(4) ? 4 : 0;
         return flag;
+    case ButtonStatusKind::X:
+        flag |= dComIfGp_isXSetFlag(1) ? 1 : 0;
+        flag |= dComIfGp_isXSetFlag(2) ? 2 : 0;
+        flag |= dComIfGp_isXSetFlag(4) ? 4 : 0;
+        return flag;
+    case ButtonStatusKind::Y:
+        flag |= dComIfGp_isYSetFlag(1) ? 1 : 0;
+        flag |= dComIfGp_isYSetFlag(2) ? 2 : 0;
+        flag |= dComIfGp_isYSetFlag(4) ? 4 : 0;
+        return flag;
     }
 
     return 0;
@@ -100,6 +118,12 @@ void setPrimaryStatus(ButtonStatusKind kind, u8 status, u8 flag) {
     case ButtonStatusKind::Z:
         dComIfGp_setZStatus(status, flag);
         break;
+    case ButtonStatusKind::X:
+        dComIfGp_setXStatus(status, flag);
+        break;
+    case ButtonStatusKind::Y:
+        dComIfGp_setYStatus(status, flag);
+        break;
     }
 }
 
@@ -114,6 +138,10 @@ u8 getSecondaryStatus(PlayerSlot slot, ButtonStatusKind kind) {
         return status.rStatus;
     case ButtonStatusKind::Z:
         return status.zStatus;
+    case ButtonStatusKind::X:
+        return status.xStatus;
+    case ButtonStatusKind::Y:
+        return status.yStatus;
     }
 
     return 0;
@@ -130,6 +158,10 @@ u8 getSecondaryFlag(PlayerSlot slot, ButtonStatusKind kind) {
         return status.rFlag;
     case ButtonStatusKind::Z:
         return status.zFlag;
+    case ButtonStatusKind::X:
+        return status.xFlag;
+    case ButtonStatusKind::Y:
+        return status.yFlag;
     }
 
     return 0;
@@ -153,6 +185,14 @@ void setSecondaryStatus(PlayerSlot slot, ButtonStatusKind kind, u8 value, u8 fla
     case ButtonStatusKind::Z:
         status.zStatus = value;
         status.zFlag = flag;
+        break;
+    case ButtonStatusKind::X:
+        status.xStatus = value;
+        status.xFlag = flag;
+        break;
+    case ButtonStatusKind::Y:
+        status.yStatus = value;
+        status.yFlag = flag;
         break;
     }
 }

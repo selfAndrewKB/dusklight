@@ -798,8 +798,14 @@ void dMeter2Draw_c::drawCoopSecondaryButtonHud(J2DGrafContext* i_restoreGrafCtx)
     }
 
     u8 old_emphasis_a = field_0x761;
+    u8 old_emphasis_b = field_0x762;
+    u8 old_emphasis_xy[3] = {field_0x768[0], field_0x768[1], field_0x768[2]};
     f32 old_pikari_frame = field_0x608;
+    f32 old_pikari_b_frame = field_0x60c;
+    f32 old_pikari_xy_frame[2] = {field_0x620[0], field_0x620[1]};
     u8 old_pikari_type = field_0x759;
+    u8 old_pikari_b_type = field_0x75a;
+    u8 old_pikari_xy_type[2] = {field_0x75c[0], field_0x75c[1]};
 
     auto recordHudReplay = [this](dusk::coop::hud_diagnostics::ReplayPhase phase,
                                   dusk::coop::PlayerSlot slot, u8 doStatus) {
@@ -841,25 +847,58 @@ void dMeter2Draw_c::drawCoopSecondaryButtonHud(J2DGrafContext* i_restoreGrafCtx)
 
     dusk::coop::hud_owner::pushSlot(dusk::coop::PlayerSlot::Secondary);
 
-    // Co-op: the meter J2D tree is shared, so apply P2's item panes only for P2's replay.
+    // Co-op: the meter J2D tree is shared, so apply P2's form/button state only for P2's replay.
+    const bool p2_wolf = dusk::coop::hud_owner::currentPlayer()->checkWolf();
     dusk::coop::hud_owner::ItemPresentation p2_items[2];
     for (int i = 0; i < 2; i++) {
         p2_items[i] = dusk::coop::hud_owner::itemPresentation(i);
-        changeTextureItemXY(i, p2_items[i].item);
-        if (p2_items[i].showCount) {
-            setItemNum(i, p2_items[i].count, p2_items[i].maxCount);
-            drawItemNum(i, 1.0f);
-        } else {
+        if (p2_wolf) {
+            const dusk::coop::player_button_status::ButtonStatusKind kind =
+                i == 0 ? dusk::coop::player_button_status::ButtonStatusKind::X :
+                         dusk::coop::player_button_status::ButtonStatusKind::Y;
+            drawButtonXY(i, 0, dusk::coop::hud_owner::buttonStatus(kind), false,
+                         (dusk::coop::hud_owner::buttonFlag(kind) & (2 | 4)) != 0);
             drawItemNum(i, 0.0f);
+        } else {
+            changeTextureItemXY(i, p2_items[i].item);
+            drawButtonXY(i, p2_items[i].item, 0, true, false);
+            if (p2_items[i].showCount) {
+                setItemNum(i, p2_items[i].count, p2_items[i].maxCount);
+                drawItemNum(i, 1.0f);
+            } else {
+                drawItemNum(i, 0.0f);
+            }
         }
     }
+
+    const u8 b_status = dusk::coop::hud_owner::buttonStatus(
+        dusk::coop::player_button_status::ButtonStatusKind::A);
+    const u8 r_status = dusk::coop::hud_owner::buttonStatus(
+        dusk::coop::player_button_status::ButtonStatusKind::R);
+    const u8 z_status = dusk::coop::hud_owner::buttonStatus(
+        dusk::coop::player_button_status::ButtonStatusKind::Z);
+    const bool b_emphasis =
+        (dusk::coop::hud_owner::buttonFlag(
+             dusk::coop::player_button_status::ButtonStatusKind::A) & (2 | 4)) != 0;
+    drawButtonB(b_status, !p2_wolf, p2_wolf ? g_drawHIO.mButtonBWolfPosX : 0.0f,
+                p2_wolf ? g_drawHIO.mButtonBWolfPosY : 0.0f, 0.0f, 0.0f, 1.0f, b_emphasis);
+    drawButtonR(dComIfGs_getCollectSmell(), r_status, !p2_wolf,
+                (dusk::coop::hud_owner::buttonFlag(
+                     dusk::coop::player_button_status::ButtonStatusKind::R) & (2 | 4)) != 0);
+    drawButtonZ(z_status);
 
     const u8 do_status = dusk::coop::hud_owner::buttonStatus(
         dusk::coop::player_button_status::ButtonStatusKind::Do);
     mpButtonParent->setAlphaRate(g_drawHIO.mParentAlpha * g_drawHIO.mMainHUDButtonsAlpha);
     drawButtonA(do_status, g_drawHIO.mButtonAPosX, g_drawHIO.mButtonAPosY, 0.0f, 0.0f, 1.0f,
                 false, false);
-    setButtonIconAAlpha(do_status, 0, true);
+    setButtonIconAAlpha(do_status, 0, !p2_wolf);
+    setButtonIconBAlpha(b_status, 0, !p2_wolf);
+    setButtonIconAlpha(0, dusk::coop::hud_owner::buttonStatus(
+                           dusk::coop::player_button_status::ButtonStatusKind::X), 0, !p2_wolf);
+    setButtonIconAlpha(1, dusk::coop::hud_owner::buttonStatus(
+                           dusk::coop::player_button_status::ButtonStatusKind::Y), 0, !p2_wolf);
+    setButtonIconAlpha(2, r_status, 0, !p2_wolf);
     mpLifeParent->setAlphaRate(0.0f);
     mpLightDropParent->setAlphaRate(0.0f);
     mpRupeeKeyParent->setAlphaRate(0.0f);
@@ -888,24 +927,61 @@ void dMeter2Draw_c::drawCoopSecondaryButtonHud(J2DGrafContext* i_restoreGrafCtx)
 
     dusk::coop::hud_owner::popSlot();
 
-    // Co-op: restore P1's item panes before the shared HUD object returns to vanilla updates.
+    // Co-op: restore P1's button/item panes before the shared HUD object returns to vanilla updates.
     dusk::coop::hud_owner::pushSlot(dusk::coop::PlayerSlot::Primary);
+    const bool p1_wolf = dusk::coop::hud_owner::currentPlayer()->checkWolf();
     for (int i = 0; i < 2; i++) {
         dusk::coop::hud_owner::ItemPresentation p1_item =
             dusk::coop::hud_owner::itemPresentation(i);
-        changeTextureItemXY(i, p1_item.item);
-        if (p1_item.showCount) {
-            setItemNum(i, p1_item.count, p1_item.maxCount);
-            drawItemNum(i, 1.0f);
-        } else {
+        if (p1_wolf) {
+            const dusk::coop::player_button_status::ButtonStatusKind kind =
+                i == 0 ? dusk::coop::player_button_status::ButtonStatusKind::X :
+                         dusk::coop::player_button_status::ButtonStatusKind::Y;
+            drawButtonXY(i, 0, dusk::coop::hud_owner::buttonStatus(kind), false,
+                         (dusk::coop::hud_owner::buttonFlag(kind) & (2 | 4)) != 0);
             drawItemNum(i, 0.0f);
+        } else {
+            changeTextureItemXY(i, p1_item.item);
+            drawButtonXY(i, p1_item.item, 0, true, false);
+            if (p1_item.showCount) {
+                setItemNum(i, p1_item.count, p1_item.maxCount);
+                drawItemNum(i, 1.0f);
+            } else {
+                drawItemNum(i, 0.0f);
+            }
         }
     }
+
+    const u8 p1_b_status = dusk::coop::hud_owner::buttonStatus(
+        dusk::coop::player_button_status::ButtonStatusKind::A);
+    drawButtonB(p1_b_status, !p1_wolf, p1_wolf ? g_drawHIO.mButtonBWolfPosX : 0.0f,
+                p1_wolf ? g_drawHIO.mButtonBWolfPosY : 0.0f, 0.0f, 0.0f, 1.0f,
+                (dusk::coop::hud_owner::buttonFlag(
+                     dusk::coop::player_button_status::ButtonStatusKind::A) & (2 | 4)) != 0);
+    drawButtonR(dComIfGs_getCollectSmell(),
+                dusk::coop::hud_owner::buttonStatus(
+                    dusk::coop::player_button_status::ButtonStatusKind::R),
+                !p1_wolf,
+                (dusk::coop::hud_owner::buttonFlag(
+                     dusk::coop::player_button_status::ButtonStatusKind::R) & (2 | 4)) != 0);
+    drawButtonZ(dusk::coop::hud_owner::buttonStatus(
+        dusk::coop::player_button_status::ButtonStatusKind::Z));
     dusk::coop::hud_owner::popSlot();
     recordHudReplay(dusk::coop::hud_diagnostics::ReplayPhase::PrimaryRestored,
                     dusk::coop::hud_owner::currentSlot(),
                     dusk::coop::hud_owner::buttonStatus(
                         dusk::coop::player_button_status::ButtonStatusKind::Do));
+
+    field_0x762 = old_emphasis_b;
+    for (int i = 0; i < 3; i++) {
+        field_0x768[i] = old_emphasis_xy[i];
+    }
+    field_0x60c = old_pikari_b_frame;
+    for (int i = 0; i < 2; i++) {
+        field_0x620[i] = old_pikari_xy_frame[i];
+        field_0x75c[i] = old_pikari_xy_type[i];
+    }
+    field_0x75a = old_pikari_b_type;
 
     restorePaneState(mpButtonParent, button_parent);
     restorePaneState(mpButtonA, button_a);
@@ -2498,14 +2574,22 @@ void dMeter2Draw_c::drawButtonB(u8 i_action, bool param_1, f32 i_posX, f32 i_pos
 
     char* mp_string = getActionString(i_action, 1, &field_0x762);
 
-    if (dComIfGp_isASetFlag(2) || dComIfGp_isASetFlag(4)) {
+    // Co-op: shared meter panes read flags for the HUD slot currently being replayed.
+    const u8 a_flag = dusk::coop::hud_owner::buttonFlag(
+        dusk::coop::player_button_status::ButtonStatusKind::A);
+    const u8 do_status = dusk::coop::hud_owner::buttonStatus(
+        dusk::coop::player_button_status::ButtonStatusKind::Do);
+    const u8 a_status = dusk::coop::hud_owner::buttonStatus(
+        dusk::coop::player_button_status::ButtonStatusKind::A);
+
+    if ((a_flag & 2) || (a_flag & 4)) {
         field_0x762 = 7;
     }
 
     if (*mp_string != 0 && i_action != 0 && i_action != 0x2E &&
-        ((dComIfGp_getDoStatus() == 0 ||
-          (dComIfGp_getDoStatus() != dComIfGp_getAStatus() &&
-           dComIfGp_getDoStatus() != dComIfGp_getAStatusForce())) ||
+        ((do_status == 0 ||
+          (do_status != a_status &&
+           do_status != dComIfGp_getAStatusForce())) ||
          !isEmphasisB()))
     {
         mpTextB->show();
@@ -2587,7 +2671,10 @@ void dMeter2Draw_c::drawButtonR(u8 unused0, u8 i_action, bool unused1, bool unus
     mpTextXY[2]->show();
 
     getActionString(i_action, 1, &field_0x768[2]);
-    if (dComIfGp_isRSetFlag(2) || dComIfGp_isRSetFlag(4)) {
+    // Co-op: R prompt emphasis follows the HUD slot being presented.
+    const u8 r_flag = dusk::coop::hud_owner::buttonFlag(
+        dusk::coop::player_button_status::ButtonStatusKind::R);
+    if ((r_flag & 2) || (r_flag & 4)) {
         field_0x768[2] = 7;
     }
 }
@@ -2595,7 +2682,10 @@ void dMeter2Draw_c::drawButtonR(u8 unused0, u8 i_action, bool unused1, bool unus
 void dMeter2Draw_c::drawButtonZ(u8 i_action) {
     char* mp_string = getActionString(i_action, 1, &field_0x764);
 
-    if (dComIfGp_isZSetFlag(2) || dComIfGp_isZSetFlag(4)) {
+    // Co-op: Midna/Z prompt emphasis follows the HUD slot being presented.
+    const u8 z_flag = dusk::coop::hud_owner::buttonFlag(
+        dusk::coop::player_button_status::ButtonStatusKind::Z);
+    if ((z_flag & 2) || (z_flag & 4)) {
         field_0x764 = 7;
     }
 
@@ -2677,9 +2767,15 @@ void dMeter2Draw_c::drawButtonXY(int i_no, u8 i_itemNo, u8 i_action, bool param_
 
         int var_r26;
         if (i_no == SELECT_X_e) {
-            var_r26 = dComIfGp_isXSetFlag(2) | dComIfGp_isXSetFlag(4);
+            // Co-op: wolf X/Y statuses are slot-local during secondary HUD replay.
+            const u8 x_flag = dusk::coop::hud_owner::buttonFlag(
+                dusk::coop::player_button_status::ButtonStatusKind::X);
+            var_r26 = (x_flag & 2) | (x_flag & 4);
         } else if (i_no == SELECT_Y_e) {
-            var_r26 = dComIfGp_isYSetFlag(2) | dComIfGp_isYSetFlag(4);
+            // Co-op: wolf X/Y statuses are slot-local during secondary HUD replay.
+            const u8 y_flag = dusk::coop::hud_owner::buttonFlag(
+                dusk::coop::player_button_status::ButtonStatusKind::Y);
+            var_r26 = (y_flag & 2) | (y_flag & 4);
         }
 
         char* mp_string = getActionString(i_action, 1, &field_0x768[i_no]);

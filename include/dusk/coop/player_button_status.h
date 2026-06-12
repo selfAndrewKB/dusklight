@@ -12,6 +12,8 @@ enum class ButtonStatusKind {
     A,
     R,
     Z,
+    X,
+    Y,
 };
 
 u8 getStatus(PlayerSlot slot, ButtonStatusKind kind);

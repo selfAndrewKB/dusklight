@@ -706,7 +706,8 @@ int daAlink_c::procCrawlAutoMoveInit(int param_0, cXyz* param_1) {
     mProcVar0.field_0x3008 = 20;
     mProcVar1.field_0x300a = 300;
 
-    dComIfGp_setPlayerStatus0(0, 0x8000000);
+    // Co-op: crawl auto-move posture state is actor-local for extra ALINKs.
+    daAlink_setOwnerCameraStatus0(this, 0x8000000);
     setCrawlMoveDirectionArrow();
     mNormalSpeed = 0.0f;
     field_0x2f99 = 12;

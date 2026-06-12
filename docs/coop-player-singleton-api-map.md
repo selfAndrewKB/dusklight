@@ -91,16 +91,16 @@ to the requesting player slot.
 | "Which player is caught, stunned, grabbed, carried, swallowed, or retained by this actor?" | `dusk::coop::caught_stun_owner` / future caught-grab helpers | Initial implementation for Gibdo scream stun |
 | "Which player owns this item/tool instance?" | item-owner helpers / owner keeps | Partially implemented by item ownership patches |
 | "What is this player slot locked onto or allowed to target?" | `dusk::coop::player_attention` | V1 gives additional ALINK actors their own `dAttention_c`; lock acquisition/status gating, owner target-capability masks, owner camera gameplay, cursor drawing, and actor-observed "am I locked-on?" checks use the same attention owner while P1 remains on global attention for HUD/story compatibility |
-| "What Do/A/R/Z/3D action status should this ALINK consume?" | `dusk::coop::player_button_status` | First pass implemented for ALINK gameplay prompt state; P1 forwards to vanilla globals and additional slots store sidecar values |
+| "What Do/A/R/Z, wolf X/Y, or 3D action status should this ALINK consume?" | `dusk::coop::player_button_status` | Implemented for ALINK gameplay prompt state; P1 forwards to vanilla globals and additional slots store sidecar values |
 | "Which X/Y items has this player assigned?" | `dusk::coop::player_item_selection` | Implemented as runtime sidecar assignments for additional slots with P1 forwarding to vanilla globals; inventory and consumable pools remain shared |
 | "Which runtime Epona belongs to this player slot or rider?" | `dusk::coop::horse_owner` | Authored Epona remains canonical for story/save compatibility and additional slots receive slot-assigned runtime clones; rider-local mounted gameplay, per-viewport spur presentation, and any-active-horse fence-jump tags are routed, while remaining collision and authored world-tag families stay active audit work |
 | "Which player's prompt/item state is this HUD/meter pass presenting?" | `dusk::coop::hud_owner` | Split-screen prompt and assigned-item HUD replay reads slot-local button state and item snapshots; the Epona spur presenter also resolves horse-local lash counts while broader independent inventory/menu/meter duplication remains deferred |
 | "Which slot owns this transient overlay, delayed reticle packet, or singular item wheel?" | `dusk::coop::ui_owner` | Implemented for scoped presentation slots, retained singular UI ownership, viewport-local projection/draw helpers, Hawkeye scope, ALINK live reticles, boomerang lock markers, and fishing forced-wheel entry |
-| "Which player owns first-person/item camera status?" | `dusk::coop::player_camera_status` over `dusk::coop::camera` | First pass implemented for slot-local status 0/1 bits, camera attention bits, subject zoom/focus, bow/slingshot, Hawkeye, iron ball subject mode, hookshot subject/hang/flight status, and MG_ROD camera/cast status |
+| "Which player owns first-person/item/camera-action status?" | `dusk::coop::player_camera_status` over `dusk::coop::camera` | First pass implemented for slot-local status 0/1 bits, camera attention bits, subject zoom/focus, bow/slingshot, Hawkeye, iron ball subject mode, hookshot subject/hang/flight status, MG_ROD camera/cast status, and wolf AOE charge/dome/lock camera status lifecycle |
 | "Which player owns this prompt/object interaction?" | `dusk::coop::interaction_owner` | Selects active-player prompt owners for knob/shutter door side fields. Generic ALINK talk/check/pickup and carried-item actions already work through slot-local attention/status; use this API for remaining world actors with their own P1-only eligibility scans. Howling stones intentionally remain P1/global |
 | "Which player requested this accepted event/demo?" | `dusk::coop::event_owner` | Initial implementation derives from event `Pt1`; message input, ALINK door-demo staff consumption, and knob/shutter door demos use it so P2-started scripted interactions do not animate or move P1 |
 | "Which player owns the transient Midna service and manual wolf-transform request?" | `dusk::coop::midna_owner` | P1's Midna remains canonical for story/save/global paths, while active additional slots get runtime Midna service actors; active-service position/no-draw setup, prompt eligibility, message branch reads, transform blocking, accepted transform demo handoff, and the talk/camera status bit follow the service actor's ALINK slot |
-| "Which player owns this active interactive dialogue/message surface?" | `dusk::coop::message_owner` | Retains the dialogue slot, pad, listener, and speaker; prefers active `midna_owner` service, otherwise falls back to `event_owner`; A/B and choice input read the retained pad while native global movement/input locking remains intact |
+| "Which player owns this active interactive dialogue/message surface?" | `dusk::coop::message_owner` | Retains the dialogue slot, pad, listener, speaker, and presenter actor after the native message controller accepts the message, with `talkStartInit()` as fallback insurance; prefers active `midna_owner` service, otherwise falls back to `event_owner`; A/B and choice input read the retained pad while native global movement/input locking remains intact |
 | "Should this explicitly classified singular event, interactive dialogue, or captured menu surface temporarily present one fullscreen camera and hide non-presenting players?" | `dusk::coop::event_presentation` | Implemented as an opt-in presentation override above the camera sidecar; P1/global howling stones, Midna service, interactive dialogue, item ring, Start-menu tree, field/dungeon maps, and Agitha's insect screen are classified consumers |
 | "Which player is retained by this training sequence?" | future `training_owner` | Deferred unless Hidden Skill / `NPC_KN` playtesting exposes a concrete P2 ownership failure |
 | "Which player owns camera/HUD/message/story/save state?" | camera/HUD/story-specific APIs | Partially implemented for split-screen camera only |
@@ -130,9 +130,9 @@ to the requesting player slot.
   wolf-bite ownership remains deferred caught/grab work.
 - **Player attention:** ALINK lock-on, target actor, attention truth/release, and slot-local prompt
   candidates. Do not let P2 consume P1's `dAttention_c::Lockon()` as its own gameplay lock state.
-- **Player button status:** Do/A/R/Z/3D action availability consumed by ALINK gameplay. P1 forwards
-  to the vanilla meter globals; additional slots keep sidecar prompt state for gameplay and HUD
-  presentation.
+- **Player button status:** Do/A/R/Z, wolf X/Y, and 3D action availability consumed by ALINK
+  gameplay. P1 forwards to the vanilla meter globals; additional slots keep sidecar prompt state for
+  gameplay and HUD presentation.
 - **Player item selection:** runtime X/Y assignment and mix-item indexes for each player slot. P1
   forwards to vanilla globals; additional slots retain session-local choices while inventory and
   consumable counts remain shared.
@@ -142,9 +142,10 @@ to the requesting player slot.
   evaluation rebinds the actor-local matrix calculator before using shared model data. Physical
   background checks need the initiating horse actor, not a guess from the canonical horse and not
   an iteration over every registered horse.
-- **HUD owner:** meter/prompt presentation ownership. It decides which slot's prompt state is being
-  drawn for the active HUD viewport, not who is eligible to interact or who accepted an event. Keep
-  prompt eligibility in `interaction_owner` and accepted event input in `event_owner`.
+- **HUD owner:** meter/prompt presentation ownership. It decides which slot's prompt state and
+  native human/wolf meter branch are being drawn for the active HUD viewport, not who is eligible to
+  interact or who accepted an event. Keep prompt eligibility in `interaction_owner` and accepted
+  event input in `event_owner`.
 - **UI owner:** transient presentation-slot ownership, retained singular UI ownership, and
   viewport-local 2D projection/draw setup. Use it for item wheel ownership and viewport overlays,
   not world-rendered fishing line/bobber geometry.
@@ -158,11 +159,13 @@ to the requesting player slot.
   from `dComIfGp_event_getPt1()` where possible so scripted interaction placement, input, and
   animation follow the requesting player. Do not use it for raw prompt eligibility before an event is
   accepted; that is `interaction_owner`.
-- **Message owner:** active interactive dialogue/message ownership after a talk/message surface
-  begins. It retains the presenter slot, pad, listener, and speaker; Midna service conversations
-  prefer `midna_owner`, while ordinary accepted messages fall back to `event_owner`. Use it for
-  message input and talk-camera presentation. Keep the native global dialogue movement/input lock
-  unless a concrete co-op bug proves it must be split.
+- **Message owner:** active interactive dialogue/message ownership after native message acceptance. It
+  retains the presenter slot, pad, listener, speaker, and presenter actor for
+  talk-camera/message presentation; Midna service conversations prefer
+  `midna_owner`, while ordinary accepted messages fall back to `event_owner`. Use it for message
+  input and talk-camera presentation, including fallback actor selection instead of camera
+  `mpPlayerActor`. Keep the native global dialogue movement/input lock unless a concrete co-op bug
+  proves it must be split.
 - **Training owner:** retained instructional/event combat sequences such as Hidden Skills. Once a
   trainer binds to a slot, required move checks and forced placement should follow that slot.
 - **Singular event presentation:** opt-in fullscreen presentation for authored sequences and

@@ -21,6 +21,7 @@
 #include "dusk/coop/line_render_diagnostics.h"
 #include "dusk/coop/message_owner.h"
 #include "dusk/coop/player_attention.h"
+#include "dusk/coop/player_camera_status.h"
 #include "dusk/coop/player_query.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/coop/selected_target_state.h"
@@ -1230,6 +1231,7 @@ json cameraSummary(int idx) {
         {"mode", camera->mCamera.Mode()},
         {"active", camera->mCamera.Active()},
         {"state", camera->mCamera.mCurState},
+        {"is_wolf", camera->mCamera.mIsWolf},
         {"style", camera->mCamera.mCamStyle},
         {"style_timer", camera->mCamera.mCurCamStyleTimer},
         {"trim_height", camera->mCamera.TrimHeight()},
@@ -1244,6 +1246,22 @@ json cameraSummary(int idx) {
         {"stored_yaw", camera->mCamera.U()},
         {"map", cameraMapSummary(camera->mCamera)},
     };
+    fopAc_ac_c* owner = camera->mCamera.mpPlayerActor;
+    if (owner != nullptr && fopAcM_GetName(owner) == fpcNm_ALINK_e) {
+        daAlink_c* player = static_cast<daAlink_c*>(owner);
+        const coop::PlayerSlot slot = coop::getSlotForActor(owner);
+        const int slotIndex = slot != coop::PlayerSlot::Invalid ? static_cast<int>(slot) : -1;
+        data["body"]["wolf_aoe"] = {
+            {"owner_slot", slotIndex},
+            {"camera_pad_id", camera->mCamera.mPadID},
+            {"charge_status0", coop::player_camera_status::checkStatus0ForPlayer(player, 0x40000000) != 0},
+            {"dome_status1", coop::player_camera_status::checkStatus1ForPlayer(player, 0x800000) != 0},
+            {"lock_attack_status1",
+             coop::player_camera_status::checkStatus1ForPlayer(player, 0x1000000) != 0},
+            {"search_ball_scale", player->getSearchBallScale()},
+            {"status_source", slot == coop::PlayerSlot::Secondary ? "slot_local" : "global"},
+        };
+    }
     return data;
 }
 
@@ -1377,6 +1395,8 @@ json actorSummary(const fopAc_ac_c* actor) {
     data["argument"] = static_cast<int>(actor->argument);
     data["attention_flags"] = actor->attention_info.flags;
     data["pos"] = {actor->current.pos.x, actor->current.pos.y, actor->current.pos.z};
+    data["attention_pos"] = {actor->attention_info.position.x, actor->attention_info.position.y,
+                             actor->attention_info.position.z};
     data["angle_y"] = static_cast<int>(actor->shape_angle.y);
     return data;
 }
@@ -1387,6 +1407,40 @@ json vecSummary(const cXyz* pos) {
     }
 
     return json::array({pos->x, pos->y, pos->z});
+}
+
+json alinkWolfAoeSummary(const daAlink_c* player, u32 status0Mask, u32 status1Mask,
+                         f32 searchBallScale, f32 cameraNearRadius, f32 cameraFarRadius,
+                         int wolfLockNum, const fopAc_ac_c* lockActor, f32 cameraFovy,
+                         f32 windowAspect, f32 windowWidth, f32 windowHeight) {
+    const coop::PlayerSlot slot = coop::getSlotForActor(static_cast<const fopAc_ac_c*>(player));
+    return {
+        {"player", actorSummary(player)},
+        {"slot", slot != coop::PlayerSlot::Invalid ? static_cast<int>(slot) : -1},
+        {"status0_mask", static_cast<unsigned int>(status0Mask)},
+        {"status1_mask", static_cast<unsigned int>(status1Mask)},
+        {"charge_status0",
+         player != nullptr ? coop::player_camera_status::checkStatus0ForPlayer(player, 0x40000000) != 0
+                           : false},
+        {"dome_status1",
+         player != nullptr ? coop::player_camera_status::checkStatus1ForPlayer(player, 0x800000) != 0
+                           : false},
+        {"lock_attack_status1",
+         player != nullptr ? coop::player_camera_status::checkStatus1ForPlayer(player, 0x1000000) != 0
+                           : false},
+        {"global_charge_status0", dComIfGp_checkPlayerStatus0(0, 0x40000000) != 0},
+        {"global_dome_status1", dComIfGp_checkPlayerStatus1(0, 0x800000) != 0},
+        {"global_lock_attack_status1", dComIfGp_checkPlayerStatus1(0, 0x1000000) != 0},
+        {"search_ball_scale", searchBallScale},
+        {"camera_near_radius", cameraNearRadius},
+        {"camera_far_radius", cameraFarRadius},
+        {"camera_fovy", cameraFovy},
+        {"window_aspect", windowAspect},
+        {"window_width", windowWidth},
+        {"window_height", windowHeight},
+        {"wolf_lock_num", wolfLockNum},
+        {"lock_actor", actorSummary(lockActor)},
+    };
 }
 
 json attentionListEntry(dAttList_c& entry) {
@@ -1615,15 +1669,19 @@ json collectEventPresentation() {
 json collectMessageOwner() {
     const coop::message_owner::DebugState& state = coop::message_owner::getDebugState();
     return {
-        {"schema_version", 1},
+        {"schema_version", 2},
         {"revision", state.revision},
         {"active", state.active},
         {"presentation_active", state.presentationActive},
         {"slot", static_cast<int>(state.slot)},
         {"pad", state.pad},
+        {"presenter", ptrString(state.presenter)},
         {"listener", ptrString(state.listener)},
         {"speaker", ptrString(state.speaker)},
+        {"fallback_actor", ptrString(state.fallbackActor)},
+        {"talk_cut", state.talkCut},
         {"last_transition", coop::message_owner::transitionName(state.lastTransition)},
+        {"last_begin_source", coop::message_owner::beginSourceName(state.lastBeginSource)},
     };
 }
 
@@ -1778,7 +1836,7 @@ json collectCameraAttentionStatus() {
 json collectPlayerStatus() {
     dAttention_c* attention = dComIfGp_getAttention();
     json data = {
-        {"schema_version", 1},
+        {"schema_version", 2},
         {"button_status", collectButtonStatus()},
         {"button_status_force", collectButtonStatusForce()},
         {"player_status_words", collectPlayerStatusWords()},
@@ -1800,8 +1858,10 @@ json collectPlayerStatus() {
         data["secondary_target"] = ptrString(state.target);
         data["secondary_wolf_lock_num"] = static_cast<unsigned int>(state.wolfLockNum);
         data["secondary_wolf_lock_actor"] = ptrString(state.wolfLockActor);
+        data["secondary_wolf_lock_charge"] = static_cast<bool>(state.wolfLockChargeActive);
         data["secondary_wolf_lock_dome"] = static_cast<bool>(state.wolfLockDomeActive);
         data["secondary_wolf_lock_attack"] = static_cast<bool>(state.wolfLockAttackActive);
+        data["secondary_wolf_search_ball_scale"] = state.wolfSearchBallScale;
     } else {
         data["secondary_attention_lock"] = false;
         data["secondary_raw_mask"] = 0;
@@ -2907,6 +2967,197 @@ void recordCameraAreaLoadCheckpoint(const char* phase, const char* startupSource
     }
 
     updateProviderLatest("camera.area_load", collectCameraAreaLoad());
+    updateLatestFileIfDue(false);
+}
+
+void recordMessageOwnerCheckpoint(const char* phase, int slot, int pad,
+                                  const fopAc_ac_c* presenter, const fopAc_ac_c* listener,
+                                  const fopAc_ac_c* speaker, bool fullscreenRequested,
+                                  bool presentationActive, bool eventFullscreen,
+                                  int presenterWindow, const char* source) {
+    if (!s_state.enabled) {
+        return;
+    }
+
+    ensureInitialized();
+    if (!s_state.initialized) {
+        return;
+    }
+
+    json data = {
+        {"schema_version", 1},
+        {"phase", phase != nullptr ? phase : ""},
+        {"source", source != nullptr ? source : ""},
+        {"slot", slot},
+        {"pad", pad},
+        {"fullscreen_requested", fullscreenRequested},
+        {"presentation_active", presentationActive},
+        {"event_fullscreen", eventFullscreen},
+        {"presenter_window", presenterWindow},
+        {"presenter", actorSummary(presenter)},
+        {"listener", actorSummary(listener)},
+        {"speaker", actorSummary(speaker)},
+    };
+
+    updateProviderLatest("message.trace", data);
+    if (!shouldEmitProviderEvent("message.trace", data)) {
+        updateLatestFileIfDue(false);
+        return;
+    }
+
+    json event = makeEnvelope("message.trace", 1, "checkpoint", data);
+    storeEventDirect(event);
+    recordProviderWrite("message.trace", event.dump().size());
+    updateLatestFileIfDue(false);
+}
+
+void recordTalkCameraCheckpoint(const char* phase, int cameraId, bool skipped,
+                                const fopAc_ac_c* cameraPlayer,
+                                const fopAc_ac_c* presenter, const fopAc_ac_c* listener,
+                                const fopAc_ac_c* speaker, int talkCut, int eventAction,
+                                const char* eventActionName, int cameraIsWolf,
+                                int presenterIsWolf, int cameraStyle, int cameraType,
+                                int cameraMode, int midnaRidingVisible) {
+    if (!s_state.enabled) {
+        return;
+    }
+
+    ensureInitialized();
+    if (!s_state.initialized) {
+        return;
+    }
+
+    json data = {
+        {"schema_version", 1},
+        {"phase", phase != nullptr ? phase : ""},
+        {"camera_id", cameraId},
+        {"skipped", skipped},
+        {"talk_cut", talkCut},
+        {"event_action", eventAction},
+        {"event_action_name", eventActionName != nullptr ? eventActionName : ""},
+        {"camera_is_wolf", cameraIsWolf},
+        {"presenter_is_wolf", presenterIsWolf},
+        {"camera_style", cameraStyle},
+        {"camera_type", cameraType},
+        {"camera_mode", cameraMode},
+        {"midna_riding_visible", midnaRidingVisible},
+        {"message_owner_active", coop::message_owner::isActive()},
+        {"message_owner_slot", static_cast<int>(coop::message_owner::currentSlot())},
+        {"event_fullscreen", coop::event_presentation::isFullscreen()},
+        {"event_presenter_slot", static_cast<int>(coop::event_presentation::presenterSlot())},
+        {"event_presenter_window", coop::event_presentation::presenterWindowIndex()},
+        {"camera_player", actorSummary(cameraPlayer)},
+        {"presenter", actorSummary(presenter)},
+        {"listener", actorSummary(listener)},
+        {"speaker", actorSummary(speaker)},
+    };
+
+    updateProviderLatest("camera.talk_trace", data);
+    if (!shouldEmitProviderEvent("camera.talk_trace", data)) {
+        updateLatestFileIfDue(false);
+        return;
+    }
+
+    json event = makeEnvelope("camera.talk_trace", 1, "checkpoint", data);
+    storeEventDirect(event);
+    recordProviderWrite("camera.talk_trace", event.dump().size());
+    updateLatestFileIfDue(false);
+}
+
+void recordTalkCameraViewCheckpoint(const char* phase, int cameraId, int talkCut,
+                                    int talkTimer, int transitionTimer,
+                                    const fopAc_ac_c* presenter,
+                                    const fopAc_ac_c* listener,
+                                    const fopAc_ac_c* speaker,
+                                    const cXyz* viewCenter, const cXyz* viewEye,
+                                    f32 viewRadius, int viewPitch, int viewYaw, f32 viewFovy,
+                                    const cXyz* seededCenter, const cXyz* seededEye,
+                                    f32 seededRadius, int seededPitch, int seededYaw,
+                                    f32 seededFovy, const cXyz* listenerAim,
+                                    const cXyz* speakerAim, const cXyz* listenerSpeakerDelta) {
+    if (!s_state.enabled) {
+        return;
+    }
+
+    ensureInitialized();
+    if (!s_state.initialized) {
+        return;
+    }
+
+    json data = {
+        {"schema_version", 1},
+        {"phase", phase != nullptr ? phase : ""},
+        {"camera_id", cameraId},
+        {"talk_cut", talkCut},
+        {"talk_timer", talkTimer},
+        {"transition_timer", transitionTimer},
+        {"message_owner_active", coop::message_owner::isActive()},
+        {"message_owner_slot", static_cast<int>(coop::message_owner::currentSlot())},
+        {"event_fullscreen", coop::event_presentation::isFullscreen()},
+        {"event_presenter_slot", static_cast<int>(coop::event_presentation::presenterSlot())},
+        {"event_presenter_window", coop::event_presentation::presenterWindowIndex()},
+        {"presenter", actorSummary(presenter)},
+        {"listener", actorSummary(listener)},
+        {"speaker", actorSummary(speaker)},
+        {"view_center", vecSummary(viewCenter)},
+        {"view_eye", vecSummary(viewEye)},
+        {"view_radius", viewRadius},
+        {"view_pitch", viewPitch},
+        {"view_yaw", viewYaw},
+        {"view_fovy", viewFovy},
+        {"seeded_center", vecSummary(seededCenter)},
+        {"seeded_eye", vecSummary(seededEye)},
+        {"seeded_radius", seededRadius},
+        {"seeded_pitch", seededPitch},
+        {"seeded_yaw", seededYaw},
+        {"seeded_fovy", seededFovy},
+        {"listener_aim", vecSummary(listenerAim)},
+        {"speaker_aim", vecSummary(speakerAim)},
+        {"listener_speaker_delta", vecSummary(listenerSpeakerDelta)},
+    };
+
+    updateProviderLatest("camera.talk_view", data);
+    if (!shouldEmitProviderEvent("camera.talk_view", data)) {
+        updateLatestFileIfDue(false);
+        return;
+    }
+
+    json event = makeEnvelope("camera.talk_view", 1, "checkpoint", data);
+    storeEventDirect(event);
+    recordProviderWrite("camera.talk_view", event.dump().size());
+    updateLatestFileIfDue(false);
+}
+
+void recordWolfAoeCheckpoint(const char* phase, const daAlink_c* player, int cameraId,
+                             u32 status0Mask, u32 status1Mask, f32 searchBallScale,
+                             f32 cameraNearRadius, f32 cameraFarRadius, int wolfLockNum,
+                             const fopAc_ac_c* lockActor, f32 cameraFovy, f32 windowAspect,
+                             f32 windowWidth, f32 windowHeight) {
+    if (!s_state.enabled) {
+        return;
+    }
+
+    ensureInitialized();
+    if (!s_state.initialized) {
+        return;
+    }
+
+    json data = alinkWolfAoeSummary(player, status0Mask, status1Mask, searchBallScale,
+                                    cameraNearRadius, cameraFarRadius, wolfLockNum, lockActor,
+                                    cameraFovy, windowAspect, windowWidth, windowHeight);
+    data["schema_version"] = 1;
+    data["phase"] = phase != nullptr ? phase : "";
+    data["camera_id"] = cameraId;
+
+    updateProviderLatest("wolf.aoe_trace", data);
+    if (!shouldEmitProviderEvent("wolf.aoe_trace", data)) {
+        updateLatestFileIfDue(false);
+        return;
+    }
+
+    json event = makeEnvelope("wolf.aoe_trace", 1, "checkpoint", data);
+    storeEventDirect(event);
+    recordProviderWrite("wolf.aoe_trace", event.dump().size());
     updateLatestFileIfDue(false);
 }
 

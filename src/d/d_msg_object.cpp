@@ -28,12 +28,15 @@
 #include "JSystem/JKernel/JKRExpHeap.h"
 #include "dusk/version.hpp"
 #include "dusk/coop/event_owner.h"
+#include "dusk/coop/event_presentation.h"
 #include "dusk/coop/message_owner.h"
+#include "dusk/coop/midna_owner.h"
 #include "dusk/coop/player_button_status.h"
 #include "m_Do/m_Do_controller_pad.h"
 #include "m_Do/m_Do_lib.h"
 
 #if TARGET_PC
+#include "dusk/diagnostics.h"
 #include "dusk/settings.h"
 #include <vector>
 #include <array>
@@ -44,6 +47,53 @@ static void dMsgObject_addFundRaising(s16 param_0);
 static void dMsgObject_addTotalPayment(s16 param_0);
 
 static s16 s_groupID;
+
+#if TARGET_PC
+static void beginCoopInteractiveDialogue(dMsgObject_c* msg,
+                                         dusk::coop::message_owner::BeginSource source) {
+    if (msg == NULL) {
+        return;
+    }
+
+    if (dusk::coop::midna_owner::isServiceActive()) {
+        const dusk::coop::PlayerSlot slot = dusk::coop::midna_owner::currentSlot();
+        // Co-op: Midna transform dialogue uses the retained service slot once the message is live.
+        dusk::coop::message_owner::begin(
+            slot,
+            static_cast<fopAc_ac_c*>(dusk::coop::midna_owner::currentPlayer()),
+            static_cast<fopAc_ac_c*>(dusk::coop::midna_owner::getMidna(slot)),
+            true,
+            source);
+        return;
+    }
+
+    fopAc_ac_c* talkActor = msg->mpTalkActor;
+    if (talkActor == NULL) {
+        talkActor = msg->mpTalkPartner;
+    }
+    if (talkActor == NULL) {
+        talkActor = dComIfGp_event_getTalkPartner();
+    }
+
+    if (talkActor == NULL) {
+        // Co-op: refused dialogue ownership needs an explicit breadcrumb for missing native owners.
+        dusk::diagnostics::recordMessageOwnerCheckpoint(
+            "begin_refused_no_talk_actor", -1, -1, NULL, NULL, NULL, true, false,
+            dusk::coop::event_presentation::isFullscreen(),
+            dusk::coop::event_presentation::presenterWindowIndex(),
+            dusk::coop::message_owner::beginSourceName(source));
+        return;
+    }
+
+    // Co-op: ordinary interactive talks fall back to the event/talk actor owner.
+    dusk::coop::message_owner::begin(
+        dusk::coop::event_owner::ownerSlotForActor(talkActor),
+        static_cast<fopAc_ac_c*>(dusk::coop::event_owner::ownerPlayerForActor(talkActor)),
+        talkActor,
+        true,
+        source);
+}
+#endif
 
 s16 dMsgObject_getGroupID() {
     return s_groupID;
@@ -644,6 +694,10 @@ void dMsgObject_c::setMessageIndex(u32 revoIndex, u32 param_2, bool param_3) {
     }
     if (param_3) {
         mpCtrl->setMessageID(mMessageID, 0, NULL);
+#if TARGET_PC
+        // Co-op: retain dialogue ownership after the native controller accepts the message.
+        beginCoopInteractiveDialogue(this, dusk::coop::message_owner::BeginSource::MessageAccept);
+#endif
     }
 }
 
@@ -673,6 +727,10 @@ void dMsgObject_c::setMessageIndexDemo(u32 revoMsgIndex, bool param_2) {
     mpRefer->setSelMsgPtr(NULL);
     if (param_2) {
         mpCtrl->setMessageID(mMessageID, 0, NULL);
+#if TARGET_PC
+        // Co-op: demo-message presentation starts from the accepted message controller state.
+        beginCoopInteractiveDialogue(this, dusk::coop::message_owner::BeginSource::MessageAcceptDemo);
+#endif
     }
 }
 
@@ -1270,7 +1328,13 @@ void dMsgObject_c::endProc() {
 void dMsgObject_c::deleteProc() {
     // Co-op: dialogue fullscreen presentation lives with the message screen.
     if (dusk::coop::message_owner::isActive()) {
-        dusk::coop::message_owner::end();
+        if (dusk::coop::midna_owner::isServiceActive()) {
+            // Co-op: Midna cancel tears down the message before the same-frame
+            // talk camera has consumed its retained listener/speaker actors.
+            dusk::coop::midna_owner::requestEndService();
+        } else {
+            dusk::coop::message_owner::end();
+        }
     }
 
     if (field_0x148 != NULL) {
@@ -1332,15 +1396,12 @@ void dMsgObject_c::textmodeProc() {
 }
 
 void dMsgObject_c::talkStartInit() {
-    if (isTalkMessage()) {
-        // Co-op: interactive dialogue is a singular surface presented by the
-        // player that accepted it; native dialogue input locking remains global.
-        dusk::coop::message_owner::begin(
-            dusk::coop::event_owner::ownerSlotForActor(mpTalkActor),
-            static_cast<fopAc_ac_c*>(dusk::coop::event_owner::ownerPlayerForActor(mpTalkActor)),
-            mpTalkActor,
-            true);
+#if TARGET_PC
+    if (isTalkMessage() && !dusk::coop::message_owner::isActive()) {
+        // Co-op: fallback only; accepted messages should already own presentation.
+        beginCoopInteractiveDialogue(this, dusk::coop::message_owner::BeginSource::TalkStartFallback);
     }
+#endif
 
     f32 dVar19 = 0.0f;
     JUTFont* local_30 = mDoExt_getMesgFont();
@@ -1791,6 +1852,13 @@ bool dMsgObject_c::getStringLocal(u32 param_1, J2DTextBox* param_2, J2DTextBox* 
             }
             mpRenProc->setCharInfoPtr(NULL);
             field_0x4cd = 1;
+#if TARGET_PC
+            if (dusk::coop::midna_owner::isServiceActive()) {
+                // Co-op: Midna local-string flows are service-owned; passive strings stay uncollapsed.
+                beginCoopInteractiveDialogue(this,
+                                             dusk::coop::message_owner::BeginSource::MidnaLocalString);
+            }
+#endif
             mpCtrl->setMessageID(param_1, 0, NULL);
         }
     } else {

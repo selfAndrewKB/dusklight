@@ -80,7 +80,8 @@ HUD, and vanilla compatibility.
 
 ### `player_button_status`
 
-Owns per-slot Do/R/Z status when ALINK gameplay asks "what action is available to me?".
+Owns per-slot Do/R/Z and wolf X/Y status when ALINK gameplay asks "what action is available to
+me?".
 
 The existing global `dComIfGp_getDoStatus()`, `dComIfGp_getRStatus()`, and `dComIfGp_getZStatus()`
 should remain P1/HUD status until the HUD is expanded. P2 gameplay should read a slot-local answer,
@@ -88,9 +89,10 @@ while P1 still writes the global meter state as before.
 
 First pass implemented:
 
-- `dusk::coop::player_button_status` stores slot-local Do/A/R/Z and 3D prompt status for additional
-  players while P1 still forwards to the vanilla global meter fields.
-- ALINK's prompt write wrappers now route Do/B/A/R/Z/3D status through the acting player slot.
+- `dusk::coop::player_button_status` stores slot-local Do/A/R/Z, wolf X/Y, and 3D prompt status for
+  additional players while P1 still forwards to the vanilla global meter fields.
+- ALINK's prompt write wrappers now route Do/B/A/R/Z, wolf X/Y, and 3D status through the acting
+  player slot.
 - ALINK gameplay reads of Do/R status now use owner-local wrappers, so P2 guard/action branches do
   not consume P1's prompt state after setting their own.
 - Message progression reads A/B input from the event owner, so P2-started dialogue can advance from
@@ -112,11 +114,12 @@ First pass implemented:
   a split-screen viewport.
 - P1 continues to read the vanilla global meter state when split screen is off and during P1's HUD
   pass.
-- Secondary HUD prompt passes read Do/A/R/Z/3D status and Do/A/R/Z flags from
-  `player_button_status`, then refresh only the meter button panes before drawing.
+- Secondary HUD prompt passes read Do/A/R/Z/3D status, wolf X/Y status, and their emphasis flags
+  from `player_button_status`, then refresh only the meter button panes before drawing.
 - `dMeter2Draw_c` draws a secondary button/item HUD pass into the P2 split-screen viewport,
-  including the shared assigned-item cluster and slot-local A/Do prompt text. Menu, pause, map, and
-  full inventory presentation remain P1/global for this first pass.
+  including the shared assigned-item cluster, slot-local A/Do prompt text, and the native human/wolf
+  upper-right button branch for the presented slot. Menu, pause, map, and full inventory
+  presentation remain P1/global for this first pass.
 - `dMeter2_c` owns a separate secondary `dMeterButton_c` emphasis prompt for P2's center action
   prompt, because the native emphasis prompt is stateful and is consumed later through the 2D
   draw-list. The secondary prompt draws into P2's viewport through `hud_owner` state instead of
@@ -236,14 +239,18 @@ Midna transform ownership first pass:
   movement/input lock remains in place.
 - Interactive dialogue is an explicit `event_presentation::Source::Dialogue` consumer. The retained
   presenter camera expands fullscreen, non-presenters skip the singular talk-camera update, and
-  passive message overlays remain out of scope until separately classified.
+  passive message overlays remain out of scope until separately classified. Presentation begins after
+  `mpCtrl->setMessageID()` accepts the message, with `talkStartInit()` kept as fallback insurance so
+  ownership follows committed native message state.
 - Midna talk cameras resolve the listener ALINK and speaker Midna from the retained message owner
-  instead of borrowing P1's global Midna/form state.
+  instead of borrowing P1's global Midna/form state. Owned talk-camera fallback branches must use
+  `message_owner`'s presenter/listener actor instead of camera `mpPlayerActor`.
 - Wolf lock/AOE state now uses actor-local lock target fields plus slot-local
-  `player_camera_status` bits for dome/lock-attack camera state. The wolf enemy-search thunk calls
+  `player_camera_status` bits for the full charge/dome/lock camera lifecycle:
+  `0x40000000` charge, `0x800000` dome, and `0x1000000` lock attack. The wolf enemy-search thunk calls
   the acting ALINK's `searchWolfLockEnemy()` rather than P1's global ALINK.
-- Wolf upper-right HUD predicates read through the active `hud_owner` slot so P2 does not inherit
-  P1's wolf button presentation, and P1 does not inherit P2's.
+- Wolf upper-right HUD predicates and X/Y wolf prompt statuses read through the active `hud_owner`
+  slot so P2 does not inherit P1's wolf button presentation, and P1 does not inherit P2's.
 
 ### `interaction_owner`
 
@@ -290,7 +297,7 @@ sequence.
    - Route owner-camera lock-on reads through the same attention owner.
 
 2. Add per-slot action/R/Z status reads for ALINK gameplay and prompt HUD presentation. First pass complete.
-   - ALINK Do/A/R/Z/3D prompt writes are slot-owned.
+   - ALINK Do/A/R/Z/3D and wolf X/Y prompt writes are slot-owned.
    - ALINK Do/R gameplay reads now use the acting player's prompt owner.
    - Split-screen prompt HUD replay reads slot-local prompt state through `hud_owner`.
    - Slot-local X/Y assignments, item HUD snapshots, and the singular owner-aware wheel now route
