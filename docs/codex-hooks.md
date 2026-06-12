@@ -28,6 +28,7 @@ The hooks are guardrails, not a replacement for judgment. They exist to preserve
 - Remind enemy-targeting edits that `EnemyTargetResult::slot` is the durable identity and `EnemyTargetResult::localActor` is the local process pointer; do not reintroduce old `result.actor` usage in enemy patches.
 - Remind damage-owner edits that nearest player and current enemy target do not answer "who hit me?"; route cut type/count, weapon-owner, hit direction, and hit-reaction ownership through `dusk::coop::damage_owner`.
 - Remind selected-target-state edits that target speed, facing, position, form, horse, swim, guard, and damage-state reads belong behind `dusk::coop::selected_target_state` once target identity is known.
+- Remind enemy steering edits that obstacle checks, detour angles, chase line probes, and home-range checks after target selection are selected-target state, while group "any active player near this teammate" checks belong to `player_query`.
 - Remind defender/collision-owner edits that damage-owner, nearest player, selected target, and P1 globals do not answer "who did my attack touch?"; route enemy-attack guard/block/defender-state checks through `dusk::coop::defender_owner`.
 - Remind caught/stun-owner edits that targeting and damage ownership do not answer "which player is retained by this effect?"; route scream/stun/grab/carry/hang release ownership through a retained owner API such as `dusk::coop::caught_stun_owner`, and name local pointer caches explicitly, such as `localPlayerActor` or `affectedLocalActors`.
 - Remind enemy batch-conversion edits to update `docs/coop-enemy-audit.md` with every deferred or intentionally untouched API surface discovered while patching: camera/presentation ownership, master/child or spawned-enemy ownership, hookshot/item awareness, caught/grab/swallow/hang ownership, culling/render visibility, and remaining P1/global reads.
@@ -64,6 +65,7 @@ The hooks are guardrails, not a replacement for judgment. They exist to preserve
   - Also reminds enemy-targeting edits to consume `EnemyTargetResult::localActor` rather than any old `actor` field; selected-target snapshots may still expose `SelectedTargetState::actor`.
   - Also reminds enemy/damage edits that hit-reaction ownership belongs to `damage_owner`, not nearest-player or current-target policy.
   - Also reminds enemy/player-state edits that selected target facts belong to `selected_target_state`, not direct P1 globals or new nearest-player guesses.
+  - Also reminds enemy steering edits that selected-target pathing/obstacle facts should not fall back to P1 or fresh nearest-player guesses.
   - Also reminds enemy/collision edits that defender contact belongs to `defender_owner`, not damage-owner, targeting, or primary-player state.
   - Also reminds enemy/caught-state edits that retained stun/grab/carry/hang effects need a retained owner slot, not nearest-player or current-target recomputation.
   - Also reminds enemy batch work to record deferred API hooks in the enemy audit row before moving to the next enemy.

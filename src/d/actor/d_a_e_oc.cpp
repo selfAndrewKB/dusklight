@@ -19,6 +19,7 @@
 #include "dusk/coop/damage_owner.h"
 #include "dusk/coop/defender_owner.h"
 #include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/player_query.h"
 #include "dusk/coop/selected_target_state.h"
 #endif
 #include <cstring>
@@ -249,7 +250,8 @@ static bool coOpSelectCombatTarget(daE_OC_c* i_this, const char* label, bool com
 // through selected_target_state instead of letting actor code read a raw player pointer directly.
 static bool coOpSelectCombatTargetState(
     daE_OC_c* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
-    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance, s16* angle_y) {
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance, s16* angle_y,
+    dusk::coop::EnemyTargetResult* result = NULL) {
     dusk::coop::EnemyTargetContext context;
     context.observer = i_this;
     context.scope = dusk::coop::EnemyTargetScope::Combat;
@@ -258,6 +260,11 @@ static bool coOpSelectCombatTargetState(
     context.committed = committed;
 
     const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    // Co-op: callers that diagnose steering need the exact policy result used for this snapshot,
+    // not a second target query that could drift within the same actor tick.
+    if (result != NULL) {
+        *result = target;
+    }
     const dusk::coop::selected_target_state::SelectedTargetState targetState =
         dusk::coop::selected_target_state::stateForEnemyTarget(target);
     dusk::coop::selected_target_state::recordSelectedTargetState(
@@ -327,6 +334,77 @@ static int coOpAttackBck(daE_OC_c* i_this) {
     return -1;
 }
 
+// Co-op: steering diagnostics compare the selected target against P1/nearest-player facts so we
+// can distinguish valid native backpedal from stale singleton pull during P2 pursuit.
+static f32 coOpDistanceToPrimary(daE_OC_c* i_this) {
+    fopAc_ac_c* primary = dusk::coop::getPlayer(dusk::coop::PlayerSlot::Primary);
+    if (primary == NULL) {
+        return 0.0f;
+    }
+
+    return i_this->current.pos.abs(primary->current.pos);
+}
+
+static f32 coOpDistanceXZToPrimary(daE_OC_c* i_this) {
+    fopAc_ac_c* primary = dusk::coop::getPlayer(dusk::coop::PlayerSlot::Primary);
+    if (primary == NULL) {
+        return 0.0f;
+    }
+
+    return i_this->current.pos.absXZ(primary->current.pos);
+}
+
+// Co-op: group battle participation asks whether any active player is in range, not only P1.
+static bool coOpBokoblinHasActivePlayerInRange(daE_OC_c* i_this) {
+    const dusk::coop::PlayerQueryResult nearest =
+        dusk::coop::findNearestPlayer(i_this, "e_oc.group_battle");
+    return nearest.found && nearest.distance < i_this->getPlayerRange();
+}
+
+static void coOpRecordSteeringProbe(
+    daE_OC_c* i_this, const char* label, int action, int state,
+    const dusk::coop::EnemyTargetResult& target, f32 target_distance, s16 target_angle,
+    f32 speed_f, bool detour_just_set, s16 detour_timer, s16 detour_angle, bool move_out,
+    f32 home_distance, f32 move_range) {
+    const dusk::coop::PlayerQueryResult nearest =
+        dusk::coop::findNearestPlayer(i_this, "e_oc.steering");
+    dusk::coop::bokoblin_attack_probe::BokoblinSteeringProbe probe;
+    probe.actor = reinterpret_cast<uintptr_t>(i_this);
+    probe.actorId = fopAcM_GetID(i_this);
+    probe.action = action;
+    probe.state = state;
+    if (label != NULL) {
+        std::strncpy(probe.label, label, sizeof(probe.label) - 1);
+    }
+    probe.targetSlot = target.slot;
+    probe.targetFound = target.found;
+    probe.targetDistance = target_distance;
+    probe.targetDistanceXZ = target.distanceXZ;
+    probe.targetAngleY = target_angle;
+    probe.nearestSlot = nearest.slot;
+    probe.nearestFound = nearest.found;
+    probe.nearestDistance = nearest.distance;
+    probe.nearestDistanceXZ = nearest.distanceXZ;
+    probe.p1Distance = coOpDistanceToPrimary(i_this);
+    probe.p1DistanceXZ = coOpDistanceXZToPrimary(i_this);
+    probe.speedF = speed_f;
+    probe.shapeAngleY = i_this->shape_angle.y;
+    probe.detourActive = detour_timer != 0;
+    probe.detourJustSet = detour_just_set;
+    probe.detourTimer = detour_timer;
+    probe.detourAngleY = detour_angle;
+    probe.moveOut = move_out;
+    probe.homeDistance = home_distance;
+    probe.moveRange = move_range;
+    // Co-op: this diagnostic flags any additional-player chase where P1 is closer, not only P2,
+    // so future slots can expose the same stale-singleton steering symptom.
+    probe.p1CloserThanTarget = target.found &&
+                               target.slot != dusk::coop::PlayerSlot::Invalid &&
+                               target.slot != dusk::coop::PlayerSlot::Primary &&
+                               probe.p1Distance < target_distance;
+    dusk::coop::bokoblin_attack_probe::recordBokoblinSteeringProbe(probe);
+}
+
 static bool coOpIsBokoblinGuardBounceWindow(daE_OC_c* i_this, f32 frame) {
     if (!i_this->checkBck(5) && !i_this->checkBck(6)) {
         return false;
@@ -351,7 +429,13 @@ static void* s_other_oc(void* arg_lhs, void* arg_rhs) {
                 if (dist < l_HIO.battle_participation_radius) {
                     dist = ((fopAc_ac_c*) arg_lhs)->current.pos.absXZ(((fopAc_ac_c*) arg_rhs)->home.pos);
                     if (dist < ((daE_OC_c*) arg_rhs)->getMoveRange()) {
+#if TARGET_PC
+                        // Co-op: nearby Bokoblin battle participation follows any active player
+                        // near the already-engaged teammate, not only P1 near that teammate.
+                        if (coOpBokoblinHasActivePlayerInRange((daE_OC_c*) arg_lhs)) {
+#else
                         if (fopAcM_searchPlayerDistance((fopAc_ac_c*) arg_lhs) < ((daE_OC_c*) arg_lhs)->getPlayerRange()) {
+#endif
                             E_OC_n::m_battle_oc = (daE_OC_c*) arg_lhs;
                         }
                     }
@@ -634,15 +718,14 @@ int daE_OC_c::checkBeforeBg() {
     return 0;
 }
 
-bool daE_OC_c::checkBeforeBgFind() {
+bool daE_OC_c::checkBeforeBgFindAt(const cXyz& target_pos, s16 target_angle) {
     dBgS_LinChk line_chk;
     cXyz oc_pos;
     cXyz plyr_pos;
     cXyz my_vec_2;
-    s16 pl_ang = fopAcM_searchPlayerAngleY(this);
     oc_pos = current.pos;
     oc_pos.y += 100.0f;
-    plyr_pos = daPy_getPlayerActorClass()->current.pos;
+    plyr_pos = target_pos;
     plyr_pos.y += 100.0f;
     line_chk.Set(&oc_pos, &plyr_pos, NULL);
     if (!dComIfG_Bgsp().LineCross(&line_chk)) {
@@ -650,16 +733,16 @@ bool daE_OC_c::checkBeforeBgFind() {
     }
 
     my_vec_2 = plyr_pos;
-    plyr_pos.x += cM_ssin(pl_ang + 0x4000) * 300.0f;
-    plyr_pos.z += cM_scos(pl_ang + 0x4000) * 300.0f;
+    plyr_pos.x += cM_ssin(target_angle + 0x4000) * 300.0f;
+    plyr_pos.z += cM_scos(target_angle + 0x4000) * 300.0f;
     line_chk.Set(&oc_pos, &plyr_pos, NULL);
     if (!dComIfG_Bgsp().LineCross(&line_chk)) {
         field_0x6da = (s16) cLib_targetAngleY(&oc_pos, &plyr_pos);
         return true;
     }
 
-    my_vec_2.x += cM_ssin(pl_ang - 0x4000) * 300.0f;
-    my_vec_2.z += cM_scos(pl_ang - 0x4000) * 300.0f;
+    my_vec_2.x += cM_ssin(target_angle - 0x4000) * 300.0f;
+    my_vec_2.z += cM_scos(target_angle - 0x4000) * 300.0f;
     line_chk.Set(&oc_pos, &my_vec_2, NULL);
     if (!dComIfG_Bgsp().LineCross(&line_chk)) {
         field_0x6da = (s16) cLib_targetAngleY(&oc_pos, &my_vec_2);
@@ -668,6 +751,10 @@ bool daE_OC_c::checkBeforeBgFind() {
         field_0x6da = (s16) cLib_targetAngleY(&oc_pos, &plyr_pos);
         return true;
     }
+}
+
+bool daE_OC_c::checkBeforeBgFind() {
+    return checkBeforeBgFindAt(daPy_getPlayerActorClass()->current.pos, fopAcM_searchPlayerAngleY(this));
 }
 
 bool daE_OC_c::checkBeforeFloorBg(f32 arg) {
@@ -1318,9 +1405,14 @@ void daE_OC_c::executeFind() {
     s16 pl_ang = fopAcM_searchPlayerAngleY(this);
     f32 pl_dist = fopAcM_searchPlayerDistance(this);
 #if TARGET_PC
-    // Co-op: once alerted, keep basic chase steering on the policy-selected target.
-    coOpSelectCombatTarget(this, "e_oc.find", false, dusk::coop::EnemyTargetMode::StickyCombat,
-                           NULL, &pl_dist, &pl_ang);
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    dusk::coop::EnemyTargetResult targetResult;
+    bool detour_just_set = false;
+    // Co-op: once alerted, chase and obstacle steering use facts from the policy-selected target,
+    // not fresh P1 globals or nearest-player guesses.
+    coOpSelectCombatTargetState(this, "e_oc.find", false,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
+                                &pl_dist, &pl_ang, &targetResult);
 #endif
     if (mOcState < 3 || !setWatchMode()) {
         if (field_0x6b4 == 2 && !dComIfGp_event_runCheck()) {
@@ -1387,6 +1479,13 @@ void daE_OC_c::executeFind() {
                         setActionMode(E_OC_ACTION_FIND_STAY, 0);
                     }
 
+#if TARGET_PC
+                    coOpRecordSteeringProbe(this, "e_oc.find.floor", E_OC_ACTION_FIND, mOcState,
+                                            targetResult, pl_dist, pl_ang, speedF,
+                                            detour_just_set, field_0x6ce, field_0x6da,
+                                            field_0x6e3 != 0, home.pos.abs(current.pos),
+                                            mMoveRange);
+#endif
                     return;
                 }
 
@@ -1399,9 +1498,16 @@ void daE_OC_c::executeFind() {
                 if (field_0x6ce) {
                     current.angle.y = field_0x6da;
                 } else {
+#if TARGET_PC
+                    if (targetState.available && checkBeforeBgFindAt(targetState.pos, pl_ang)) {
+                        field_0x6ce = 20;
+                        detour_just_set = true;
+                    }
+#else
                     if (checkBeforeBgFind()) {
                         field_0x6ce = 20;
                     }
+#endif
                 }
 
                 if (!dComIfGp_event_runCheck()) {
@@ -1419,6 +1525,14 @@ void daE_OC_c::executeFind() {
                                 }
                             }
 
+#if TARGET_PC
+                            coOpRecordSteeringProbe(this, "e_oc.find.attack_gate",
+                                                    E_OC_ACTION_FIND, mOcState, targetResult,
+                                                    pl_dist, pl_ang, speedF, detour_just_set,
+                                                    field_0x6ce, field_0x6da,
+                                                    field_0x6e3 != 0, home.pos.abs(current.pos),
+                                                    mMoveRange);
+#endif
                             return;
                         }
                     } else {
@@ -1525,6 +1639,11 @@ void daE_OC_c::executeFind() {
                 break;
         }
     }
+#if TARGET_PC
+    coOpRecordSteeringProbe(this, "e_oc.find", E_OC_ACTION_FIND, mOcState, targetResult, pl_dist,
+                            pl_ang, speedF, detour_just_set, field_0x6ce, field_0x6da,
+                            field_0x6e3 != 0, home.pos.abs(current.pos), mMoveRange);
+#endif
 }
 
 void daE_OC_c::setWeaponGroundAngle() {
@@ -2518,16 +2637,23 @@ void daE_OC_c::executeFindStay() {
     s16 target_angle = fopAcM_searchPlayerAngleY(this);
     f32 target_dist = fopAcM_searchPlayerDistance(this);
 #if TARGET_PC
+    dusk::coop::EnemyTargetResult target_result;
     // Co-op: keep the close-range face/attack gate pointed at the policy-selected target.
     coOpSelectCombatTarget(this, "e_oc.find_stay", false,
                            dusk::coop::EnemyTargetMode::StickyCombat, NULL, &target_dist,
-                           &target_angle);
+                           &target_angle, &target_result);
 #endif
     mPrevShapeAngle = target_angle;
     mBattleOn = true;
 
     if (!checkBeforeFloorBg(200.0f)) {
         setActionMode(E_OC_ACTION_FIND, 0);
+#if TARGET_PC
+        coOpRecordSteeringProbe(this, "e_oc.find_stay.floor", E_OC_ACTION_FIND_STAY, mOcState,
+                                target_result, target_dist, target_angle, speedF, false,
+                                field_0x6ce, field_0x6da, false, home.pos.abs(current.pos),
+                                mMoveRange);
+#endif
         return;
     }
 
@@ -2569,20 +2695,40 @@ void daE_OC_c::executeFindStay() {
                     setActionMode(E_OC_ACTION_ATTACK, 0);
                 }
 
+#if TARGET_PC
+                coOpRecordSteeringProbe(this, "e_oc.find_stay.attack_gate",
+                                        E_OC_ACTION_FIND_STAY, mOcState, target_result,
+                                        target_dist, target_angle, speedF, false, field_0x6ce,
+                                        field_0x6da, false, home.pos.abs(current.pos),
+                                        mMoveRange);
+#endif
                 return;
             }
 
             if (!searchPlayer2()) {
                 setActionMode(E_OC_ACTION_WAIT, 0);
+#if TARGET_PC
+                coOpRecordSteeringProbe(this, "e_oc.find_stay.lost", E_OC_ACTION_FIND_STAY,
+                                        mOcState, target_result, target_dist, target_angle,
+                                        speedF, false, field_0x6ce, field_0x6da, false,
+                                        home.pos.abs(current.pos), mMoveRange);
+#endif
                 return;
             }
         }
     }
+#if TARGET_PC
+    coOpRecordSteeringProbe(this, "e_oc.find_stay", E_OC_ACTION_FIND_STAY, mOcState,
+                            target_result, target_dist, target_angle, speedF, false,
+                            field_0x6ce, field_0x6da, false, home.pos.abs(current.pos),
+                            mMoveRange);
+#endif
 }
 
 void daE_OC_c::executeMoveOut() {
 #if TARGET_PC
     dusk::coop::selected_target_state::SelectedTargetState targetState;
+    dusk::coop::EnemyTargetResult targetResult;
 #endif
     f32 player_distance = fopAcM_searchPlayerDistance(this);
     s16 target_angle = fopAcM_searchPlayerAngleY(this);
@@ -2590,7 +2736,7 @@ void daE_OC_c::executeMoveOut() {
     // Co-op: retreat/re-engage steering and home-range checks use the selected target's state.
     coOpSelectCombatTargetState(this, "e_oc.move_out", false,
                                 dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
-                                &player_distance, &target_angle);
+                                &player_distance, &target_angle, &targetResult);
 #endif
     s16 home_angle = cLib_targetAngleY(&home.pos, &current.pos);
     mBattleOn = true;
@@ -2648,6 +2794,13 @@ void daE_OC_c::executeMoveOut() {
                 cLib_chaseF(&speedF, -15.0f, 1.0f);
                 if (home.pos.abs(current.pos) < mMoveRange - 200.0f) {
                     setActionMode(E_OC_ACTION_FIND, 0);
+#if TARGET_PC
+                    coOpRecordSteeringProbe(this, "e_oc.move_out.home", E_OC_ACTION_MOVE_OUT,
+                                            mOcState, targetResult, player_distance,
+                                            target_angle, speedF, false, field_0x6ce,
+                                            field_0x6da, true, home.pos.abs(current.pos),
+                                            mMoveRange);
+#endif
                     return;
                 }
             }
@@ -2664,6 +2817,13 @@ void daE_OC_c::executeMoveOut() {
                 if (home.pos.abs(daPy_getPlayerActorClass()->current.pos) < (mMoveRange - 200.0f)) {
 #endif
                     setActionMode(E_OC_ACTION_FIND, 0);
+#if TARGET_PC
+                    coOpRecordSteeringProbe(this, "e_oc.move_out.target_home",
+                                            E_OC_ACTION_MOVE_OUT, mOcState, targetResult,
+                                            player_distance, target_angle, speedF, false,
+                                            field_0x6ce, field_0x6da, true,
+                                            home.pos.abs(current.pos), mMoveRange);
+#endif
                     return;
                 }
 
@@ -2674,6 +2834,13 @@ void daE_OC_c::executeMoveOut() {
                     if (home.pos.abs(daPy_getPlayerActorClass()->current.pos) > mMoveRange + 200.0f) {
 #endif
                         setActionMode(E_OC_ACTION_WAIT, 0);
+#if TARGET_PC
+                        coOpRecordSteeringProbe(this, "e_oc.move_out.wait",
+                                                E_OC_ACTION_MOVE_OUT, mOcState, targetResult,
+                                                player_distance, target_angle, speedF, false,
+                                                field_0x6ce, field_0x6da, true,
+                                                home.pos.abs(current.pos), mMoveRange);
+#endif
                         return;
                     }
                 }
@@ -2683,10 +2850,22 @@ void daE_OC_c::executeMoveOut() {
                         setActionMode(E_OC_ACTION_ATTACK, 0);
                     }
 
+#if TARGET_PC
+                    coOpRecordSteeringProbe(this, "e_oc.move_out.attack_gate",
+                                            E_OC_ACTION_MOVE_OUT, mOcState, targetResult,
+                                            player_distance, target_angle, speedF, false,
+                                            field_0x6ce, field_0x6da, true,
+                                            home.pos.abs(current.pos), mMoveRange);
+#endif
                     return;
                 }
             }
     }
+#if TARGET_PC
+    coOpRecordSteeringProbe(this, "e_oc.move_out", E_OC_ACTION_MOVE_OUT, mOcState, targetResult,
+                            player_distance, target_angle, speedF, false, field_0x6ce,
+                            field_0x6da, true, home.pos.abs(current.pos), mMoveRange);
+#endif
 }
 
 bool daE_OC_c::checkWaterSurface() {

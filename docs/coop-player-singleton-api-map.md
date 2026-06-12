@@ -37,6 +37,13 @@ reads after the enemy already has a target: target speed, facing, form, horse st
 guard state, damage state, or similar facts. These should follow the selected target, not P1 and not
 a fresh nearest-player query.
 
+Pathing and obstacle steering after an enemy has selected a combat target are selected-target state
+too. If a chase state has already retained P2, detour angles, obstacle line checks, and move-out
+home-range decisions should sample that selected player's position/angle rather than asking P1 or
+running a new nearest-player selection. Group wake-up or battle-participation checks are different:
+when the vanilla question is "is any active player close enough to this teammate?", use
+`player_query` directly instead of sticky combat targeting.
+
 `defender_owner` answers **"who did my attack touch?"** These are enemy-attack contact reads such as
 "which player blocked this swing?" They are separate from `damage_owner` because the enemy is the
 attacker and the player is the defender.
@@ -101,6 +108,8 @@ to the requesting player slot.
 | "Who is this enemy fighting right now?" | `dusk::coop::enemy_targeting` | Implemented for scoped combat targeting |
 | "Who caused this hit?" | `dusk::coop::damage_owner` | Implemented for direct players and known owned items |
 | "What is the selected target's form/speed/guard/horse/swim/damage state?" | `dusk::coop::selected_target_state` | Initial implementation for target speed/facing/position/cut/horse facts |
+| "What position/angle should this enemy use for chase detours after it already selected a target?" | `dusk::coop::selected_target_state` | Bokoblin obstacle steering proof uses selected target facts instead of P1 globals |
+| "Is any active player near this enemy/teammate for group wake-up?" | `dusk::coop::player_query` | Bokoblin group battle participation uses nearest active-player facts |
 | "Who did this enemy attack touch, and was that player guarding/blocking?" | `dusk::coop::defender_owner` | Initial direct-player implementation for Bokoblin guard collision |
 | "Which player collided, rode, pushed, stood on, or picked this up?" | broader collision-owner helpers | Not implemented yet |
 | "Which player is caught, stunned, grabbed, carried, swallowed, or retained by this actor?" | `dusk::coop::caught_stun_owner` / future caught-grab helpers | Initial implementation for Gibdo scream stun |

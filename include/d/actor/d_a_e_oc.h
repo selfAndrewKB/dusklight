@@ -31,6 +31,7 @@ public:
     bool searchPlayerShakeHead();
     bool searchSound();
     int checkBeforeBg();
+    bool checkBeforeBgFindAt(const cXyz& target_pos, s16 target_angle);
     bool checkBeforeBgFind();
     bool checkBeforeFloorBg(f32);
     void checkDamageBg();

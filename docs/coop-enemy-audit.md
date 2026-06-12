@@ -62,7 +62,7 @@ collision-owner, render/visibility culling, or story/demo/global state.
 | Actor | Name | File | Profile | Current State | Notes |
 | --- | --- | --- | --- | --- | --- |
 | Hanging Helmasaur | Hanging Helmasaur | `src/d/actor/d_a_e_hm.cpp` | `E_HM` | raw-query proof | Only `e_hm.up_wait` wake/proximity is converted. Other combat and damage behavior remains P1/global. |
-| Basic Bokoblin | Bokoblin | `src/d/actor/d_a_e_oc.cpp` | `E_OC` | policy-backed targeting, owner APIs validated | Search, head-search, find/chase, move-out, attack gates, and follow-through use `enemy_targeting`; sword-sound awareness uses `selected_target_state`; sword hit reactions use `damage_owner`; guard collision uses `defender_owner`. |
+| Basic Bokoblin | Bokoblin | `src/d/actor/d_a_e_oc.cpp` | `E_OC` | policy-backed targeting, owner APIs validated | Search, head-search, find/chase, move-out, attack gates, and follow-through use `enemy_targeting`; chase obstacle steering and sword-sound awareness use `selected_target_state`; group battle participation uses active-player `player_query`; sword hit reactions use `damage_owner`; guard collision uses `defender_owner`. |
 | Tektite | Tektite | `src/d/actor/d_a_e_tt.cpp` | `E_TT` | policy-backed targeting, owner APIs validated | Search/chase/attack/out-range use `enemy_targeting`; ordinary target facts and first-attack prediction use `selected_target_state`; cut reactions use `damage_owner`. Culling remains render/visibility work. |
 | Stalhound | Stalhound | `src/d/actor/d_a_e_sh.cpp` | `E_SH` | policy-backed targeting, first-pass validated | Central target metrics, movement speed, attack commitment, head tracking, and damage knockback angle route through the co-op API families. No P1 guard-state read was found; attack shield response currently uses the collision `ChkAtShieldHit()` flag. First surface test looked good. |
 | Stalchild | Stalchild | `src/d/actor/d_a_e_bs.cpp` | `E_BS` | policy-backed targeting, first-pass validated | Swarm-style ground melee proof. Recognition, chase/attack target metrics, attack-facing checks, head tracking, and attack guard response route through the co-op API families. |
@@ -270,7 +270,7 @@ The table below is machine-assisted from `src/d/actor/d_a_e_*.cpp` and profile s
 
 | Priority | Actor/File | Profile | Lookup Count | Initial Classification | Notes |
 | --- | --- | --- | ---: | --- | --- |
-| Done proof | `d_a_e_oc.cpp` | `E_OC` | 48 | regular melee | First regular-enemy proof; targeting, damage-owner, selected-target-state, and defender-owner paths are validated. |
+| Done proof | `d_a_e_oc.cpp` | `E_OC` | 48 | regular melee | First regular-enemy proof; targeting, damage-owner, selected-target-state, defender-owner, selected-target obstacle steering, and active-player group participation paths are validated. |
 | Done proof | `d_a_e_hm.cpp` | `E_HM` | low | proximity enemy | One wake trigger converted; full combat not audited. |
 | High risk | `d_a_e_wb.cpp` | `E_WB` | 75 | mounted/boss/setpiece likely | Very high singleton density; defer until ordinary enemies are stable. |
 | High risk | `d_a_e_po.cpp` | `E_PO` | 63 | special/ghost-like | High singleton density; classify before patching. |
@@ -307,6 +307,7 @@ Use these groups to minimize manual per-enemy work. Each group should map to reu
 | Proximity/contact | Enemy reacts mostly through collision or a small wake radius | Collision-owner pass plus small query helpers where explicit search exists | `E_HM`, `E_BI`, `E_SM`, `E_SM2` | Hookshot/carry interactions, contact owner attribution |
 | Vertical/flying/ranged | Enemy needs height, line-of-sight, projectile aim, or flight behavior | Later policy profile with vertical scoring and target-state helpers | `E_BU`, `E_GE`, `E_PH`, `E_YK`, `E_YR`, `E_FB` | Camera/story flyers, rider-carry paths |
 | Target-state-sensitive | Enemy decision depends on target form/speed/guard/swim/damage state | Use `dusk::coop::selected_target_state` after the target identity is known | `E_WW`, `E_GI`, `E_KK`, `E_BA` | Accidentally reading P1 state for P2, or replacing protagonist-only state |
+| Pathing/steering after target lock | Enemy already has a combat target, then samples player position/angle for detours, obstacle checks, or chase steering | Use selected-target state derived from the retained `enemy_targeting` result; do not run a fresh nearest-player query | `E_OC` first proof | P1-derived detour angles fighting a P2 combat target |
 | Enemy-attack defender contact | Enemy attack collider hits a player, then code checks guard/block/defender state | Use `dusk::coop::defender_owner`; direct-player V1 proof surface is Bokoblin guard collision | `E_OC`, later humanoid melee enemies | Confusing defender identity with damage-owner or current target |
 | Damage-owner | Enemy reaction depends on who hit it | Separate damage ownership API, later aggro/threat bias | Many humanoids and item-reactive enemies | Treating attacker identity as nearest target |
 | Caught/grab-owner | Enemy captures or carries a specific player | Separate caught/grab ownership model | `E_ST`, `E_DF`, `E_SW`, grab-heavy files | Nearest-player retarget during a grab |
@@ -403,7 +404,7 @@ This inventory is generated from `src/d/actor/d_a_e_*.cpp` file names and `g_pro
 | `d_a_e_ms.cpp` | `E_MS` | 7 | regular/helper hybrid | skull/carry-object interaction paths |
 | `d_a_e_nest.cpp` | `E_NEST` | 11 | spawner/nest likely |  |
 | `d_a_e_nz.cpp` | `E_NZ` | 4 | regular small enemy candidate | stick behavior needs owner audit |
-| `d_a_e_oc.cpp` | `E_OC` | 49 | regular melee | raw-query proof validated; policy-backed targeting V1 implemented for existing proof systems |
+| `d_a_e_oc.cpp` | `E_OC` | 49 | regular melee | raw-query proof validated; policy-backed targeting V1 implemented for existing proof systems; selected-target obstacle steering and active-player group participation covered |
 | `d_a_e_oct_bg.cpp` | `E_OctBg` | 8 | water/special enemy | large aquatic predator (Oct = Octorok-like, Bg = Big); born_swim/swim/chase_core/normal_attack; water enemy, defer until water-targeting policy exists |
 | `d_a_e_ot.cpp` | `E_OT` | 8 | swarm/spawner likely | water egg-hatcher; born/swim/damage animations; 20 egg spawn positions; soft-body collision; likely spawns from a parent |
 | `d_a_e_ph.cpp` | `E_PH` | 14 | regular enemy candidate | Peahat; file comment "Peahat Enemy"; appear/wait/fly/hang/damage; good audit candidate after ground-enemy wave |

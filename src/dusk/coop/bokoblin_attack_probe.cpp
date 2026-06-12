@@ -23,11 +23,15 @@ struct AttackRunState {
 };
 
 BokoblinAttackProbeDebugState s_debugState;
+static_assert(kProbeCount == 16, "Bokoblin probe arrays intentionally match debug state capacity");
+BokoblinSteeringProbeDebugState s_steeringDebugState;
 AttackRunState s_runs[kProbeCount] = {};
 u32 s_currentSimFrame = 0;
 u64 s_nextEventId = 1;
+u64 s_nextSteeringEventId = 1;
 int s_nextRunEvict = 0;
 int s_nextProbeEvict = 0;
+int s_nextSteeringEvict = 0;
 
 AttackRunState* findRun(uintptr_t actor) {
     for (AttackRunState& run : s_runs) {
@@ -65,6 +69,30 @@ BokoblinAttackProbe* findProbe(uintptr_t actor) {
     return &s_debugState.probes[s_nextProbeEvict++ % kProbeCount];
 }
 
+int speedSign(f32 speed) {
+    if (speed > 0.05f) {
+        return 1;
+    }
+    if (speed < -0.05f) {
+        return -1;
+    }
+    return 0;
+}
+
+BokoblinSteeringProbe* findSteeringProbe(uintptr_t actor) {
+    for (int i = 0; i < s_steeringDebugState.probeCount; i++) {
+        if (s_steeringDebugState.probes[i].actor == actor) {
+            return &s_steeringDebugState.probes[i];
+        }
+    }
+
+    if (s_steeringDebugState.probeCount < kProbeCount) {
+        return &s_steeringDebugState.probes[s_steeringDebugState.probeCount++];
+    }
+
+    return &s_steeringDebugState.probes[s_nextSteeringEvict++ % kProbeCount];
+}
+
 bool sameSemanticState(const BokoblinAttackProbe& lhs, const BokoblinAttackProbe& rhs) {
     return lhs.action == rhs.action && lhs.state == rhs.state && lhs.bck == rhs.bck &&
            lhs.targetSlot == rhs.targetSlot && lhs.targetFound == rhs.targetFound &&
@@ -80,11 +108,22 @@ bool sameSemanticState(const BokoblinAttackProbe& lhs, const BokoblinAttackProbe
            lhs.sphere1.guarded == rhs.sphere1.guarded && lhs.loopSuspect == rhs.loopSuspect;
 }
 
+bool sameSteeringSemanticState(const BokoblinSteeringProbe& lhs,
+                               const BokoblinSteeringProbe& rhs) {
+    return lhs.action == rhs.action && lhs.state == rhs.state &&
+           std::strcmp(lhs.label, rhs.label) == 0 && lhs.targetSlot == rhs.targetSlot &&
+           lhs.targetFound == rhs.targetFound && lhs.nearestSlot == rhs.nearestSlot &&
+           lhs.nearestFound == rhs.nearestFound && lhs.speedSign == rhs.speedSign &&
+           lhs.detourActive == rhs.detourActive && lhs.moveOut == rhs.moveOut &&
+           lhs.p1CloserThanTarget == rhs.p1CloserThanTarget;
+}
+
 }  // namespace
 
 void advanceBokoblinAttackProbeFrame(u32 frame) {
     s_currentSimFrame = frame;
     s_debugState.currentSimFrame = frame;
+    s_steeringDebugState.currentSimFrame = frame;
 }
 
 void recordBokoblinAttackProbe(const BokoblinAttackProbe& probe) {
@@ -145,6 +184,26 @@ void recordBokoblinAttackProbe(const BokoblinAttackProbe& probe) {
     current->eventId = eventId;
 }
 
+void recordBokoblinSteeringProbe(const BokoblinSteeringProbe& probe) {
+    if (probe.actor == 0) {
+        return;
+    }
+
+    BokoblinSteeringProbe next = probe;
+    next.simFrame = s_currentSimFrame;
+    next.speedSign = speedSign(next.speedF);
+
+    BokoblinSteeringProbe* current = findSteeringProbe(next.actor);
+    if (current == nullptr) {
+        return;
+    }
+
+    const bool changed = current->eventId == 0 || !sameSteeringSemanticState(*current, next);
+    const u64 eventId = changed ? s_nextSteeringEventId++ : current->eventId;
+    *current = next;
+    current->eventId = eventId;
+}
+
 void clearBokoblinAttackProbe(fopAc_ac_c* actor) {
     const uintptr_t actorPtr = reinterpret_cast<uintptr_t>(actor);
     if (actorPtr == 0) {
@@ -162,10 +221,20 @@ void clearBokoblinAttackProbe(fopAc_ac_c* actor) {
             s_debugState.probes[i] = {};
         }
     }
+
+    for (int i = 0; i < s_steeringDebugState.probeCount; i++) {
+        if (s_steeringDebugState.probes[i].actor == actorPtr) {
+            s_steeringDebugState.probes[i] = {};
+        }
+    }
 }
 
 const BokoblinAttackProbeDebugState& getBokoblinAttackProbeDebugState() {
     return s_debugState;
+}
+
+const BokoblinSteeringProbeDebugState& getBokoblinSteeringProbeDebugState() {
+    return s_steeringDebugState;
 }
 
 }  // namespace dusk::coop::bokoblin_attack_probe

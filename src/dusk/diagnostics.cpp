@@ -785,6 +785,34 @@ void emitBokoblinAttackProbeEvents(const Provider& provider, const json& data) {
     }
 }
 
+void emitBokoblinSteeringProbeEvents(const Provider& provider, const json& data) {
+    if (!data.contains("probes") || !data["probes"].is_array()) {
+        return;
+    }
+
+    for (const json& probe : data["probes"]) {
+        const u64 eventId = probe.value("event_id", 0ull);
+        if (eventId == 0) {
+            continue;
+        }
+
+        const json eventKey = {
+            {"event_id", eventId},
+        };
+        const std::string stateKey = fmt::format(
+            FMT_STRING("bokoblin.steering:{}"), static_cast<unsigned long long>(eventId));
+        if (provider.emitOnChange && !shouldEmitProviderEvent(stateKey, eventKey)) {
+            continue;
+        }
+
+        const json eventData = {
+            {"schema_version", data.value("schema_version", 1)},
+            {"probe", probe},
+        };
+        emitProviderEvent(provider, "state", eventData);
+    }
+}
+
 void emitGibdoStateProbeEvents(const Provider& provider, const json& data) {
     if (!data.contains("probes") || !data["probes"].is_array()) {
         return;
@@ -2288,6 +2316,62 @@ json collectBokoblinAttackProbe() {
     };
 }
 
+json bokoblinSteeringProbeSummary(
+    const coop::bokoblin_attack_probe::BokoblinSteeringProbe& probe) {
+    return {
+        {"event_id", static_cast<unsigned long long>(probe.eventId)},
+        {"sim_frame", static_cast<unsigned int>(probe.simFrame)},
+        {"actor", ptrString(probe.actor)},
+        {"actor_id", probe.actorId},
+        {"label", probe.label},
+        {"action", probe.action},
+        {"state", probe.state},
+        {"target_slot", probe.targetSlot != coop::PlayerSlot::Invalid
+                            ? static_cast<int>(probe.targetSlot)
+                            : -1},
+        {"target_found", probe.targetFound},
+        {"target_distance", probe.targetDistance},
+        {"target_distance_xz", probe.targetDistanceXZ},
+        {"target_angle_y", static_cast<int>(probe.targetAngleY)},
+        {"nearest_slot", probe.nearestSlot != coop::PlayerSlot::Invalid
+                             ? static_cast<int>(probe.nearestSlot)
+                             : -1},
+        {"nearest_found", probe.nearestFound},
+        {"nearest_distance", probe.nearestDistance},
+        {"nearest_distance_xz", probe.nearestDistanceXZ},
+        {"p1_distance", probe.p1Distance},
+        {"p1_distance_xz", probe.p1DistanceXZ},
+        {"speed_f", probe.speedF},
+        {"speed_sign", probe.speedSign},
+        {"shape_angle_y", static_cast<int>(probe.shapeAngleY)},
+        {"detour_active", probe.detourActive},
+        {"detour_just_set", probe.detourJustSet},
+        {"detour_timer", static_cast<int>(probe.detourTimer)},
+        {"detour_angle_y", static_cast<int>(probe.detourAngleY)},
+        {"move_out", probe.moveOut},
+        {"home_distance", probe.homeDistance},
+        {"move_range", probe.moveRange},
+        {"p1_closer_than_target", probe.p1CloserThanTarget},
+    };
+}
+
+json collectBokoblinSteeringProbe() {
+    const coop::bokoblin_attack_probe::BokoblinSteeringProbeDebugState& state =
+        coop::bokoblin_attack_probe::getBokoblinSteeringProbeDebugState();
+    json probes = json::array();
+    for (int i = 0; i < state.probeCount; i++) {
+        if (state.probes[i].eventId == 0) {
+            continue;
+        }
+        probes.push_back(bokoblinSteeringProbeSummary(state.probes[i]));
+    }
+
+    return {
+        {"schema_version", 1},
+        {"probes", probes},
+    };
+}
+
 json gibdoStateProbeSummary(const coop::gibdo_state_probe::GibdoStateProbe& probe) {
     return {
         {"event_id", static_cast<unsigned long long>(probe.eventId)},
@@ -2665,6 +2749,7 @@ Provider s_providers[] = {
     {"defender.owner", 1, "cheap", 1, true, 600, 12288, collectDefenderOwner},
     {"caught_stun.owner", 1, "cheap", 1, true, 240, 8192, collectCaughtStunOwner},
     {"bokoblin.attack", 1, "cheap", 1, true, 240, 8192, collectBokoblinAttackProbe},
+    {"bokoblin.steering", 1, "cheap", 1, true, 240, 8192, collectBokoblinSteeringProbe},
     {"gibdo.state", 1, "cheap", 1, true, 240, 8192, collectGibdoStateProbe},
     {"young_gohma.state", 1, "cheap", 1, true, 240, 8192, collectYoungGohmaStateProbe},
     {"coop.probes", 2, "cheap", 30, true, 20, 4096, collectCoopProbes},
@@ -2840,6 +2925,10 @@ void tick(u32 frame) {
         }
         if (std::string(provider.name) == "bokoblin.attack") {
             emitBokoblinAttackProbeEvents(provider, data);
+            continue;
+        }
+        if (std::string(provider.name) == "bokoblin.steering") {
+            emitBokoblinSteeringProbeEvents(provider, data);
             continue;
         }
         if (std::string(provider.name) == "gibdo.state") {
