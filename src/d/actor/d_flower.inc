@@ -599,6 +599,7 @@ dFlower_packet_c::dFlower_packet_c() {
 }
 
 void dFlower_packet_c::draw() {
+    ZoneScoped;
     dScnKy_env_light_c* kankyo = dKy_getEnvlight();
 #if TARGET_PC
     bool split_screen_visibility = dusk::coop::render_visibility::shouldBypassDrawCulling();

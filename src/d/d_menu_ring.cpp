@@ -33,6 +33,7 @@
 #include "dusk/coop/player_item_selection.h"
 #include "dusk/coop/ui_owner.h"
 #include "dusk/game_clock.h"
+#include "dusk/settings.h"
 
 static dusk::coop::PlayerSlot dMenuRing_ownerSlot() {
     return dusk::coop::ui_owner::singularSlot();
@@ -62,6 +63,11 @@ static bool dMenuRing_ownerIsWolf() {
     daAlink_c* player = static_cast<daAlink_c*>(dusk::coop::getPlayer(dMenuRing_ownerSlot()));
     return player != NULL ? player->checkWolf() : daPy_py_c::checkNowWolf();
 }
+
+static bool dMenuRing_directSelectHeld() {
+    const bool held = mDoCPd_c::getHoldL(dMenuRing_ownerPad());
+    return dusk::getSettings().game.swapDirectSelect ? !held : held;
+}
 #else
 #define dMenuRing_getSelectItemIndex dComIfGs_getSelectItemIndex
 #define dMenuRing_getMixItemIndex dComIfGs_getMixItemIndex
@@ -69,6 +75,7 @@ static bool dMenuRing_ownerIsWolf() {
 #define dMenuRing_setMixItemIndex dComIfGs_setMixItemIndex
 // Co-op: non-PC builds retain vanilla P1 wheel input.
 #define dMenuRing_ownerPad() PAD_1
+#define dMenuRing_directSelectHeld() (mDoCPd_c::getHoldL(PAD_1) != 0)
 #endif
 
 typedef void (dMenu_Ring_c::*initFunc)();
@@ -392,11 +399,33 @@ dMenu_Ring_c::dMenu_Ring_c(JKRExpHeap* i_heap, STControl* i_stick, CSTControl* i
     }
     for (i = 0; i < 5; i++) {
 #if VERSION == VERSION_GCN_JPN
+    #if TARGET_PC
+        J2DTextBox* fc_TextBox;
+        if (dusk::getSettings().game.swapDirectSelect) {
+            fc_TextBox = (J2DTextBox*)mpScreen->search(c_text1[i]);
+            mpScreen->search(fc_text1[i])->hide();
+        } else {
+            fc_TextBox = (J2DTextBox*)mpScreen->search(c_text[i]);
+            mpScreen->search(fc_text[i])->hide();
+        }
+    #else
         J2DTextBox* fc_TextBox = (J2DTextBox*)mpScreen->search(c_text[i]);
         mpScreen->search(fc_text[i])->hide();
+    #endif
 #else
+    #if TARGET_PC
+        J2DTextBox* fc_TextBox;
+        if (dusk::getSettings().game.swapDirectSelect) {
+            fc_TextBox = (J2DTextBox*)mpScreen->search(fc_text1[i]);
+            mpScreen->search(c_text1[i])->hide();
+        } else {
+            fc_TextBox = (J2DTextBox*)mpScreen->search(fc_text[i]);
+            mpScreen->search(c_text[i])->hide();
+        }
+    #else
         J2DTextBox* fc_TextBox = (J2DTextBox*)mpScreen->search(fc_text[i]);
         mpScreen->search(c_text[i])->hide();
+    #endif
 #endif
         fc_TextBox->setFont(mDoExt_getMesgFont());
         fc_TextBox->setString(0x40, "");
@@ -404,11 +433,33 @@ dMenu_Ring_c::dMenu_Ring_c(JKRExpHeap* i_heap, STControl* i_stick, CSTControl* i
     }
     for (i = 0; i < 5; i++) {
 #if VERSION == VERSION_GCN_JPN
+    #if TARGET_PC
+        J2DTextBox* fc1_TextBox;
+        if (dusk::getSettings().game.swapDirectSelect) {
+            fc1_TextBox = (J2DTextBox*)mpScreen->search(c_text[i]);
+            mpScreen->search(fc_text[i])->hide();
+        } else {
+            fc1_TextBox = (J2DTextBox*)mpScreen->search(c_text1[i]);
+            mpScreen->search(fc_text1[i])->hide();
+        }
+    #else
         J2DTextBox* fc1_TextBox = (J2DTextBox*)mpScreen->search(c_text1[i]);
         mpScreen->search(fc_text1[i])->hide();
+    #endif
 #else
+    #if TARGET_PC
+        J2DTextBox* fc1_TextBox;
+        if (dusk::getSettings().game.swapDirectSelect) {
+            fc1_TextBox = (J2DTextBox*)mpScreen->search(fc_text[i]);
+            mpScreen->search(c_text[i])->hide();
+        } else {
+            fc1_TextBox = (J2DTextBox*)mpScreen->search(fc_text1[i]);
+            mpScreen->search(c_text1[i])->hide();
+        }
+    #else
         J2DTextBox* fc1_TextBox = (J2DTextBox*)mpScreen->search(fc_text1[i]);
         mpScreen->search(c_text1[i])->hide();
+    #endif
 #endif
         fc1_TextBox->setFont(mDoExt_getMesgFont());
         fc1_TextBox->setString(0x40, "");
@@ -895,7 +946,7 @@ u8 dMenu_Ring_c::getStickInfo(STControl* i_stick) {
         }
 
         if (mCurrentSlot != val2) {
-            if (mDoCPd_c::getHoldL(dMenuRing_ownerPad())) {
+            if (dMenuRing_directSelectHeld()) {
                 mDirectSelectCursorPos.x = mItemSlotPosX[mCurrentSlot];
                 mDirectSelectCursorPos.z = mItemSlotPosY[mCurrentSlot];
                 mCurrentSlot = val2;
@@ -1246,7 +1297,7 @@ void dMenu_Ring_c::setNameString(u32 i_stringID) {
     if (mNameStringID != i_stringID) {
         for (int i = 0; i < 4; i++) {
             if (i_stringID == 0) {
-                strcpy(textBox[i]->getStringPtr(), "");
+                SAFE_STRCPY(textBox[i]->getStringPtr(), "");
             } else {
                 mpString->getString(i_stringID, textBox[i], NULL, NULL, NULL, 0);
             }
@@ -1476,7 +1527,7 @@ void dMenu_Ring_c::drawItem2() {
 }
 
 void dMenu_Ring_c::stick_wait_init() {
-    if (mDoCPd_c::getHoldL(dMenuRing_ownerPad()) != 0) {
+    if (dMenuRing_directSelectHeld()) {
         if (mDirectSelectActive) {
             mWaitFrames = g_ringHIO.mDirectSelectWaitFrames;
         } else {

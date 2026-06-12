@@ -9,6 +9,8 @@
 #include "JSystem/JKernel/JKRSolidHeap.h"
 #include <cstring>
 
+#include "dusk/string.hpp"
+
 void dBgp_c::material_c::draw() {
     material_c* material = this;
     do {
@@ -256,7 +258,7 @@ void dBgp_c::share_c::reset() {
 
 const char* dBgp_c::share_c::getArcName() {
     static char arcName[8];
-    sprintf(arcName, "@mt%04x", mId);
+    SAFE_SPRINTF(arcName, "@mt%04x", mId);
     return arcName;
 }
 
@@ -431,7 +433,7 @@ dBgp_c::packet_c::packet_c() {
 void dBgp_c::create(s8 i_roomNo, void* i_data) {
     mPointer = i_data;
     mPacket.setRoomNo(i_roomNo);
-    strcpy(mArcName, dComIfG_getRoomArcName(i_roomNo));
+    SAFE_STRCPY(mArcName, dComIfG_getRoomArcName(i_roomNo));
 
     if (mPointer != NULL) {
         JKRExpHeap* block = dStage_roomControl_c::getMemoryBlock(i_roomNo);
@@ -458,7 +460,7 @@ void dBgp_c::create(s8 i_roomNo, void* i_data) {
         unit_group_class* unitGroup = mapUnit->groups;
         for (int i = 0; i < mapUnit->num; i++) {
             char resName[16];
-            sprintf(resName, "bp%04d.dzb", i);
+            SAFE_SPRINTF(resName, "bp%04d.dzb", i);
 
             cBgD_t* dzb = (cBgD_t*)dComIfG_getStageRes(mArcName, resName);
             if (dzb != NULL) {
@@ -535,7 +537,7 @@ int dBgp_c::remove() {
 
 const char* dBgp_c::getArcName(u16 i_id, u16 i_arg) {
     static char arcName[8];
-    sprintf(arcName, "@%03x%03x", i_id, i_arg);
+    SAFE_SPRINTF(arcName, "@%03x%03x", i_id, i_arg);
     return arcName;
 }
 
