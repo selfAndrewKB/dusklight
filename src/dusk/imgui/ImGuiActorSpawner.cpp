@@ -12,9 +12,12 @@
 #include "dusk/diagnostics.h"
 #include "dusk/hotkeys.h"
 #include "dusk/io.hpp"
+#include "dusk/ui/ui.hpp"
 #include "f_op/f_op_actor_mng.h"
 #include "SSystem/SComponent/c_sxyz.h"
 #include "SSystem/SComponent/c_xyz.h"
+
+#include <chrono>
 
 namespace dusk {
 namespace {
@@ -39,6 +42,13 @@ struct ActorSpawnerState {
 
 ActorSpawnerState s_state;
 
+void showActorSpawnerToast(const char* title) {
+    dusk::ui::push_toast({
+        .title = title,
+        .duration = std::chrono::seconds(3),
+    });
+}
+
 void tryCoopHotkeySpawnSecondary() {
     const ImGuiIO& io = ImGui::GetIO();
     if (!io.KeyCtrl || io.KeyShift || io.KeyAlt || !ImGui::IsKeyPressed(ImGuiKey_F12)) {
@@ -51,13 +61,13 @@ void tryCoopHotkeySpawnSecondary() {
 
     daAlink_c* player = (daAlink_c*)dComIfGp_getPlayer(0);
     if (player == nullptr) {
-        DuskToast("Co-op diagnostics enabled; primary Link is not available");
+        showActorSpawnerToast("Co-op diagnostics enabled; primary Link is not available");
         return;
     }
 
     if (dusk::coop::getPlayer(dusk::coop::PlayerSlot::Slot1) != nullptr) {
         dusk::coop::camera::ensureSecondaryCamera();
-        DuskToast("Co-op diagnostics and split screen enabled; secondary Link already exists");
+        showActorSpawnerToast("Co-op diagnostics and split screen enabled; secondary Link already exists");
         return;
     }
 
@@ -66,9 +76,9 @@ void tryCoopHotkeySpawnSecondary() {
     s_state.hasResult = true;
 
     if (s_state.lastResult != 0) {
-        DuskToast("Co-op diagnostics and split screen enabled; spawned secondary Link");
+        showActorSpawnerToast("Co-op diagnostics and split screen enabled; spawned secondary Link");
     } else {
-        DuskToast("Co-op diagnostics and split screen enabled; secondary Link spawn failed");
+        showActorSpawnerToast("Co-op diagnostics and split screen enabled; secondary Link spawn failed");
     }
 }
 
@@ -79,9 +89,9 @@ void tryCoopHotkeyToggleEnemyTargetOverlay() {
     }
 
     dusk::coop::debug_overlay::toggleEnemyTargetOverlay();
-    DuskToast(dusk::coop::debug_overlay::isEnemyTargetOverlayEnabled()
-                  ? "Co-op enemy target overlay enabled"
-                  : "Co-op enemy target overlay disabled");
+    showActorSpawnerToast(dusk::coop::debug_overlay::isEnemyTargetOverlayEnabled()
+                              ? "Co-op enemy target overlay enabled"
+                              : "Co-op enemy target overlay disabled");
 }
 
 void tryCoopHotkeyToggleEnemyActorLabelOverlay() {
@@ -91,9 +101,9 @@ void tryCoopHotkeyToggleEnemyActorLabelOverlay() {
     }
 
     dusk::coop::debug_overlay::toggleEnemyActorLabelOverlay();
-    DuskToast(dusk::coop::debug_overlay::isEnemyActorLabelOverlayEnabled()
-                  ? "Co-op enemy actor labels enabled"
-                  : "Co-op enemy actor labels disabled");
+    showActorSpawnerToast(dusk::coop::debug_overlay::isEnemyActorLabelOverlayEnabled()
+                              ? "Co-op enemy actor labels enabled"
+                              : "Co-op enemy actor labels disabled");
 }
 
 void secondaryAlinkProbeCheckbox(const char* label, dusk::coop::SecondaryAlinkProbeFlag flag) {
@@ -169,9 +179,9 @@ void ImGuiMenuTools::ShowActorSpawner() {
     ImGui::SameLine();
     if (ImGui::SmallButton("Ensure P2 camera")) {
         if (dusk::coop::camera::ensureSecondaryCamera()) {
-            DuskToast("Secondary camera ready");
+            showActorSpawnerToast("Secondary camera ready");
         } else {
-            DuskToast("Secondary camera not ready");
+            showActorSpawnerToast("Secondary camera not ready");
         }
     }
     ImGui::TextDisabled("P2 camera: %s%s",
