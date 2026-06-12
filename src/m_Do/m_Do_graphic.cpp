@@ -38,6 +38,12 @@
 #include "m_Do/m_Do_main.h"
 #include "tracy/Tracy.hpp"
 
+#if TARGET_PC
+#include "dusk/coop/render_effects.h"
+#include "dusk/coop/render_materials.h"
+#include "dusk/coop/render_shadows.h"
+#endif
+
 #if PLATFORM_WII || PLATFORM_SHIELD
 #include <revolution/sc.h>
 #endif
@@ -52,6 +58,9 @@
 #include "d/actor/d_a_horse.h"
 #include "dusk/coop/camera.h"
 #include "dusk/coop/debug_overlay.h"
+#include "dusk/coop/event_presentation.h"
+#include "dusk/coop/horse_owner.h"
+#include "dusk/coop/player_attention.h"
 #include "dusk/dusk.h"
 #include "dusk/endian.h"
 #include "dusk/frame_interpolation.h"
@@ -934,6 +943,103 @@ void mDoGph_drawFilterQuad(s8 param_0, s8 param_1) {
     GXTexCoord2s8(0, 1);
     GXEnd();
 }
+
+static void CopyToTexObj(GXTexObj* pDst, uintptr_t texID, u16 dstWidth, u16 dstHeight, GXTexFmt dstFmt = GX_TF_RGBA8) {
+    GXSetTexCopyDst(dstWidth, dstHeight, dstFmt, FALSE);
+    GXCopyTex((void*)texID, false);
+    GXInitTexObj(pDst, (void*)texID, dstWidth, dstHeight, dstFmt, GX_CLAMP, GX_CLAMP, GX_FALSE);
+    GXInitTexObjLOD(pDst, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
+}
+
+static void drawDepth_blurTex(TGXTexObj &dst) {
+    u32 hw = u32(JUTVideo::getManager()->getRenderWidth()) >> 1;
+    u32 hh = u32(JUTVideo::getManager()->getRenderHeight()) >> 1;
+
+    Mtx44 ortho;
+    C_MTXOrtho(ortho, 0.0f, hh, 0.0f, hw, 0.0f, 10.0f);
+    GXLoadPosMtxImm(cMtx_getIdentity(), GX_PNMTX0);
+    GXSetProjection(ortho, GX_ORTHOGRAPHIC);
+    GXSetCurrentMtx(GX_PNMTX0);
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+    GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_S8, 0);
+
+    GXCreateFrameBuffer(hw, hh);
+
+    auto divCopySrc = [&](int divNo) {
+        u32 w = u32(hw) >> divNo, h = u32(hh) >> divNo;
+        GXSetTexCopySrc(0, 0, w, h);
+    };
+
+    enum { MaxTexNum = 4 };
+    TGXTexObj tmpTex[MaxTexNum];
+    auto divCopyTex = [&](uintptr_t texNo, int divNo) -> GXTexObj* {
+        u32 w = u32(hw) >> divNo, h = u32(hh) >> divNo;
+        CopyToTexObj(&tmpTex[texNo], texNo, w, h);
+        return &tmpTex[texNo];
+    };
+
+    auto divQuad = [&](int divNo) {
+        u32 w = u32(hw) >> divNo, h = u32(hh) >> divNo;
+        f32 x0 = 0.0f, y0 = 0.0f;
+        f32 x1 = w, y1 = h;
+        GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+        GXPosition3f32(x0, y0, -5);
+        GXTexCoord2s8(0, 0);
+        GXPosition3f32(x1, y0, -5);
+        GXTexCoord2s8(1, 0);
+        GXPosition3f32(x1, y1, -5);
+        GXTexCoord2s8(1, 1);
+        GXPosition3f32(x0, y1, -5);
+        GXTexCoord2s8(0, 1);
+        GXEnd();
+    };
+
+    u32 texMtxID = GX_TEXMTX0;
+    int angle = 0;
+    float blurScale = 0.003f;
+    GXSetNumTexGens(8);
+    GXSetNumTevStages(8);
+    for (int stage = 0; stage < 8; stage++) {
+        GXSetTexCoordGen((GXTexCoordID)stage, GX_TG_MTX2x4, GX_TG_TEX0, texMtxID);
+        mDoMtx_stack_c::transS(
+            (blurScale * cM_scos(angle)) * mDoGph_gInf_c::getInvScale(), blurScale * cM_ssin(angle), 0.0f);
+        GXLoadTexMtxImm(mDoMtx_stack_c::get(), texMtxID, GX_MTX2x4);
+        texMtxID += 3;
+        angle += 0x2000;
+
+        GXTevStageID tevStage = (GXTevStageID)stage;
+        GXSetTevOrder(tevStage, (GXTexCoordID)stage, GX_TEXMAP1, GX_COLOR_NULL);
+        GXSetTevColorIn(tevStage, GX_CC_ZERO, GX_CC_TEXC, GX_CC_A1, stage == 0 ? GX_CC_ZERO : GX_CC_CPREV);
+        GXSetTevColorOp(tevStage, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevAlphaIn(tevStage, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO);
+        GXSetTevAlphaOp(tevStage, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    }
+    GXSetTevColor(GX_TEVREG1, {0, 0, 0, 256 / 8});
+
+    // assume the input tex obj is in GX_TEXMAP1
+    int divNum = 3;
+    for (int i = 0; i < divNum; i++) {
+        // Apply blur filter.
+        divQuad(i);
+
+        // Copy to next layer.
+        divCopySrc(i);
+
+        // Set up for the next pass down.
+        GXTexObj* blurTex = divCopyTex(i, i + 1);
+        GXLoadTexObj(blurTex, GX_TEXMAP1);
+    }
+
+    // upsample back to half-res buffer 0
+    divQuad(0);
+    divCopySrc(0);
+    CopyToTexObj(&dst, 100, hw, hh);
+
+    GXRestoreFrameBuffer();
+}
 #endif
 
 static void drawDepth2(view_class* param_0, view_port_class* param_1, int param_2) {
@@ -1087,6 +1193,21 @@ static void drawDepth2(view_class* param_0, view_port_class* param_1, int param_
             }
             #endif
 
+#if TARGET_PC
+            if (dusk::getSettings().game.depthOfFieldMode.getValue() == dusk::DepthOfFieldMode::Off)
+                return;
+
+            if (!(l_tevColor0.a > -255 && sp8 == 1))
+                return;
+
+            TGXTexObj blurTex;
+            if (dusk::getSettings().game.depthOfFieldMode.getValue() == dusk::DepthOfFieldMode::Dusk)
+            {
+                drawDepth_blurTex(blurTex);
+                GXLoadTexObj(&blurTex, GX_TEXMAP1);
+            }
+#endif
+
             GXSetTevColorS10(GX_TEVREG0, l_tevColor0);
             GXSetTevSwapModeTable(GX_TEV_SWAP3, GX_CH_ALPHA, GX_CH_GREEN, GX_CH_BLUE, GX_CH_RED);
             GXSetTevSwapMode(GX_TEVSTAGE0, GX_TEV_SWAP0, GX_TEV_SWAP3);
@@ -1135,37 +1256,42 @@ static void drawDepth2(view_class* param_0, view_port_class* param_1, int param_
                     param_1->x_orig + param_1->width, 0.0f, 10.0f);
             GXLoadPosMtxImm(cMtx_getIdentity(), 0);
 
-            #if DEBUG
+#if DEBUG
             mDoMtx_stack_c::transS(g_kankyoHIO.navy.demo_focus_offset_x, g_kankyoHIO.navy.demo_focus_offset_y, 0.0f);
-            #else
+#else
             mDoMtx_stack_c::transS(0.0025f, 0.0025f, 0.0f);
-            #endif
-            GXLoadTexMtxImm(mDoMtx_stack_c::get(), 0x1e, GX_MTX2x4);
+#endif
+            GXLoadTexMtxImm(mDoMtx_stack_c::get(), GX_TEXMTX0, GX_MTX2x4);
 
-            #if DEBUG
+#if DEBUG
             mDoMtx_stack_c::transS(-g_kankyoHIO.navy.demo_focus_offset_x, -g_kankyoHIO.navy.demo_focus_offset_y, 0.0f);
-            #else
+#else
             mDoMtx_stack_c::transS(-0.0025f, -0.0025f, 0.0f);
-            #endif
-            GXLoadTexMtxImm(mDoMtx_stack_c::get(), 0x21, GX_MTX2x4);
+#endif
+            GXLoadTexMtxImm(mDoMtx_stack_c::get(), GX_TEXMTX1, GX_MTX2x4);
 
             GXClearVtxDesc();
             GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
             GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
             GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 0);
             GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_POS_XYZ, GX_S8, 0);
-            GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, 0x3c);
-            GXSetTexCoordGen(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, 0x1e);
-            GXSetTexCoordGen(GX_TEXCOORD2, GX_TG_MTX2x4, GX_TG_TEX0, 0x21);
+            GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
+            GXSetTexCoordGen(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0);
+            GXSetTexCoordGen(GX_TEXCOORD2, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX1);
             GXSetNumChans(0);
             GXSetNumTexGens(3);
             GXSetNumTevStages(4);
-            GXSetProjection(ortho, GX_ORTHOGRAPHIC);
-            GXSetCurrentMtx(0);
 
-#ifdef TARGET_PC
-            if (dusk::getSettings().game.enableDepthOfField)
+            GXSetProjection(ortho, GX_ORTHOGRAPHIC);
+            GXSetCurrentMtx(GX_PNMTX0);
+
+#if TARGET_PC
+            if (dusk::getSettings().game.depthOfFieldMode.getValue() == dusk::DepthOfFieldMode::Dusk) {
+                GXSetNumTevStages(3);
+                GXSetTevOrder(GX_TEVSTAGE2, GX_TEXCOORD0, GX_TEXMAP1, GX_COLOR_NULL);
+            }
 #endif
+
             if (l_tevColor0.a > -255 && sp8 == 1) {
                 GXBegin(GX_QUADS, GX_VTXFMT0, 4);
                 GXPosition3s16(x_orig, y_orig_pos, -5);
@@ -1203,14 +1329,16 @@ static void trimming(view_class* param_0, view_port_class* param_1) {
     #endif
     {
         #if TARGET_PC
-        f32 sc_top = param_1->scissor.y_orig;
+        f32 sc_top = param_1->scissor.y_orig - param_1->y_orig;
         f32 sc_bottom = sc_top + param_1->scissor.height;
         
         f32 sc_left = 0.0f;
         f32 sc_right = param_1->width;
 
         if (!dusk::getSettings().game.disableCutscenePillarboxing) {
-            sc_left = param_1->scissor.x_orig;
+            // Co-op: the PC trim quads draw in viewport-local ortho space, while
+            // window scissors are stored in framebuffer coordinates.
+            sc_left = param_1->scissor.x_orig - param_1->x_orig;
             sc_right = sc_left + param_1->scissor.width;
         }
         #else
@@ -1295,6 +1423,19 @@ static void trimming(view_class* param_0, view_port_class* param_1) {
 #endif
 }
 
+#if TARGET_PC
+static bool viewport_has_trim(const view_port_class* view_port) {
+    if (view_port == NULL) {
+        return false;
+    }
+
+    return view_port->scissor.x_orig > view_port->x_orig ||
+           view_port->scissor.y_orig > view_port->y_orig ||
+           view_port->scissor.width < view_port->width ||
+           view_port->scissor.height < view_port->height;
+}
+#endif
+
 #if !PLATFORM_WII && !TARGET_PC
 void mDoGph_drawFilterQuad(s8 param_0, s8 param_1) {
     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
@@ -1340,19 +1481,8 @@ void mDoGph_gInf_c::bloom_c::remove() {
 }
 
 #if TARGET_PC
-static void CopyToTexObj(GXTexObj* pDst, uintptr_t texID, u16 dstWidth, u16 dstHeight, GXTexFmt dstFmt = GX_TF_RGBA8) {
-    GXSetTexCopyDst(dstWidth, dstHeight, dstFmt, FALSE);
-    GXCopyTex((void*)texID, false);
-    GXInitTexObj(pDst, (void*)texID, dstWidth, dstHeight, dstFmt, GX_CLAMP, GX_CLAMP, GX_FALSE);
-    GXInitTexObjLOD(pDst, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
-}
-
 void mDoGph_gInf_c::bloom_c::draw2() {
     ZoneScoped;
-    // if (!dusk::getSettings().game.enableBloom) {
-    //     return;
-    // }
-
     bool enabled = mEnable;
     if (mMonoColor.a == 0 && !enabled)
         return;
@@ -2163,6 +2293,28 @@ int mDoGph_Painter() {
         camera_process_class* camera_p = dComIfGp_getCamera(camera_id);
 
         if (camera_p != NULL) {
+#if TARGET_PC
+            const bool split_screen_active =
+                dusk::coop::event_presentation::shouldPresentSplitViewports();
+            bool refreshed_kankyo_materials = false;
+            // Co-op: real-shadow texture generation happens before the main viewport replay,
+            // but its matrices depend on active camera/light state. Prime the render globals for
+            // this window before the shadow draw list refreshes its baked projection matrices.
+            if (dusk::coop::render_shadows::shouldRefreshRealShadowForCurrentView()) {
+                view_port_class* shadow_view_port = window_p->getViewPort();
+                dComIfGp_setCurrentWindow(window_p);
+                dComIfGp_setCurrentView(&camera_p->view);
+                dComIfGp_setCurrentViewport(shadow_view_port);
+                dComIfGd_setWindow(window_p);
+                dComIfGd_setView(&camera_p->view);
+                dComIfGd_setViewport(shadow_view_port);
+                j3dSys.setViewMtx(camera_p->view.viewMtx);
+                dKy_setLight();
+                dKy_setLight_again();
+                dusk::coop::render_materials::refreshKankyoMaterialsForCurrentView();
+                refreshed_kankyo_materials = true;
+            }
+#endif
             #if DEBUG
             fapGm_HIO_c::startCpuTimer();
             #endif
@@ -2201,9 +2353,7 @@ int mDoGph_Painter() {
                 GXSetScissor(view_port->x_orig, view_port->y_orig, view_port->width,
                              view_port->height);
             };
-#if TARGET_PC
-            const bool split_screen_active = dusk::coop::camera::isSplitScreenEnabled();
-#else
+#ifndef TARGET_PC
             const bool split_screen_active = false;
 #endif
 
@@ -2250,6 +2400,11 @@ int mDoGph_Painter() {
             dComIfGp_setCurrentWindow(window_p);
             dComIfGp_setCurrentView(&camera_p->view);
             dComIfGp_setCurrentViewport(view_port);
+            // Co-op: render helpers query the draw-list current view, not only the play
+            // current view. Keep both in sync when replaying shared lists per split viewport.
+            dComIfGd_setWindow(window_p);
+            dComIfGd_setView(&camera_p->view);
+            dComIfGd_setViewport(view_port);
             GXSetProjection(camera_p->view.projMtx, GX_PERSPECTIVE);
 
             #if DEBUG
@@ -2268,8 +2423,15 @@ int mDoGph_Painter() {
 #endif
             dKy_setLight();
 #if TARGET_PC
-            if (dusk::frame_interp::is_enabled()) {
+            if (split_screen_active || dusk::frame_interp::is_enabled()) {
+                // Co-op: dKy_setLight() updates environment state, but dKy_setLight_again()
+                // reloads the GX light objects. Split-screen needs that reload per viewport.
                 dKy_setLight_again();
+            }
+            // Co-op: draw submission patches kankyo material state once before split-screen.
+            // Re-patch after this viewport's camera matrix is active so P2 gets its own lighting.
+            if (!refreshed_kankyo_materials) {
+                dusk::coop::render_materials::refreshKankyoMaterialsForCurrentView();
             }
 #endif
             GX_DEBUG_GROUP(dComIfGd_drawOpaListSky);
@@ -2324,10 +2486,13 @@ int mDoGph_Painter() {
 
 #if TARGET_PC
             if (dusk::frame_interp::is_enabled()) {
-                // FRAME INTERP NOTE: Currently only recalculating points for Epona's reins. Need a more global solution.
-                if (daHorse_c* horse = dComIfGp_getHorseActor()) {
-                    horse->lerpControlPoints(dusk::frame_interp::get_interpolation_step());
-                }
+                // Co-op: every registered Epona owns an independent rein simulation snapshot.
+                dusk::coop::horse_owner::lerpRegisteredHorseReins(
+                    dusk::frame_interp::get_interpolation_step());
+            }
+            if (split_screen_active || dusk::frame_interp::is_enabled()) {
+                // Co-op: textured ribbons face the active camera, so every split viewport needs
+                // its own expansion even when frame interpolation is disabled.
                 g_dComIfG_gameInfo.drawlist.refresh3DlineMats(camera_p->view.lookat.eye);
             }
 #endif
@@ -2383,13 +2548,23 @@ int mDoGph_Painter() {
             }
 #endif
 
-            // Co-op: the post-effect tail owns fullscreen framebuffer captures; keep it out of split-screen V1.
-            if (!dComIfGp_isPauseFlag() && !split_screen_active) {
+            // Co-op: the post-effect tail also owns late world/effect surfaces such as
+            // invisible lists, projection particles, Z-xlu, filter lists, and 3D-last packets.
+            // Replay those per viewport, but keep framebuffer-wide captures/filters disabled
+            // until they have explicit split viewport ownership; running them here can overwrite
+            // the native split render target and black out the scene.
+            const bool replay_late_world_effects =
+                dusk::coop::render_effects::shouldReplayLateWorldEffectTail();
+            const bool run_fullscreen_effects =
+                dusk::coop::render_effects::shouldRunFullscreenFramebufferEffects();
+            if (!dComIfGp_isPauseFlag() && replay_late_world_effects) {
                 #if DEBUG
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                GX_DEBUG_GROUP(motionBlure, &camera_p->view);
+                if (run_fullscreen_effects) {
+                    GX_DEBUG_GROUP(motionBlure, &camera_p->view);
+                }
 
                 #if DEBUG
                 // "blur filter (Rendering)"
@@ -2398,9 +2573,12 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                GX_DEBUG_GROUP(drawDepth2, &camera_p->view, view_port, dComIfGp_getCameraZoomForcus(camera_id));
-                GXInvalidateTexAll();
-                GXSetClipMode(GX_CLIP_ENABLE);
+                if (run_fullscreen_effects) {
+                    GX_DEBUG_GROUP(drawDepth2, &camera_p->view, view_port,
+                                   dComIfGp_getCameraZoomForcus(camera_id));
+                    GXInvalidateTexAll();
+                    GXSetClipMode(GX_CLIP_ENABLE);
+                }
 
                 #if DEBUG
                 // "depth of field (Rendering)"
@@ -2412,6 +2590,12 @@ int mDoGph_Painter() {
                 if (!(DEBUG && g_kankyoHIO.navy.field_0x30d != 0 &&
                       dKy_darkworld_check() == TRUE)) {
                     if (g_env_light.is_blure == 0) {
+                        if (dusk::coop::render_effects::shouldRefreshInvisibleListFramebuffer()) {
+                            // Co-op: refractive water lives in the invisible lists and samples
+                            // the framebuffer. Refresh from this viewport before replaying it.
+                            retry_captue_frame(&camera_p->view, view_port,
+                                               dComIfGp_getCameraZoomForcus(camera_id));
+                        }
                         GX_DEBUG_GROUP(dComIfGd_drawOpaListInvisible);
                         GX_DEBUG_GROUP(dComIfGd_drawXluListInvisible);
                     }
@@ -2424,6 +2608,14 @@ int mDoGph_Painter() {
 
                 fapGm_HIO_c::startCpuTimer();
                 #endif
+
+                if (dusk::coop::render_effects::shouldRefreshProjectionParticleFramebuffer()) {
+                    // Co-op: heat-haze projection particles bind the particle resource "dummy"
+                    // texture, which points at the framebuffer. Refresh it from this viewport
+                    // before projection particles sample it.
+                    retry_captue_frame(&camera_p->view, view_port,
+                                       dComIfGp_getCameraZoomForcus(camera_id));
+                }
 
                 if (fapGmHIO_getParticle()) {
                     GX_DEBUG_GROUP(dComIfGp_particle_drawFogPri4, &draw_info);
@@ -2482,7 +2674,10 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                retry_captue_frame(&camera_p->view, view_port, dComIfGp_getCameraZoomForcus(camera_id));
+                if (run_fullscreen_effects) {
+                    retry_captue_frame(&camera_p->view, view_port,
+                                       dComIfGp_getCameraZoomForcus(camera_id));
+                }
 
                 #if DEBUG
                 // "Frame Buffer capture 2nd time (Rendering)"
@@ -2496,6 +2691,12 @@ int mDoGph_Painter() {
                 if (!(DEBUG && g_kankyoHIO.navy.field_0x30d != 0 &&
                       dKy_darkworld_check() == TRUE)) {
                     if (g_env_light.is_blure == 1) {
+                        if (dusk::coop::render_effects::shouldRefreshInvisibleListFramebuffer()) {
+                            // Co-op: the blur branch replays the same framebuffer-backed
+                            // refraction lists later in the tail, after its viewport is active.
+                            retry_captue_frame(&camera_p->view, view_port,
+                                               dComIfGp_getCameraZoomForcus(camera_id));
+                        }
                         GX_DEBUG_GROUP(dComIfGd_drawOpaListInvisible);
                         GX_DEBUG_GROUP(dComIfGd_drawXluListInvisible);
                     }
@@ -2514,9 +2715,12 @@ int mDoGph_Painter() {
 
                 GXSetClipMode(GX_CLIP_ENABLE);
 
-                GX_DEBUG_GROUP(dComIfGd_drawIndScreen);
+                if (run_fullscreen_effects) {
+                    GX_DEBUG_GROUP(dComIfGd_drawIndScreen);
+                }
 
-                if (strcmp(dComIfGp_getStartStageName(), "F_SP124") == 0) {
+                if (run_fullscreen_effects &&
+                    strcmp(dComIfGp_getStartStageName(), "F_SP124") == 0) {
                     retry_captue_frame(&camera_p->view, view_port,
                                        dComIfGp_getCameraZoomForcus(camera_id));
                 }
@@ -2539,7 +2743,9 @@ int mDoGph_Painter() {
 
                 cMtx_lookAt(m2, &sp38c, &cXyz::Zero, &sp398, 0);
                 j3dSys.setViewMtx(m2);
-                GX_DEBUG_GROUP(dComIfGd_drawXluList2DScreen);
+                if (run_fullscreen_effects) {
+                    GX_DEBUG_GROUP(dComIfGd_drawXluList2DScreen);
+                }
 
                 j3dSys.setViewMtx(camera_p->view.viewMtx);
                 GXSetProjection(camera_p->view.projMtx, GX_PERSPECTIVE);
@@ -2553,7 +2759,8 @@ int mDoGph_Painter() {
 
                 j3dSys.reinitGX();
 
-                if ((g_env_light.camera_water_in_status || !strcmp(dComIfGp_getStartStageName(), "D_MN08")))
+                if (run_fullscreen_effects &&
+                    (g_env_light.camera_water_in_status || !strcmp(dComIfGp_getStartStageName(), "D_MN08")))
                 {
                     u8 enable = mDoGph_gInf_c::getBloom()->getEnable();
                     GXColor color = *mDoGph_gInf_c::getBloom()->getMonoColor();
@@ -2570,11 +2777,14 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                GX_DEBUG_GROUP(mDoGph_gInf_c::getBloom()->draw);
-                // Co-op: bloom helpers can restore fullscreen GX state; return to this window before tail overlays.
-                set_window_viewport();
-                j3dSys.setViewMtx(camera_p->view.viewMtx);
-                GXSetProjection(camera_p->view.projMtx, GX_PERSPECTIVE);
+                if (run_fullscreen_effects) {
+                    GX_DEBUG_GROUP(mDoGph_gInf_c::getBloom()->draw);
+                    // Co-op: bloom helpers can restore fullscreen GX state; return to this
+                    // window before tail overlays.
+                    set_window_viewport();
+                    j3dSys.setViewMtx(camera_p->view.viewMtx);
+                    GXSetProjection(camera_p->view.projMtx, GX_PERSPECTIVE);
+                }
 
                 #if DEBUG
                 if (g_kankyoHIO.navy.field_0x30d != 0 && dKy_darkworld_check() == TRUE) {
@@ -2589,6 +2799,12 @@ int mDoGph_Painter() {
                 #endif
 
                 GX_DEBUG_GROUP(dComIfGd_drawOpaList3Dlast);
+#if TARGET_PC
+                if (split_screen_active) {
+                    // Co-op: submit only this camera's target cursor into a private viewport buffer.
+                    dusk::coop::player_attention::drawForCamera(camera_id);
+                }
+#endif
 
                 #if DEBUG
                 // "saturation add filter (Rendering)"
@@ -2597,7 +2813,7 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                if (fapGmHIO_getParticle()) {
+                if (run_fullscreen_effects && fapGmHIO_getParticle()) {
                     #if WIDESCREEN_SUPPORT
                     if (mDoGph_gInf_c::isWideZoom()) {
                         ortho.setOrtho(0.0f, 0.0f, FB_WIDTH_BASE, FB_HEIGHT_BASE, 100000.0f, -100000.0f);
@@ -2616,9 +2832,19 @@ int mDoGph_Painter() {
                     dComIfGp_particle_draw2Dgame(&draw_info2);
                 }
 
-                trimming(&camera_p->view, view_port);
+                // Co-op: trim bars are viewport-local camera presentation, so draw them when
+                // split-screen camera scissor requested trim even if fullscreen filters are gated.
+                if (run_fullscreen_effects
+#if TARGET_PC
+                    || (dusk::coop::render_effects::shouldDrawViewportTrim() &&
+                        viewport_has_trim(view_port))
+#endif
+                ) {
+                    trimming(&camera_p->view, view_port);
+                }
 
-                if (strcmp(dComIfGp_getStartStageName(), "F_SP127") != 0 &&
+                if (run_fullscreen_effects &&
+                    strcmp(dComIfGp_getStartStageName(), "F_SP127") != 0 &&
                     (mDoGph_gInf_c::isFade() & 0x80) == 0)
                 {
                     mDoGph_gInf_c::calcFade();
@@ -2633,6 +2859,10 @@ int mDoGph_Painter() {
         };
 
         for (int window_idx = 0; window_idx < window_num; window_idx++) {
+            // Co-op: fullscreen presentation keeps every camera alive but replays only its owner.
+            if (!dusk::coop::event_presentation::shouldDrawWindow(window_idx)) {
+                continue;
+            }
             draw_window(window_idx);
         }
     }
@@ -2706,8 +2936,11 @@ int mDoGph_Painter() {
 #if TARGET_PC
     auto set_hud_viewport = [&]() {
         if (dusk::coop::camera::isSplitScreenEnabled()) {
-            view_port_class* view_port = dComIfGp_getWindow(0)->getViewPort();
-            // Co-op: V1 HUD is P1-owned; draw it into P1's window instead of spanning both views.
+            int window_index = dusk::coop::event_presentation::isFullscreen()
+                                   ? dusk::coop::event_presentation::presenterWindowIndex()
+                                   : 0;
+            view_port_class* view_port = dComIfGp_getWindow(window_index)->getViewPort();
+            // Co-op: bind shared 2D work to the window currently presenting the authored surface.
             GXSetViewport(view_port->x_orig, view_port->y_orig, view_port->width,
                           view_port->height, view_port->near_z, view_port->far_z);
             GXSetScissor(view_port->x_orig, view_port->y_orig, view_port->width,

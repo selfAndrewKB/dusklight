@@ -5,6 +5,10 @@
 #include "f_op/f_op_actor.h"
 #include "d/d_com_inf_game.h"
 
+#if TARGET_PC
+#include "dusk/coop/player_slots.h"
+#endif
+
 struct ResTIMG;
 
 class daPy_frameCtrl_c : public J3DFrameCtrl {
@@ -37,6 +41,10 @@ public:
     virtual ~daPy_sightPacket_c() {}
 
     void setSight();
+#if TARGET_PC
+    // Co-op: delayed live reticle drawing follows the ALINK slot that submitted it.
+    void setSightForPlayer(dusk::coop::PlayerSlot);
+#endif
     void setSightImage(ResTIMG* i_img);
 
     u8 getDrawFlg() { return mDrawFlag; }
@@ -50,6 +58,10 @@ public:
     /* 0x14 */ Mtx mProjMtx;
     /* 0x44 */ ResTIMG* mpImg;
     /* 0x48 */ u8* mpData;
+#if TARGET_PC
+    TGXTexObj mTexObj;
+    ResTIMG* mpCachedImg = nullptr;
+#endif
 };
 
 class daPy_boomerangMove_c {
@@ -77,7 +89,7 @@ private:
 #define PLAYER_CREATE_ANM_HEAP_F(heap, type, fmt, ...) \
     { \
         char pcah_name_buf[32]; \
-        sprintf(pcah_name_buf, fmt, ##__VA_ARGS__); \
+        snprintf(pcah_name_buf, sizeof(pcah_name_buf), fmt, ##__VA_ARGS__); \
         (heap).createHeap(type, pcah_name_buf); \
         \
     }

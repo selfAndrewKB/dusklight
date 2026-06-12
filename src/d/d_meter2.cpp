@@ -25,8 +25,126 @@
 #include <cstring>
 
 #if TARGET_PC
+#include "dusk/coop/camera.h"
+#include "dusk/coop/horse_owner.h"
+#include "dusk/coop/player_button_status.h"
+#include "dusk/coop/player_slots.h"
 #include "dusk/memory.h"
 #include "dusk/settings.h"
+#endif
+
+#if TARGET_PC
+namespace {
+
+dScope_c* s_scopeContents[dusk::coop::kPlayerSlotCount] = {};
+
+// Co-op: center prompt packets are for deliberate world actions; locomotion prompts stay in HUD.
+bool shouldDrawCoopCenterDoPrompt(u8 status, u8 flag) {
+    if ((flag & BUTTON_STATUS_FLAG_EMPHASIS) || (flag & BUTTON_STATUS_FLAG_CONTINUATION)) {
+        return true;
+    }
+
+    switch (status) {
+    case BUTTON_STATUS_OPEN:
+    case BUTTON_STATUS_ENTER:
+    case BUTTON_STATUS_CHECK:
+    case BUTTON_STATUS_PICK_UP:
+    case BUTTON_STATUS_THROW:
+    case BUTTON_STATUS_PLACE:
+    case BUTTON_STATUS_GRAB:
+    case BUTTON_STATUS_GET_ON:
+    case BUTTON_STATUS_READ:
+    case BUTTON_STATUS_LOOK:
+    case BUTTON_STATUS_SPEAK:
+    case BUTTON_STATUS_LIFT:
+    case BUTTON_STATUS_PICK:
+    case BUTTON_STATUS_TAKE:
+    case BUTTON_STATUS_PULL_DOWN:
+    case BUTTON_STATUS_PET:
+    case BUTTON_STATUS_LISTEN:
+    case BUTTON_STATUS_UNK_128:  // Co-op: traced sign "Check" prompts resolve through this status.
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool isScopeOwnerActive(int playerId) {
+    if (playerId < 0 || playerId >= dusk::coop::kPlayerSlotCount) {
+        return false;
+    }
+
+    if (dComIfGp_getPlayer(playerId) == NULL) {
+        return false;
+    }
+
+    int camera_id = dComIfGp_getPlayerCameraID(playerId);
+    return camera_id >= 0 && dComIfGp_checkCameraAttentionStatus(camera_id, 8);
+}
+
+int getScopeOwnerPlayerId() {
+    // Co-op: Hawkeye overlay ownership follows the scoped player's camera, not camera 0.
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        if (isScopeOwnerActive(i)) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+bool hasScopeOwner() {
+    return getScopeOwnerPlayerId() >= 0;
+}
+
+void deleteScopeContent(int playerId) {
+    if (playerId < 0 || playerId >= dusk::coop::kPlayerSlotCount) {
+        return;
+    }
+
+    if (s_scopeContents[playerId] != NULL) {
+        JKR_DELETE(s_scopeContents[playerId]);
+        s_scopeContents[playerId] = NULL;
+    }
+}
+
+void deleteAllScopeContents() {
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        deleteScopeContent(i);
+    }
+}
+
+void updateScopeContents() {
+    // Co-op: Hawkeye overlays are view-owned. Keep one scope subcontent per scoped
+    // player so P1 entering Hawkeye does not replace P2's active scope overlay.
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        if (isScopeOwnerActive(i)) {
+            if (s_scopeContents[i] == NULL) {
+                s_scopeContents[i] = JKR_NEW dScope_c(static_cast<u8>(i));
+            }
+        } else if (s_scopeContents[i] != NULL && s_scopeContents[i]->isDead()) {
+            deleteScopeContent(i);
+        }
+    }
+}
+
+void executeScopeContents(u32 status) {
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        if (s_scopeContents[i] != NULL) {
+            s_scopeContents[i]->_execute(status);
+        }
+    }
+}
+
+void drawScopeContents() {
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        if (s_scopeContents[i] != NULL) {
+            dComIfGd_set2DOpaTop(s_scopeContents[i]);
+        }
+    }
+}
+
+}  // namespace
 #endif
 
 int dMeter2_c::_create() {
@@ -243,6 +361,10 @@ int dMeter2_c::_create() {
     mpSubContents = NULL;
     mpSubSubContents = NULL;
     mpEmpButton = NULL;
+#if TARGET_PC
+    // Co-op: P2's center prompt needs independent fade state from P1's prompt packet.
+    mpCoopEmpButton = NULL;
+#endif
 
     mpHeap->getTotalFreeSize();
     field_0x11c = NULL;
@@ -329,6 +451,10 @@ int dMeter2_c::_draw() {
         mpMap->_draw();
     }
 
+#if TARGET_PC
+    drawScopeContents();
+#endif
+
     if (mpSubContents != NULL) {
         dComIfGd_set2DOpaTop(mpSubContents);
     }
@@ -352,6 +478,13 @@ int dMeter2_c::_draw() {
     if (mpEmpButton != NULL) {
         dComIfGd_set2DOpaTop(mpEmpButton);
     }
+
+#if TARGET_PC
+    // Co-op: draw P2's center prompt in the same 2D phase as the vanilla prompt.
+    if (mpCoopEmpButton != NULL) {
+        dComIfGd_set2DOpaTop(mpCoopEmpButton);
+    }
+#endif
 
     return 1;
 }
@@ -382,6 +515,9 @@ int dMeter2_c::_delete() {
 
     mpHeap->getTotalFreeSize();
     mDoExt_setCurrentHeap(mpSubHeap);
+#if TARGET_PC
+    deleteAllScopeContents();
+#endif
     if (mpSubContents != NULL) {
         JKR_DELETE(mpSubContents);
         mpSubContents = NULL;
@@ -391,6 +527,13 @@ int dMeter2_c::_delete() {
         JKR_DELETE(mpSubSubContents);
         mpSubSubContents = NULL;
     }
+
+#if TARGET_PC
+    if (mpCoopEmpButton != NULL) {
+        JKR_DELETE(mpCoopEmpButton);
+        mpCoopEmpButton = NULL;
+    }
+#endif
 
     mpHeap->getTotalFreeSize();
     if (field_0x11c != NULL) {
@@ -409,6 +552,37 @@ int dMeter2_c::_delete() {
 }
 
 int dMeter2_c::emphasisButtonDelete() {
+#if TARGET_PC
+    bool deleted_button = false;
+
+    if (mpCoopEmpButton != NULL) {
+        mpCoopEmpButton->hideAll();
+        JKR_DELETE(mpCoopEmpButton);
+        mpCoopEmpButton = NULL;
+        deleted_button = true;
+    }
+
+    if (mpEmpButton != NULL) {
+        mpEmpButton->hideAll();
+        JKR_DELETE(mpEmpButton);
+        mpEmpButton = NULL;
+        deleted_button = true;
+    }
+
+    // Co-op: P2 can own the prompt subheap without a P1 prompt packet. Release that shared
+    // transient heap before the singular item wheel claims the parent 2D heap.
+    if (deleted_button) {
+        JKRExpHeap* heap = dComIfGp_getSubHeap2D(8);
+        if (heap != NULL) {
+            if (field_0x108 != NULL) {
+                mDoExt_setCurrentHeap(field_0x108);
+                field_0x108 = NULL;
+            }
+            heap->freeAll();
+            dComIfGp_offHeapLockFlag(8);
+        }
+    }
+#else
     if (mpEmpButton != NULL) {
         JKRExpHeap* heap = dComIfGp_getSubHeap2D(8);
         mpEmpButton->hideAll();
@@ -420,6 +594,7 @@ int dMeter2_c::emphasisButtonDelete() {
             dComIfGp_offHeapLockFlag(8);
         }
     }
+#endif
 
     return 1;
 }
@@ -480,7 +655,13 @@ void dMeter2_c::checkStatus() {
         s16 sp8;
         s16 spA;
 
-        if (dComIfGp_checkCameraAttentionStatus(0, 8)) {
+        if (dComIfGp_checkCameraAttentionStatus(0, 8)
+#if TARGET_PC
+            // Co-op: P2 Hawkeye scope sets attention on P2's camera, so the shared meter
+            // needs to open the same subcontent for any scoped player.
+            || getScopeOwnerPlayerId() >= 0
+#endif
+        ) {
             mStatus |= 0x80;
         } else if (dComIfGp_checkCameraAttentionStatus(dComIfGp_getPlayerCameraID(0), 0x10) &&
                    dCam_getBody()->CalcSubjectAngle(&sp8, &spA))
@@ -500,10 +681,14 @@ void dMeter2_c::checkStatus() {
             mStatus |= 0x8000;
         } else if (dComIfGp_checkPlayerStatus0(0, 0x4000000)) {
             mStatus |= 0x10000;
+#if TARGET_PC
+        } else if (dusk::coop::horse_owner::anyHorseNeedsLashMeter()) {
+            // Co-op: create the native spur presenter when any registered rider needs it.
+#else
         } else if (daPy_getPlayerActorClass()->checkHorseRideNotReady() &&
                    dComIfGp_getHorseActor() != NULL &&
-                   !dComIfGp_getHorseActor()->checkRodeoMode())
-        {
+                   !dComIfGp_getHorseActor()->checkRodeoMode()) {
+#endif
             mStatus |= 0x2000000;
         }
     }
@@ -2189,6 +2374,10 @@ void dMeter2_c::moveSubContents() {
         mpSubContents->_execute(mStatus);
     }
 
+#if TARGET_PC
+    executeScopeContents(mStatus);
+#endif
+
     if (mpSubSubContents != NULL) {
         if (mSubContentType == 5 && mSubContentsStringType != dMeter2Info_getMeterStringType()) {
             mSubContentsStringType = dMeter2Info_getMeterStringType();
@@ -2341,17 +2530,120 @@ void dMeter2_c::move2DContents() {
         }
     }
 
+#if TARGET_PC
+    moveCoopSecondary2DContents();
+#endif
+
     if (field_0x108 != NULL) {
         mDoExt_setCurrentHeap(field_0x108);
     }
 }
 
+#if TARGET_PC
+void dMeter2_c::moveCoopSecondary2DContents() {
+    if (!dusk::coop::camera::isSplitScreenEnabled()) {
+        if (mpCoopEmpButton != NULL) {
+            mpCoopEmpButton->_execute(mStatus, false, false, false, false, false, false, false,
+                                      false, false, false, false, false, false, false, false,
+                                      false, false, false, false, false, false, false);
+            // Co-op: if split-screen shuts off, let P2's prompt fade closed before freeing its heap.
+            if (mpCoopEmpButton->isClose()) {
+                JKR_DELETE(mpCoopEmpButton);
+                mpCoopEmpButton = NULL;
+                if (mpEmpButton == NULL && dComIfGp_getSubHeap2D(8) != NULL) {
+                    dComIfGp_getSubHeap2D(8)->freeAll();
+                    dComIfGp_offHeapLockFlag(8);
+                }
+            }
+        }
+        return;
+    }
+
+    const dusk::coop::PlayerSlot slot = dusk::coop::PlayerSlot::Secondary;
+    const u8 do_status = dusk::coop::player_button_status::getStatus(
+        slot, dusk::coop::player_button_status::ButtonStatusKind::Do);
+    const u8 do_flag = dusk::coop::player_button_status::getFlag(
+        slot, dusk::coop::player_button_status::ButtonStatusKind::Do);
+    char* action_string = mpMeterDraw->getActionString(do_status, 0, NULL);
+    const bool has_text = *action_string != 0;
+    const bool allowed = shouldDrawCoopCenterDoPrompt(do_status, do_flag);
+    // Co-op: keep movement-only actions like Roll in the normal HUD cluster.
+    const bool draw_a = do_status != 0 && has_text && allowed;
+
+    if (draw_a && mpCoopEmpButton == NULL &&
+        (dComIfGp_isHeapLockFlag() == 0 || dComIfGp_isHeapLockFlag() == 5))
+    {
+        // Co-op: claim the vanilla prompt subheap before asking for it; getSubHeap2D(8)
+        // returns NULL until the heap lock has associated flag 8 with a free subheap.
+        dComIfGp_setHeapLockFlag(8);
+
+        JKRExpHeap* prompt_heap = dComIfGp_getSubHeap2D(8);
+        if (prompt_heap != NULL) {
+            if (field_0x108 == NULL) {
+                field_0x108 = mDoExt_setCurrentHeap(prompt_heap);
+            }
+
+            mpCoopEmpButton = JKR_NEW dMeterButton_c();
+            mpCoopEmpButton->setCoopHudSlot(slot);
+        }
+    }
+
+    if (mpCoopEmpButton != NULL) {
+        if (draw_a && mpCoopEmpButton->isSetButton(0)) {
+            mpCoopEmpButton->setString(action_string, 0, 0, 0);
+        }
+
+        mpCoopEmpButton->_execute(mStatus, draw_a, false, false, false, false, false, false, false,
+                                  false, false, false, false, false, false, false, false, false,
+                                  false, false, false, false, false);
+
+        if (!draw_a && mpCoopEmpButton->isClose()) {
+            JKR_DELETE(mpCoopEmpButton);
+            mpCoopEmpButton = NULL;
+            if (mpEmpButton == NULL && dComIfGp_getSubHeap2D(8) != NULL) {
+                dComIfGp_getSubHeap2D(8)->freeAll();
+                dComIfGp_offHeapLockFlag(8);
+            }
+        }
+    }
+}
+#endif
+
 void dMeter2_c::checkSubContents() {
     if (mStatus & 0x80) {
+#if TARGET_PC
+        if (hasScopeOwner()) {
+            killSubContents(4);
+            if (mSubContentType == 4 && mpSubContents != NULL) {
+                JKR_DELETE(mpSubContents);
+                mpSubContents = NULL;
+            }
+            updateScopeContents();
+            mSubContentType = 4;
+            return;
+        }
+
+        int scope_owner = getScopeOwnerPlayerId();
+        if (scope_owner < 0) {
+            scope_owner = 0;
+        }
+#else
+        int scope_owner = 0;
+#endif
         killSubContents(4);
 
+        if (mSubContentType == 4 && mpSubContents != NULL &&
+            static_cast<dScope_c*>(mpSubContents)->field_0x8d != scope_owner)
+        {
+            JKR_DELETE(mpSubContents);
+            mpSubContents = NULL;
+            mpSubHeap->freeAll();
+            mSubContentType = 0;
+        }
+
         if (mSubContentType == 0) {
-            mpSubContents = JKR_NEW dScope_c(0);
+            // Co-op: pass the scoped player id so the overlay follows that player's camera/status.
+            mpSubContents = JKR_NEW dScope_c(scope_owner);
             mSubContentType = 4;
         }
         return;
@@ -2394,6 +2686,9 @@ void dMeter2_c::checkSubContents() {
             mSubContentType = 3;
         }
     } else if (mSubContentType == 4) {
+#if TARGET_PC
+        deleteAllScopeContents();
+#endif
         if (mpSubContents != NULL || mpSubSubContents != NULL) {
             bool free_heap = false;
 
@@ -2418,6 +2713,9 @@ void dMeter2_c::checkSubContents() {
             mSubContentType = 0;
         }
     } else if (mSubContentType != 0) {
+#if TARGET_PC
+        deleteAllScopeContents();
+#endif
         bool free_heap = false;
 
         if (mpSubContents != NULL) {
@@ -2468,14 +2766,24 @@ void dMeter2_c::check2DContents() {
         {
             JKR_DELETE(mpEmpButton);
             mpEmpButton = NULL;
+#if TARGET_PC
+            // Co-op: P2's prompt packet can still own the shared prompt subheap.
+            if (mpCoopEmpButton == NULL) {
+                dComIfGp_getSubHeap2D(8)->freeAll();
+                dComIfGp_offHeapLockFlag(8);
+            }
+#else
             dComIfGp_getSubHeap2D(8)->freeAll();
+#endif
 
             if (field_0x108 != NULL) {
                 mDoExt_setCurrentHeap(field_0x108);
                 field_0x108 = NULL;
             }
 
+#if !TARGET_PC
             dComIfGp_offHeapLockFlag(8);
+#endif
         }
     }
 }
@@ -3003,6 +3311,10 @@ void dMeter2_c::killSubContents(u8 param_0) {
     if (mSubContentType != param_0 && mSubContentType != 0) {
         bool free = false;
 
+#if TARGET_PC
+        deleteAllScopeContents();
+#endif
+
         if (mpSubContents != NULL) {
             JKR_DELETE(mpSubContents);
             mpSubContents = NULL;
@@ -3100,7 +3412,7 @@ static leafdraw_method_class l_dMeter2_Method = {
     (process_method_func)dMeter2_Draw,
 };
 
-msg_process_profile_definition g_profile_METER2 = {
+DUSK_PROFILE msg_process_profile_definition DUSK_CONST g_profile_METER2 = {
     /* Layer ID    */ fpcLy_CURRENT_e,
     /* List ID     */ 12,
     /* List Prio   */ fpcPi_CURRENT_e,

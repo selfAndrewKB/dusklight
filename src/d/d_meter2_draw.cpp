@@ -8,6 +8,7 @@
 #include "d/d_meter2_draw.h"
 #include "JSystem/J2DGraph/J2DAnmLoader.h"
 #include "JSystem/J2DGraph/J2DGrafContext.h"
+#include "JSystem/J2DGraph/J2DOrthoGraph.h"
 #include "JSystem/J2DGraph/J2DScreen.h"
 #include "JSystem/J2DGraph/J2DTextBox.h"
 #include "JSystem/JKernel/JKRExpHeap.h"
@@ -20,9 +21,47 @@
 #include "d/d_msg_class.h"
 #include "d/d_msg_object.h"
 #include "d/d_pane_class.h"
+#include "dusk/coop/event_presentation.h"
+#include "dusk/coop/hud_diagnostics.h"
+#include "dusk/coop/hud_owner.h"
+#include "dusk/coop/player_item_selection.h"
+#include "dusk/coop/ui_owner.h"
 #include "dusk/frame_interpolation.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/settings.h"
+#include <algorithm>
+
+namespace {
+
+// Reads the user HUD scale setting, clamped to a safe range.
+f32 dGetUserHudScale() {
+    return std::clamp(dusk::getSettings().game.hudScale.getValue(), 0.5f, 2.0f);
+}
+
+// The screen corner each HUD group is anchored to. A pane scales around its own origin,
+// so without correction it drifts away from the screen edge; this names the corner that
+// must stay put.
+enum class HudCorner { TopLeft, TopRight, BottomLeft, BottomRight };
+
+// Adds the paneTrans offset that keeps i_corner pinned in place while the user HUD scale
+// grows or shrinks the pane. The shift is half the change in size pushed toward the
+// anchor corner, so it depends only on the pane's size (not its on-screen position) and
+// works whether the HUD is scaled down or up. i_pull < 1 applies a partial horizontal
+// push for a pane whose content sits inset from its box edge (the heart row).
+void dAnchorHudScale(CPaneMgr* i_pane, HudCorner i_corner, f32* io_x, f32* io_y, f32 i_pull = 1.0f) {
+    const f32 half = (1.0f - dGetUserHudScale()) * 0.5f;
+    const f32 dirX =
+        (i_corner == HudCorner::TopRight || i_corner == HudCorner::BottomRight) ? 1.0f : -1.0f;
+    const f32 dirY =
+        (i_corner == HudCorner::BottomLeft || i_corner == HudCorner::BottomRight) ? 1.0f : -1.0f;
+    *io_x += dirX * i_pane->getInitSizeX() * half * i_pull;
+    *io_y += dirY * i_pane->getInitSizeY() * half;
+}
+
+}  // namespace
+#endif
 dMeter2Draw_c::dMeter2Draw_c(JKRExpHeap* mp_heap) {
     OS_REPORT("enter dMeter2Draw_c::dMeter2Draw_c(JKRExpHeap *mp_heap)\n");
 
@@ -536,6 +575,12 @@ void dMeter2Draw_c::init() {
 }
 
 void dMeter2Draw_c::exec(u32 i_status) {
+#if TARGET_PC
+    // n_all keeps the vanilla scale. Scaling the root pane shrinks every child toward
+    // its centred origin; per-child scaling in each drawXxx() path keeps each HUD group
+    // anchored to its own pane origin and also pulls it toward the screen corner.
+    const f32 userHudScale = dGetUserHudScale();
+#endif
     if (mParentScale != g_drawHIO.mParentScale) {
         mParentScale = g_drawHIO.mParentScale;
         mpParent->scale(g_drawHIO.mParentScale, g_drawHIO.mParentScale);
@@ -546,6 +591,39 @@ void dMeter2Draw_c::exec(u32 i_status) {
         mpParent->setAlphaRate(g_drawHIO.mParentAlpha);
     }
 
+#if TARGET_PC
+    if (i_status & 0x1000000) {
+        f32 ringPosX = g_drawHIO.mRingHUDButtonsPosX;
+        f32 ringPosY = g_drawHIO.mRingHUDButtonsPosY;
+        dAnchorHudScale(mpButtonParent, HudCorner::TopRight, &ringPosX, &ringPosY);
+        if (mButtonsPosX != ringPosX || mButtonsPosY != ringPosY) {
+            mButtonsPosX = ringPosX;
+            mButtonsPosY = ringPosY;
+            mpButtonParent->paneTrans(ringPosX, ringPosY);
+        }
+
+        const f32 ringButtonsScale = g_drawHIO.mRingHUDButtonsScale * userHudScale;
+        if (mButtonsScale != ringButtonsScale) {
+            mButtonsScale = ringButtonsScale;
+            mpButtonParent->scale(ringButtonsScale, ringButtonsScale);
+        }
+    } else {
+        f32 mainPosX = g_drawHIO.mMainHUDButtonsPosX;
+        f32 mainPosY = g_drawHIO.mMainHUDButtonsPosY;
+        dAnchorHudScale(mpButtonParent, HudCorner::TopRight, &mainPosX, &mainPosY);
+        if (mButtonsPosX != mainPosX || mButtonsPosY != mainPosY) {
+            mButtonsPosX = mainPosX;
+            mButtonsPosY = mainPosY;
+            mpButtonParent->paneTrans(mainPosX, mainPosY);
+        }
+
+        const f32 mainButtonsScale = g_drawHIO.mMainHUDButtonsScale * userHudScale;
+        if (mButtonsScale != mainButtonsScale) {
+            mButtonsScale = mainButtonsScale;
+            mpButtonParent->scale(mainButtonsScale, mainButtonsScale);
+        }
+    }
+#else
     if (i_status & 0x1000000) {
         if (mButtonsPosX != g_drawHIO.mRingHUDButtonsPosX ||
             mButtonsPosY != g_drawHIO.mRingHUDButtonsPosY)
@@ -574,6 +652,7 @@ void dMeter2Draw_c::exec(u32 i_status) {
             mpButtonParent->scale(g_drawHIO.mMainHUDButtonsScale, g_drawHIO.mMainHUDButtonsScale);
         }
     }
+#endif
 }
 
 void dMeter2Draw_c::draw() {
@@ -588,6 +667,9 @@ void dMeter2Draw_c::draw() {
         if (mpItemXY[i] != NULL) {
             for (int j = 0; j < 3; j++) {
                 f32 temp_f30 = mItemParams[i].num_scale * 16.0f;
+#if TARGET_PC
+                temp_f30 *= dGetUserHudScale();
+#endif
 
                 Vec vtx0 = mpItemXY[i]->getPanePtr()->getGlbVtx(0);
                 Vec vtx3 = mpItemXY[i]->getPanePtr()->getGlbVtx(3);
@@ -717,7 +799,291 @@ void dMeter2Draw_c::draw() {
                    g_drawHIO.mMidnaIconPikariBackOuter, g_drawHIO.mMidnaIconPikariBackInner,
                    g_drawHIO.mMidnaIconPikariAnimSpeed, 3);
     }
+
+#if TARGET_PC
+    // Co-op: P2 owns prompt state too, so present the button/item HUD in their viewport.
+    drawCoopSecondaryButtonHud(graf_ctx);
+#endif
 }
+
+#if TARGET_PC
+namespace {
+
+struct CoopPaneState {
+    f32 translate_x;
+    f32 translate_y;
+    f32 scale_x;
+    f32 scale_y;
+    f32 alpha_rate;
+    u8 alpha;
+    bool visible;
+};
+
+CoopPaneState savePaneState(CPaneMgr* pane) {
+    return {
+        pane->getTranslateX(),
+        pane->getTranslateY(),
+        pane->getScaleX(),
+        pane->getScaleY(),
+        pane->getAlphaRate(),
+        pane->getPanePtr()->getAlpha(),
+        pane->isVisible(),
+    };
+}
+
+void restorePaneState(CPaneMgr* pane, const CoopPaneState& state) {
+    pane->translate(state.translate_x, state.translate_y);
+    pane->scale(state.scale_x, state.scale_y);
+    pane->setAlphaRate(state.alpha_rate);
+    pane->getPanePtr()->setAlpha(state.alpha);
+    if (state.visible) {
+        pane->show();
+    } else {
+        pane->hide();
+    }
+}
+
+}  // namespace
+
+void dMeter2Draw_c::drawCoopSecondaryButtonHud(J2DGrafContext* i_restoreGrafCtx) {
+    // Co-op: P2's prompt state shares vanilla panes, so isolate the secondary draw and restore them.
+    // Co-op: window 1 is P2's split-screen viewport, so require two active windows.
+    if (!dusk::coop::event_presentation::shouldPresentSplitViewports() ||
+        dComIfGp_getWindowNum() < 2 ||
+        dComIfGp_isPauseFlag())
+    {
+        return;
+    }
+
+    J2DOrthoGraph p2_graph;
+    if (!dusk::coop::ui_owner::setViewportGraph(dusk::coop::PlayerSlot::Secondary, &p2_graph)) {
+        return;
+    }
+
+    CoopPaneState button_parent = savePaneState(mpButtonParent);
+    CoopPaneState button_a = savePaneState(mpButtonA);
+    CoopPaneState text_a = savePaneState(mpTextA);
+    f32 life_alpha = mpLifeParent->getAlphaRate();
+    f32 light_drop_alpha = mpLightDropParent->getAlphaRate();
+    f32 rupee_key_alpha = mpRupeeKeyParent->getAlphaRate();
+    CoopPaneState a_text[5];
+    char a_text_string[5][64];
+    for (int i = 0; i < 5; i++) {
+        a_text[i] = savePaneState(mpAText[i]);
+        strcpy(a_text_string[i], static_cast<J2DTextBox*>(mpAText[i]->getPanePtr())->getStringPtr());
+    }
+
+    u8 old_emphasis_a = field_0x761;
+    u8 old_emphasis_b = field_0x762;
+    u8 old_emphasis_xy[3] = {field_0x768[0], field_0x768[1], field_0x768[2]};
+    f32 old_pikari_frame = field_0x608;
+    f32 old_pikari_b_frame = field_0x60c;
+    f32 old_pikari_xy_frame[2] = {field_0x620[0], field_0x620[1]};
+    u8 old_pikari_type = field_0x759;
+    u8 old_pikari_b_type = field_0x75a;
+    u8 old_pikari_xy_type[2] = {field_0x75c[0], field_0x75c[1]};
+
+    auto recordHudReplay = [this](dusk::coop::hud_diagnostics::ReplayPhase phase,
+                                  dusk::coop::PlayerSlot slot, u8 doStatus) {
+        // Co-op: capture both resolver intent and the shared pane state around P2's HUD replay.
+        dusk::coop::hud_diagnostics::ReplaySnapshot snapshot;
+        snapshot.phase = phase;
+        snapshot.presentationSlot = slot;
+        snapshot.doStatus = doStatus;
+        for (int i = 0; i < 2; i++) {
+            // Co-op: HUD diagnostics must inspect P2 item state without normalizing the live sidecar.
+            const dusk::coop::player_item_selection::ItemSelectionSnapshot item =
+                dusk::coop::player_item_selection::inspectItem(slot, i);
+            snapshot.resolved[i] = {
+                item.selectIndex,
+                item.mixIndex,
+                item.item,
+                item.count,
+                item.maxCount,
+            };
+            snapshot.panes[i] = {
+                mpItemXY[i]->isVisible(),
+                mpItemXYPane[i]->isVisible(),
+                mpItemNumTex[i][2]->isVisible(),
+                mpItemXY[i]->getPanePtr()->getAlpha(),
+                mpItemXY[i]->getAlphaRate(),
+                mpItemXY[i]->getTranslateX(),
+                mpItemXY[i]->getTranslateY(),
+                mpItemXY[i]->getScaleX(),
+                mpItemXY[i]->getScaleY(),
+            };
+        }
+        dusk::coop::hud_diagnostics::recordSnapshot(snapshot);
+    };
+
+    recordHudReplay(dusk::coop::hud_diagnostics::ReplayPhase::BeforeSecondaryApply,
+                    dusk::coop::hud_owner::currentSlot(),
+                    dusk::coop::hud_owner::buttonStatus(
+                        dusk::coop::player_button_status::ButtonStatusKind::Do));
+
+    dusk::coop::hud_owner::pushSlot(dusk::coop::PlayerSlot::Secondary);
+
+    // Co-op: the meter J2D tree is shared, so apply P2's form/button state only for P2's replay.
+    const bool p2_wolf = dusk::coop::hud_owner::currentPlayer()->checkWolf();
+    dusk::coop::hud_owner::ItemPresentation p2_items[2];
+    for (int i = 0; i < 2; i++) {
+        p2_items[i] = dusk::coop::hud_owner::itemPresentation(i);
+        if (p2_wolf) {
+            const dusk::coop::player_button_status::ButtonStatusKind kind =
+                i == 0 ? dusk::coop::player_button_status::ButtonStatusKind::X :
+                         dusk::coop::player_button_status::ButtonStatusKind::Y;
+            drawButtonXY(i, 0, dusk::coop::hud_owner::buttonStatus(kind), false,
+                         (dusk::coop::hud_owner::buttonFlag(kind) & (2 | 4)) != 0);
+            drawItemNum(i, 0.0f);
+        } else {
+            changeTextureItemXY(i, p2_items[i].item);
+            drawButtonXY(i, p2_items[i].item, 0, true, false);
+            if (p2_items[i].showCount) {
+                setItemNum(i, p2_items[i].count, p2_items[i].maxCount);
+                drawItemNum(i, 1.0f);
+            } else {
+                drawItemNum(i, 0.0f);
+            }
+        }
+    }
+
+    const u8 b_status = dusk::coop::hud_owner::buttonStatus(
+        dusk::coop::player_button_status::ButtonStatusKind::A);
+    const u8 r_status = dusk::coop::hud_owner::buttonStatus(
+        dusk::coop::player_button_status::ButtonStatusKind::R);
+    const u8 z_status = dusk::coop::hud_owner::buttonStatus(
+        dusk::coop::player_button_status::ButtonStatusKind::Z);
+    const bool b_emphasis =
+        (dusk::coop::hud_owner::buttonFlag(
+             dusk::coop::player_button_status::ButtonStatusKind::A) & (2 | 4)) != 0;
+    drawButtonB(b_status, !p2_wolf, p2_wolf ? g_drawHIO.mButtonBWolfPosX : 0.0f,
+                p2_wolf ? g_drawHIO.mButtonBWolfPosY : 0.0f, 0.0f, 0.0f, 1.0f, b_emphasis);
+    drawButtonR(dComIfGs_getCollectSmell(), r_status, !p2_wolf,
+                (dusk::coop::hud_owner::buttonFlag(
+                     dusk::coop::player_button_status::ButtonStatusKind::R) & (2 | 4)) != 0);
+    drawButtonZ(z_status);
+
+    const u8 do_status = dusk::coop::hud_owner::buttonStatus(
+        dusk::coop::player_button_status::ButtonStatusKind::Do);
+    mpButtonParent->setAlphaRate(g_drawHIO.mParentAlpha * g_drawHIO.mMainHUDButtonsAlpha);
+    drawButtonA(do_status, g_drawHIO.mButtonAPosX, g_drawHIO.mButtonAPosY, 0.0f, 0.0f, 1.0f,
+                false, false);
+    setButtonIconAAlpha(do_status, 0, !p2_wolf);
+    setButtonIconBAlpha(b_status, 0, !p2_wolf);
+    setButtonIconAlpha(0, dusk::coop::hud_owner::buttonStatus(
+                           dusk::coop::player_button_status::ButtonStatusKind::X), 0, !p2_wolf);
+    setButtonIconAlpha(1, dusk::coop::hud_owner::buttonStatus(
+                           dusk::coop::player_button_status::ButtonStatusKind::Y), 0, !p2_wolf);
+    setButtonIconAlpha(2, r_status, 0, !p2_wolf);
+    mpLifeParent->setAlphaRate(0.0f);
+    mpLightDropParent->setAlphaRate(0.0f);
+    mpRupeeKeyParent->setAlphaRate(0.0f);
+    recordHudReplay(dusk::coop::hud_diagnostics::ReplayPhase::SecondaryApplied,
+                    dusk::coop::hud_owner::currentSlot(), do_status);
+
+    // Co-op: the P2 graph preserves vanilla widescreen coordinates inside P2's viewport.
+    mpScreen->draw(0.0f, 0.0f, &p2_graph);
+
+    for (int i = 0; i < 2; i++) {
+        if (mpItemXY[i] != NULL) {
+            for (int j = 0; j < 3; j++) {
+                f32 temp_f30 = mItemParams[i].num_scale * 16.0f;
+
+                Vec vtx0 = mpItemXY[i]->getPanePtr()->getGlbVtx(0);
+                Vec vtx3 = mpItemXY[i]->getPanePtr()->getGlbVtx(3);
+
+                mpItemNumTex[i][j]->draw(mItemParams[i].num_pos_x +
+                                             (((vtx0.x + vtx3.x) * 0.5f) + (temp_f30 * j)),
+                                         mItemParams[i].num_pos_y +
+                                             (((vtx0.y + vtx3.y) * 0.5f) + mpItemXY[i]->getSizeY()),
+                                         temp_f30, temp_f30, false, false, false);
+            }
+        }
+    }
+
+    dusk::coop::hud_owner::popSlot();
+
+    // Co-op: restore P1's button/item panes before the shared HUD object returns to vanilla updates.
+    dusk::coop::hud_owner::pushSlot(dusk::coop::PlayerSlot::Primary);
+    const bool p1_wolf = dusk::coop::hud_owner::currentPlayer()->checkWolf();
+    for (int i = 0; i < 2; i++) {
+        dusk::coop::hud_owner::ItemPresentation p1_item =
+            dusk::coop::hud_owner::itemPresentation(i);
+        if (p1_wolf) {
+            const dusk::coop::player_button_status::ButtonStatusKind kind =
+                i == 0 ? dusk::coop::player_button_status::ButtonStatusKind::X :
+                         dusk::coop::player_button_status::ButtonStatusKind::Y;
+            drawButtonXY(i, 0, dusk::coop::hud_owner::buttonStatus(kind), false,
+                         (dusk::coop::hud_owner::buttonFlag(kind) & (2 | 4)) != 0);
+            drawItemNum(i, 0.0f);
+        } else {
+            changeTextureItemXY(i, p1_item.item);
+            drawButtonXY(i, p1_item.item, 0, true, false);
+            if (p1_item.showCount) {
+                setItemNum(i, p1_item.count, p1_item.maxCount);
+                drawItemNum(i, 1.0f);
+            } else {
+                drawItemNum(i, 0.0f);
+            }
+        }
+    }
+
+    const u8 p1_b_status = dusk::coop::hud_owner::buttonStatus(
+        dusk::coop::player_button_status::ButtonStatusKind::A);
+    drawButtonB(p1_b_status, !p1_wolf, p1_wolf ? g_drawHIO.mButtonBWolfPosX : 0.0f,
+                p1_wolf ? g_drawHIO.mButtonBWolfPosY : 0.0f, 0.0f, 0.0f, 1.0f,
+                (dusk::coop::hud_owner::buttonFlag(
+                     dusk::coop::player_button_status::ButtonStatusKind::A) & (2 | 4)) != 0);
+    drawButtonR(dComIfGs_getCollectSmell(),
+                dusk::coop::hud_owner::buttonStatus(
+                    dusk::coop::player_button_status::ButtonStatusKind::R),
+                !p1_wolf,
+                (dusk::coop::hud_owner::buttonFlag(
+                     dusk::coop::player_button_status::ButtonStatusKind::R) & (2 | 4)) != 0);
+    drawButtonZ(dusk::coop::hud_owner::buttonStatus(
+        dusk::coop::player_button_status::ButtonStatusKind::Z));
+    dusk::coop::hud_owner::popSlot();
+    recordHudReplay(dusk::coop::hud_diagnostics::ReplayPhase::PrimaryRestored,
+                    dusk::coop::hud_owner::currentSlot(),
+                    dusk::coop::hud_owner::buttonStatus(
+                        dusk::coop::player_button_status::ButtonStatusKind::Do));
+
+    field_0x762 = old_emphasis_b;
+    for (int i = 0; i < 3; i++) {
+        field_0x768[i] = old_emphasis_xy[i];
+    }
+    field_0x60c = old_pikari_b_frame;
+    for (int i = 0; i < 2; i++) {
+        field_0x620[i] = old_pikari_xy_frame[i];
+        field_0x75c[i] = old_pikari_xy_type[i];
+    }
+    field_0x75a = old_pikari_b_type;
+
+    restorePaneState(mpButtonParent, button_parent);
+    restorePaneState(mpButtonA, button_a);
+    restorePaneState(mpTextA, text_a);
+    mpLifeParent->setAlphaRate(life_alpha);
+    mpLightDropParent->setAlphaRate(light_drop_alpha);
+    mpRupeeKeyParent->setAlphaRate(rupee_key_alpha);
+    for (int i = 0; i < 5; i++) {
+        restorePaneState(mpAText[i], a_text[i]);
+        strcpy(static_cast<J2DTextBox*>(mpAText[i]->getPanePtr())->getStringPtr(), a_text_string[i]);
+    }
+
+    field_0x761 = old_emphasis_a;
+    field_0x608 = old_pikari_frame;
+    field_0x759 = old_pikari_type;
+
+    if (i_restoreGrafCtx != NULL) {
+        i_restoreGrafCtx->setPort();
+        view_port_class* primary_viewport = dComIfGp_getWindow(0)->getViewPort();
+        GXSetViewport(primary_viewport->x_orig, primary_viewport->y_orig, primary_viewport->width,
+                      primary_viewport->height, primary_viewport->near_z, primary_viewport->far_z);
+        GXSetScissor(primary_viewport->x_orig, primary_viewport->y_orig, primary_viewport->width,
+                     primary_viewport->height);
+    }
+}
+#endif
 
 void dMeter2Draw_c::initLife() {
     if (dComIfGs_getLife() > dComIfGs_getMaxLifeGauge()) {
@@ -1478,7 +1844,12 @@ void dMeter2Draw_c::drawLife(s16 i_maxLife, s16 i_life, f32 i_posX, f32 i_posY) 
         }
     }
 
+#if TARGET_PC
+    const f32 lifeParentScale = g_drawHIO.mLifeParentScale * dGetUserHudScale();
+    mpLifeParent->scale(lifeParentScale, lifeParentScale);
+#else
     mpLifeParent->scale(g_drawHIO.mLifeParentScale, g_drawHIO.mLifeParentScale);
+#endif
 
     for (int i = 0; i < 20; i++) {
         mpHeartMark[i]->scale(g_drawHIO.mHeartMarkScale, g_drawHIO.mHeartMarkScale);
@@ -1488,7 +1859,16 @@ void dMeter2Draw_c::drawLife(s16 i_maxLife, s16 i_life, f32 i_posX, f32 i_posY) 
         mpBigHeart->scale(g_drawHIO.mBigHeartScale, g_drawHIO.mBigHeartScale);
     }
 
+#if TARGET_PC
+    f32 lifePosX = i_posX;
+    f32 lifePosY = i_posY;
+    // The heart row sits inset from its box's left edge, so use a partial horizontal pull
+    // to keep it from jamming against the screen edge.
+    dAnchorHudScale(mpLifeParent, HudCorner::TopLeft, &lifePosX, &lifePosY, 0.6f);
+    mpLifeParent->paneTrans(lifePosX, lifePosY);
+#else
     mpLifeParent->paneTrans(i_posX, i_posY);
+#endif
 }
 
 void dMeter2Draw_c::setAlphaLifeChange(bool param_0) {
@@ -1601,9 +1981,22 @@ void dMeter2Draw_c::drawKanteraScreen(u8 i_meterType) {
     mpMagicMeter->resize(field_0x584[i_meterType], field_0x590[i_meterType]);
     mpMagicFrameR->move(field_0x59c[i_meterType], field_0x5a8[i_meterType]);
     mpMagicBase->resize(field_0x5b4[i_meterType], field_0x5c0[i_meterType]);
+#if TARGET_PC
+    const f32 magicUserScale = dGetUserHudScale();
+    mpMagicParent->scale(field_0x5cc[i_meterType] * magicUserScale,
+                         field_0x5d8[i_meterType] * magicUserScale);
+
+    f32 magicPosX = field_0x5e4[i_meterType];
+    f32 magicPosY = field_0x5f0[i_meterType];
+    // The oil/magic bar sits inset within its pane box, so use a reduced horizontal pull
+    // (like the heart row) to keep it from overshooting off the left edge when shrunk.
+    dAnchorHudScale(mpMagicParent, HudCorner::TopLeft, &magicPosX, &magicPosY, 0.3f);
+    mpMagicParent->paneTrans(magicPosX, magicPosY);
+#else
     mpMagicParent->scale(field_0x5cc[i_meterType], field_0x5d8[i_meterType]);
 
     mpMagicParent->paneTrans(field_0x5e4[i_meterType], field_0x5f0[i_meterType]);
+#endif
 
     mpKanteraScreen->draw(0.0f, 0.0f, graf_ctx);
 }
@@ -1867,10 +2260,21 @@ void dMeter2Draw_c::drawLightDrop(u8 i_num, u8 i_needNum, f32 i_posX, f32 i_posY
 
     field_0x6fc = param_5;
     mLightDropVesselScale = i_vesselScale;
+#if TARGET_PC
+    const f32 lightDropUserScale = dGetUserHudScale();
+    const f32 lightDropScale = mLightDropVesselScale * field_0x6f8 * lightDropUserScale;
+    mpLightDropParent->scale(lightDropScale, lightDropScale);
+
+    f32 lightDropPosX = i_posX;
+    f32 lightDropPosY = i_posY;
+    dAnchorHudScale(mpLightDropParent, HudCorner::TopRight, &lightDropPosX, &lightDropPosY);
+    mpLightDropParent->paneTrans(lightDropPosX, lightDropPosY);
+#else
     mpLightDropParent->scale(mLightDropVesselScale * field_0x6f8,
                              mLightDropVesselScale * field_0x6f8);
 
     mpLightDropParent->paneTrans(i_posX, i_posY);
+#endif
 }
 
 void dMeter2Draw_c::setAlphaLightDropChange(bool unused) {}
@@ -1943,8 +2347,13 @@ void dMeter2Draw_c::setAlphaLightDropAnimeMax() {
             field_0x6f8 = 1.0f;
         }
 
+#if TARGET_PC
+        const f32 dropAnimScale = mLightDropVesselScale * field_0x6f8 * dGetUserHudScale();
+        mpLightDropParent->scale(dropAnimScale, dropAnimScale);
+#else
         mpLightDropParent->scale(mLightDropVesselScale * field_0x6f8,
                                  mLightDropVesselScale * field_0x6f8);
+#endif
 
         if (g_drawHIO.mLightDrop.mDropGetScaleAnimFrameNum == mpLightDropParent->getAlphaTimer()) {
             dMeter2Info_setLightDropGetFlag(dComIfGp_getStartStageDarkArea(), 0xFF);
@@ -2015,10 +2424,22 @@ void dMeter2Draw_c::drawRupee(s16 i_rupeeNum) {
     static_cast<J2DPicture*>(mpRupeeTexture[0][0]->getPanePtr())->changeTexture(timg, 0);
     static_cast<J2DPicture*>(mpRupeeTexture[0][1]->getPanePtr())->changeTexture(timg, 0);
 
+#if TARGET_PC
+    const f32 rupeeKeyUserScale = dGetUserHudScale();
+    const f32 rupeeKeyScale = g_drawHIO.mRupeeKeyScale * field_0x718 * rupeeKeyUserScale;
+    mpRupeeKeyParent->scale(rupeeKeyScale, rupeeKeyScale);
+
+    f32 rupeeKeyPosX = g_drawHIO.mRupeeKeyPosX;
+    f32 rupeeKeyPosY = g_drawHIO.mRupeeKeyPosY;
+    // Rupees/keys read better anchored to the bottom-right corner than the top-right.
+    dAnchorHudScale(mpRupeeKeyParent, HudCorner::BottomRight, &rupeeKeyPosX, &rupeeKeyPosY);
+    mpRupeeKeyParent->paneTrans(rupeeKeyPosX, rupeeKeyPosY);
+#else
     mpRupeeKeyParent->scale(g_drawHIO.mRupeeKeyScale * field_0x718,
                             g_drawHIO.mRupeeKeyScale * field_0x718);
 
     mpRupeeKeyParent->paneTrans(g_drawHIO.mRupeeKeyPosX, g_drawHIO.mRupeeKeyPosY);
+#endif
 
     mpRupeeParent[0]->scale(g_drawHIO.mRupeeScale, g_drawHIO.mRupeeScale);
     mpRupeeParent[0]->paneTrans(g_drawHIO.mRupeePosX, g_drawHIO.mRupeePosY);
@@ -2137,8 +2558,18 @@ void dMeter2Draw_c::drawKey(s16 i_keyNum) {
         }
     }
 
+#if TARGET_PC
+    const f32 keyScale = g_drawHIO.mKeyScale * dGetUserHudScale();
+    mpKeyParent->scale(keyScale, keyScale);
+
+    f32 keyPosX = g_drawHIO.mKeyPosX;
+    f32 keyPosY = g_drawHIO.mKeyPosY;
+    dAnchorHudScale(mpKeyParent, HudCorner::BottomRight, &keyPosX, &keyPosY);
+    mpKeyParent->paneTrans(keyPosX, keyPosY);
+#else
     mpKeyParent->scale(g_drawHIO.mKeyScale, g_drawHIO.mKeyScale);
     mpKeyParent->paneTrans(g_drawHIO.mKeyPosX, g_drawHIO.mKeyPosY);
+#endif
 }
 
 void dMeter2Draw_c::setAlphaKeyChange(bool param_0) {
@@ -2210,7 +2641,15 @@ void dMeter2Draw_c::drawButtonA(u8 i_action, f32 i_posX, f32 i_posY, f32 i_textP
         var_f30 = g_drawHIO.mButtonATextTalkAScale;
     }
 
-    if (dComIfGp_isDoSetFlag(2) || dComIfGp_isDoSetFlag(4)) {
+    const u8 do_flag = dusk::coop::hud_owner::buttonFlag(
+        dusk::coop::player_button_status::ButtonStatusKind::Do);
+    const u8 do_status = dusk::coop::hud_owner::buttonStatus(
+        dusk::coop::player_button_status::ButtonStatusKind::Do);
+    const u8 a_status = dusk::coop::hud_owner::buttonStatus(
+        dusk::coop::player_button_status::ButtonStatusKind::A);
+
+    // Co-op: prompt text/emphasis follows the HUD slot being presented, not P1 globals.
+    if ((do_flag & 2) || (do_flag & 4)) {
         field_0x761 = 7;
     }
 
@@ -2228,8 +2667,7 @@ void dMeter2Draw_c::drawButtonA(u8 i_action, f32 i_posX, f32 i_posY, f32 i_textP
         }
     }
 
-    if (*mp_string != 0 && ((dComIfGp_getDoStatus() != dComIfGp_getAStatus() &&
-                             dComIfGp_getDoStatus() != dComIfGp_getAStatusForce()) ||
+    if (*mp_string != 0 && ((do_status != a_status && do_status != dComIfGp_getAStatusForce()) ||
                             !isEmphasisA()))
     {
         mpTextA->show();
@@ -2240,16 +2678,17 @@ void dMeter2Draw_c::drawButtonA(u8 i_action, f32 i_posX, f32 i_posY, f32 i_textP
 
     JUT_ASSERT(0, strlen(mp_string) < (64));
 
-    if (daPy_getPlayerActorClass()->getSumouMode()) {
+    // Co-op: A-button prompt text uses the HUD slot's ALINK presentation state.
+    if (dusk::coop::hud_owner::currentPlayer()->getSumouMode()) {
         mpTextA->show();
         mp_string = getActionString(0x15, 1, NULL);
 
         for (int i = 0; i < 5; i++) {
-            strcpy(static_cast<J2DTextBox*>(mpAText[i]->getPanePtr())->getStringPtr(), mp_string);
+            SAFE_STRCPY(static_cast<J2DTextBox*>(mpAText[i]->getPanePtr())->getStringPtr(), mp_string);
         }
     } else {
         for (int i = 0; i < 5; i++) {
-            strcpy(static_cast<J2DTextBox*>(mpAText[i]->getPanePtr())->getStringPtr(), mp_string);
+            SAFE_STRCPY(static_cast<J2DTextBox*>(mpAText[i]->getPanePtr())->getStringPtr(), mp_string);
         }
     }
 
@@ -2276,14 +2715,22 @@ void dMeter2Draw_c::drawButtonB(u8 i_action, bool param_1, f32 i_posX, f32 i_pos
 
     char* mp_string = getActionString(i_action, 1, &field_0x762);
 
-    if (dComIfGp_isASetFlag(2) || dComIfGp_isASetFlag(4)) {
+    // Co-op: shared meter panes read flags for the HUD slot currently being replayed.
+    const u8 a_flag = dusk::coop::hud_owner::buttonFlag(
+        dusk::coop::player_button_status::ButtonStatusKind::A);
+    const u8 do_status = dusk::coop::hud_owner::buttonStatus(
+        dusk::coop::player_button_status::ButtonStatusKind::Do);
+    const u8 a_status = dusk::coop::hud_owner::buttonStatus(
+        dusk::coop::player_button_status::ButtonStatusKind::A);
+
+    if ((a_flag & 2) || (a_flag & 4)) {
         field_0x762 = 7;
     }
 
     if (*mp_string != 0 && i_action != 0 && i_action != 0x2E &&
-        ((dComIfGp_getDoStatus() == 0 ||
-          (dComIfGp_getDoStatus() != dComIfGp_getAStatus() &&
-           dComIfGp_getDoStatus() != dComIfGp_getAStatusForce())) ||
+        ((do_status == 0 ||
+          (do_status != a_status &&
+           do_status != dComIfGp_getAStatusForce())) ||
          !isEmphasisB()))
     {
         mpTextB->show();
@@ -2308,7 +2755,7 @@ void dMeter2Draw_c::drawButtonB(u8 i_action, bool param_1, f32 i_posX, f32 i_pos
     JUT_ASSERT(0, strlen(mp_string) < (64));
 
     for (int i = 0; i < 5; i++) {
-        strcpy(static_cast<J2DTextBox*>(mpBText[i]->getPanePtr())->getStringPtr(), mp_string);
+        SAFE_STRCPY(static_cast<J2DTextBox*>(mpBText[i]->getPanePtr())->getStringPtr(), mp_string);
     }
 
     if (i_action == 0x26 || i_action == 0x2E) {
@@ -2365,7 +2812,10 @@ void dMeter2Draw_c::drawButtonR(u8 unused0, u8 i_action, bool unused1, bool unus
     mpTextXY[2]->show();
 
     getActionString(i_action, 1, &field_0x768[2]);
-    if (dComIfGp_isRSetFlag(2) || dComIfGp_isRSetFlag(4)) {
+    // Co-op: R prompt emphasis follows the HUD slot being presented.
+    const u8 r_flag = dusk::coop::hud_owner::buttonFlag(
+        dusk::coop::player_button_status::ButtonStatusKind::R);
+    if ((r_flag & 2) || (r_flag & 4)) {
         field_0x768[2] = 7;
     }
 }
@@ -2373,7 +2823,10 @@ void dMeter2Draw_c::drawButtonR(u8 unused0, u8 i_action, bool unused1, bool unus
 void dMeter2Draw_c::drawButtonZ(u8 i_action) {
     char* mp_string = getActionString(i_action, 1, &field_0x764);
 
-    if (dComIfGp_isZSetFlag(2) || dComIfGp_isZSetFlag(4)) {
+    // Co-op: Midna/Z prompt emphasis follows the HUD slot being presented.
+    const u8 z_flag = dusk::coop::hud_owner::buttonFlag(
+        dusk::coop::player_button_status::ButtonStatusKind::Z);
+    if ((z_flag & 2) || (z_flag & 4)) {
         field_0x764 = 7;
     }
 
@@ -2391,7 +2844,7 @@ void dMeter2Draw_c::drawButtonZ(u8 i_action) {
     JUT_ASSERT(0, strlen(mp_string) < (64));
 
     for (int i = 0; i < 5; i++) {
-        strcpy(static_cast<J2DTextBox*>(mpXYText[i][2]->getPanePtr())->getStringPtr(), mp_string);
+        SAFE_STRCPY(static_cast<J2DTextBox*>(mpXYText[i][2]->getPanePtr())->getStringPtr(), mp_string);
     }
 
     mpButtonXY[2]->scale(g_drawHIO.mButtonZScale, g_drawHIO.mButtonZScale);
@@ -2455,9 +2908,15 @@ void dMeter2Draw_c::drawButtonXY(int i_no, u8 i_itemNo, u8 i_action, bool param_
 
         int var_r26;
         if (i_no == SELECT_X_e) {
-            var_r26 = dComIfGp_isXSetFlag(2) | dComIfGp_isXSetFlag(4);
+            // Co-op: wolf X/Y statuses are slot-local during secondary HUD replay.
+            const u8 x_flag = dusk::coop::hud_owner::buttonFlag(
+                dusk::coop::player_button_status::ButtonStatusKind::X);
+            var_r26 = (x_flag & 2) | (x_flag & 4);
         } else if (i_no == SELECT_Y_e) {
-            var_r26 = dComIfGp_isYSetFlag(2) | dComIfGp_isYSetFlag(4);
+            // Co-op: wolf X/Y statuses are slot-local during secondary HUD replay.
+            const u8 y_flag = dusk::coop::hud_owner::buttonFlag(
+                dusk::coop::player_button_status::ButtonStatusKind::Y);
+            var_r26 = (y_flag & 2) | (y_flag & 4);
         }
 
         char* mp_string = getActionString(i_action, 1, &field_0x768[i_no]);
@@ -2490,7 +2949,7 @@ void dMeter2Draw_c::drawButtonXY(int i_no, u8 i_itemNo, u8 i_action, bool param_
         JUT_ASSERT(0, strlen(mp_string) < (64));
 
         for (int i = 0; i < 5; i++) {
-            strcpy(static_cast<J2DTextBox*>(mpXYText[i][i_no]->getPanePtr())->getStringPtr(),
+            SAFE_STRCPY(static_cast<J2DTextBox*>(mpXYText[i][i_no]->getPanePtr())->getStringPtr(),
                    mp_string);
         }
 
@@ -2596,11 +3055,24 @@ f32 dMeter2Draw_c::getButtonCrossParentInitTransY() {
 }
 
 void dMeter2Draw_c::drawButtonCross(f32 i_posX, f32 i_posY) {
+#if TARGET_PC
+    const f32 buttonCrossUserScale = dGetUserHudScale();
+    const f32 buttonCrossScale = g_drawHIO.mButtonCrossScale * buttonCrossUserScale;
+    mpButtonCrossParent->scale(buttonCrossScale, buttonCrossScale);
+#else
     mpButtonCrossParent->scale(g_drawHIO.mButtonCrossScale, g_drawHIO.mButtonCrossScale);
+#endif
     mpTextI->scale(g_drawHIO.mButtonCrossTextScale, g_drawHIO.mButtonCrossTextScale);
     mpTextM->scale(g_drawHIO.mButtonCrossTextScale, g_drawHIO.mButtonCrossTextScale);
 
+#if TARGET_PC
+    f32 buttonCrossPosX = i_posX;
+    f32 buttonCrossPosY = i_posY;
+    dAnchorHudScale(mpButtonCrossParent, HudCorner::TopLeft, &buttonCrossPosX, &buttonCrossPosY);
+    mpButtonCrossParent->paneTrans(buttonCrossPosX, buttonCrossPosY);
+#else
     mpButtonCrossParent->paneTrans(i_posX, i_posY);
+#endif
 }
 
 void dMeter2Draw_c::setAlphaButtonCrossAnimeMin() {
@@ -3002,8 +3474,11 @@ void dMeter2Draw_c::setButtonIconAAlpha(u8 unused0, u32 unused1, bool unused2) {
                    (g_drawHIO.mParentAlpha * g_drawHIO.mMainHUDButtonsAlpha) *
                    (f32)mpButtonA->getInitAlpha();
         f32 alpha_rate = mpButtonParent->getAlphaRate();
+        const u8 do_flag = dusk::coop::hud_owner::buttonFlag(
+            dusk::coop::player_button_status::ButtonStatusKind::Do);
 
-        if (!dMeter2Info_isUseButton(1) && !dComIfGp_isDoSetFlag(4)) {
+        // Co-op: P2 prompt dimming must honor P2's sidecar Do flag.
+        if (!dMeter2Info_isUseButton(1) && !(do_flag & 4)) {
             alpha = g_drawHIO.mButtonXYBaseDimAlpha;
         }
 
@@ -3243,7 +3718,7 @@ char* dMeter2Draw_c::getActionString(u8 i_action, u8 i_type, u8* param_2) {
     };
 
     static char i_text_buf[32];
-    strcpy(i_text_buf, "");
+    SAFE_STRCPY(i_text_buf, "");
 
     if (param_2 != NULL) {
         *param_2 = 1;
@@ -3505,9 +3980,16 @@ void dMeter2Draw_c::drawKanteraMeter(u8 i_button, f32 i_alphaRate) {
     Vec vtx0 = pane->getPanePtr()->getGlbVtx(0);
     Vec vtx3 = pane->getPanePtr()->getGlbVtx(3);
 
+#if TARGET_PC
+    const f32 oilUserScale = dGetUserHudScale();
+    mpKanteraMeter[i_button]->setPos(((vtx0.x + vtx3.x) * 0.5f) + 9.0f * oilUserScale + sp10[i_button],
+                                     vtx3.y + sp8[i_button]);
+    mpKanteraMeter[i_button]->setScale(0.6f * oilUserScale, 0.6f * oilUserScale);
+#else
     mpKanteraMeter[i_button]->setPos(((vtx0.x + vtx3.x) * 0.5f) + 9.0f + sp10[i_button],
                                      vtx3.y + sp8[i_button]);
     mpKanteraMeter[i_button]->setScale(0.6f, 0.6f);
+#endif
     mpKanteraMeter[i_button]->setNowGauge(dComIfGs_getMaxOil(), dComIfGs_getOil());
     mpKanteraMeter[i_button]->setAlphaRate(i_alphaRate);
 }
@@ -3928,8 +4410,10 @@ bool dMeter2Draw_c::isBButtonShow(bool param_0) {
     }
 
     if (dMeter2Info_isShopTalkFlag() || dMsgObject_getMsgObjectClass()->isHowlMessage() ||
-        daPy_getPlayerActorClass()->checkHawkWait() || dMeter2Info_getItemExplainWindowStatus() ||
-        (daPy_getPlayerActorClass()->checkGrassWhistle() && param_0) ||
+        // Co-op: B-button prompt scale/visibility follows the HUD slot being drawn.
+        dusk::coop::hud_owner::currentPlayer()->checkHawkWait() ||
+        dMeter2Info_getItemExplainWindowStatus() ||
+        (dusk::coop::hud_owner::currentPlayer()->checkGrassWhistle() && param_0) ||
         (!dComIfGp_event_checkHind(4) && dComIfGp_event_runCheck()))
     {
         return true;

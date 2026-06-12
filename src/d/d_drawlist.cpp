@@ -9,6 +9,7 @@
 #include "d/d_com_inf_game.h"
 #include "d/d_drawlist.h"
 #include "d/d_s_play.h"
+#include "dusk/coop/render_shadows.h"
 #include "m_Do/m_Do_graphic.h"
 #include "m_Do/m_Do_lib.h"
 #include "m_Do/m_Do_mtx.h"
@@ -41,12 +42,12 @@ public:
     /* 0x14 */ GXColor field_0x14;
     /* 0x18 */ GXColor field_0x18;
     /* 0x1C */ TGXTexObj field_0x1c;
-    /* 0x3C */ GXTlutObj field_0x3c;
+    /* 0x3C */ TGXTlutObj field_0x3c;
     /* 0x48 */ s16 field_0x48;
     /* 0x4A */ s16 field_0x4a;
     /* 0x4C */ u8 field_0x4c;
     /* 0x50 */ TGXTexObj field_0x50;
-    /* 0x70 */ GXTlutObj field_0x70;
+    /* 0x70 */ TGXTlutObj field_0x70;
     /* 0x7C */ s16 field_0x7c;
     /* 0x7E */ s16 field_0x7e;
     /* 0x80 */ u8 field_0x80;
@@ -100,7 +101,7 @@ public:
     u8 check() { return field_0x0; }
     int getCI() { return mCI; }
     TGXTexObj* getTexObj() { return &mTexObj; }
-    GXTlutObj* getTlutObj() { return &mTlutObj; }
+    TGXTlutObj* getTlutObj() { return &mTlutObj; }
     GXColor* getColor() { return &mColor; }
     f32 getS() { return mS; }
     f32 getT() { return mT; }
@@ -110,7 +111,7 @@ public:
     /* 0x00 */ u8 field_0x0;
     /* 0x01 */ u8 mCI;
     /* 0x04 */ TGXTexObj mTexObj;
-    /* 0x24 */ GXTlutObj mTlutObj;
+    /* 0x24 */ TGXTlutObj mTlutObj;
     /* 0x30 */ GXColor mColor;
     /* 0x34 */ f32 mS;
     /* 0x38 */ f32 mT;
@@ -188,6 +189,7 @@ void dDlst_window_c::setScissor(f32 xOrig, f32 yOrig, f32 width, f32 height) {
 }
 
 void dDlst_2DTri_c::draw() {
+    ZoneScoped;
     f32 f4;
     f32 f5;
     f32 f2 = cM_scos(field_0xc);
@@ -224,6 +226,7 @@ void dDlst_2DTri_c::draw() {
 }
 
 void dDlst_2DQuad_c::draw() {
+    ZoneScoped;
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 0);
@@ -247,6 +250,7 @@ void dDlst_2DQuad_c::draw() {
 }
 
 void dDlst_2DPoint_c::draw() {
+    ZoneScoped;
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 0);
@@ -268,6 +272,7 @@ void dDlst_2DPoint_c::draw() {
 }
 
 void dDlst_2DT_c::draw() {
+    ZoneScoped;
     static GXColor l_color = {0xFF, 0xFF, 0xFF, 0xE0};
     f32 var5 = field_0xe;
     f32 var6 = field_0x10;
@@ -326,6 +331,7 @@ void dDlst_2DT_c::draw() {
 }
 
 void dDlst_2DT2_c::draw() {
+    ZoneScoped;
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XY, GX_F32, 0);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_CLR_RGBA, GX_RGBA6, 0);
     GXClearVtxDesc();
@@ -665,6 +671,7 @@ void dDlst_2DT2_c::init(ResTIMG* i_timg, f32 param_1, f32 param_2, f32 param_3, 
 }
 
 void dDlst_2DM_c::draw() {
+    ZoneScoped;
     s16 r31 = field_0x22;
     s16 r30 = field_0x24;
     int r29 = field_0x22 + 256.0f;
@@ -728,6 +735,7 @@ void dDlst_2DM_c::draw() {
 
 
 void dDlst_2Dm_c::draw() {
+    ZoneScoped;
     s16 r31 = field_0x48;
     s16 r30 = field_0x4a;
     int r29 = field_0x48 + 256.0f;
@@ -794,6 +802,7 @@ void dDlst_2Dm_c::draw() {
 
 
 void dDlst_2DMt_c::draw() {
+    ZoneScoped;
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 0);
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
@@ -933,6 +942,7 @@ f32 cM_rnd_c::getValue(f32 param_0, f32 param_1) {
 }
 
 void dDlst_effectLine_c::draw() {
+    ZoneScoped;
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
@@ -1034,6 +1044,7 @@ void dDlst_shadowPoly_c::draw() {
         return;
 #endif
 
+    ZoneScoped;
     dDlst_shadowTri_c* tri = getTri();
 
     GXBegin(GX_TRIANGLES, GX_VTXFMT0, mCount * 3);
@@ -1063,9 +1074,48 @@ static J3DDrawBuffer* J3DDrawBuffer__create(u32 size) {
 void dDlst_shadowReal_c::reset() {
     mState = 0;
     mModelNum = 0;
+#if TARGET_PC
+    mHasShadowSetup = false;
+    mpShadowTevstr = NULL;
+#endif
 }
 
+#if TARGET_PC
+static cXyz coOpResolveRealShadowLight(dKy_tevstr_c* tevstr) {
+    if (tevstr != NULL) {
+        return tevstr->mLightPosWorld;
+    }
+
+    dScnKy_env_light_c* env_light = dKy_getEnvlight();
+    cXyz light_pos = dKy_plight_near_pos();
+    if (!(env_light->shadow_mode & 4) &&
+        ((env_light->shadow_mode & 1) || (env_light->shadow_mode & 2)))
+    {
+        light_pos = g_env_light.field_0x10a0;
+    }
+
+    return light_pos;
+}
+
+void dDlst_shadowReal_c::refreshForCurrentView() {
+    if (!dusk::coop::render_shadows::shouldRefreshRealShadowForCurrentView() ||
+        !mHasShadowSetup || mModelNum == 0)
+    {
+        return;
+    }
+
+    cXyz light_pos = coOpResolveRealShadowLight(mpShadowTevstr);
+    // Co-op: real-shadow matrices are baked during shared actor submission. Refresh them during
+    // each split viewport's shadow pass so P2 does not inherit P1's projected shadow matrix.
+    field_0x1 = setShadowRealMtx(&light_pos, &mShadowCenter, mShadowSize, mShadowGroundY,
+                                  mShadowDensityScale, mpShadowTevstr);
+}
+#endif
+
 void dDlst_shadowReal_c::imageDraw(Mtx param_0) {
+#if TARGET_PC
+    refreshForCurrentView();
+#endif
 #ifdef TARGET_PC
     Mtx render_proj_mtx;
     if (dusk::frame_interp::lookup_replacement(getInterpKey(mpModels[0], 2), render_proj_mtx)) {
@@ -1189,7 +1239,9 @@ static BOOL realPolygonCheck(cXyz* param_0, f32 param_1, f32 param_2, cXyz* para
     mDoLib_clipper::changeFar(mDoLib_clipper::getFovyRate() * 10000.0f);
     s32 clip = mDoLib_clipper::clip(j3dSys.getViewMtx(), &local_98, &local_8c);
     mDoLib_clipper::resetFar();
-    if (clip) {
+    // Co-op: real shadows submit into a shared list before each split viewport can replay it.
+    // Camera-0 clipping here can permanently discard P2-visible shadows.
+    if (clip && !dusk::coop::render_shadows::shouldBypassSharedShadowCulling()) {
         return FALSE;
     }
     shdwDrawPoly.Set(local_8c, local_98);
@@ -1301,6 +1353,15 @@ u32 dDlst_shadowReal_c::set(u32 i_key, J3DModel* i_model, cXyz* param_2, f32 par
 
     if (mModelNum == 0) {
         cXyz sp60;
+
+#if TARGET_PC
+        mShadowCenter = *param_2;
+        mShadowSize = param_3;
+        mShadowGroundY = param_4;
+        mShadowDensityScale = param_7;
+        mpShadowTevstr = param_5;
+        mHasShadowSetup = true;
+#endif
 
         if (param_5 != NULL) {
             sp60 = param_5->mLightPosWorld;
@@ -1610,6 +1671,7 @@ void dDlst_shadowControl_c::imageDraw(Mtx param_0) {
 }
 
 void dDlst_shadowControl_c::draw(Mtx param_0) {
+    ZoneScoped;
     static GXTevColorChan l_tevColorChan[4] = {
         GX_CH_RED,
         GX_CH_GREEN,
@@ -1696,11 +1758,15 @@ int dDlst_shadowControl_c::setReal(u32 param_1, s8 param_2, J3DModel* param_3, c
     }
     cXyz acStack_94;
     cMtx_multVec(j3dSys.getViewMtx(), param_4, &acStack_94);
-    if ((acStack_94.z - param_5) >= 0.0f) {
+    const bool bypass_shadow_culling =
+        dusk::coop::render_shadows::shouldBypassSharedShadowCulling();
+    // Co-op: this shared registration pass runs before per-viewport replay. Camera-0 depth
+    // checks can reject P2-visible real shadows before P2's camera has a chance to draw.
+    if (!bypass_shadow_culling && (acStack_94.z - param_5) >= 0.0f) {
         return 0;
     }
     f32 dVar17 = acStack_94.z + param_5;
-    if (dVar17 < -1000.0f) {
+    if (!bypass_shadow_culling && dVar17 < -1000.0f) {
         f32 fVar1 = 0.001f * (-1000.0f - dVar17);
         if (fVar1 >= 1.0f) {
             return 0;
@@ -1985,7 +2051,7 @@ int dDlst_list_c::set(dDlst_base_c**& p_start, dDlst_base_c**& p_end, dDlst_base
     return 1;
 }
 
-#if TARGET_PC && (TRACY_ENABLE || PARTIAL_DEBUG)
+#if DUSK_GFX_DEBUG_GROUPS
 static absl::flat_hash_map<std::type_index, const char*> typeDrawNames;
 
 static const char* getTypeDrawName(dDlst_base_c* dlst) {
@@ -2008,7 +2074,7 @@ void dDlst_list_c::draw(dDlst_base_c** p_start, dDlst_base_c** p_end) {
     for (; p_start < p_end; p_start++) {
         dDlst_base_c* dlst = *p_start;
 
-#if TARGET_PC && (TRACY_ENABLE || PARTIAL_DEBUG)
+#if DUSK_GFX_DEBUG_GROUPS
         const auto name = getTypeDrawName(dlst);
         GXScopedDebugGroup scope(name);
 #endif

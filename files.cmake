@@ -1414,6 +1414,7 @@ set(DUSK_FILES
         include/dusk/action_bindings.h
         include/dusk/endian_gx.hpp
         include/dusk/config.hpp
+        include/dusk/coop/alink_model_data_owner.h
         include/dusk/coop/alink_probes.h
         include/dusk/coop/bokoblin_attack_probe.h
         include/dusk/coop/camera.h
@@ -1422,15 +1423,33 @@ set(DUSK_FILES
         include/dusk/coop/defender_owner.h
         include/dusk/coop/debug_overlay.h
         include/dusk/coop/enemy_targeting.h
+        include/dusk/coop/event_presentation.h
+        include/dusk/coop/event_owner.h
+        include/dusk/coop/hud_owner.h
+        include/dusk/coop/hud_diagnostics.h
+        include/dusk/coop/horse_owner.h
+        include/dusk/coop/interaction_owner.h
         include/dusk/coop/gibdo_state_probe.h
         include/dusk/coop/input.h
+        include/dusk/coop/midna_owner.h
+        include/dusk/coop/player_attention.h
+        include/dusk/coop/player_button_status.h
+        include/dusk/coop/player_camera_status.h
+        include/dusk/coop/player_item_selection.h
         include/dusk/coop/player_query.h
         include/dusk/coop/player_slots.h
+        include/dusk/coop/render_effects.h
+        include/dusk/coop/render_materials.h
+        include/dusk/coop/render_shadows.h
+        include/dusk/coop/render_visibility.h
         include/dusk/coop/selected_target_state.h
+        include/dusk/coop/ui_owner.h
         include/dusk/coop/young_gohma_state_probe.h
         include/dusk/diagnostics.h
         include/dusk/dvd_asset.hpp
         include/dusk/scope_guard.hpp
+        src/dusk/coop/alink_model_data_owner.cpp
+        src/dusk/coop/alink_form_resources.cpp
         src/dusk/coop/alink_probes.cpp
         src/dusk/coop/bokoblin_attack_probe.cpp
         src/dusk/coop/camera.cpp
@@ -1439,17 +1458,36 @@ set(DUSK_FILES
         src/dusk/coop/defender_owner.cpp
         src/dusk/coop/debug_overlay.cpp
         src/dusk/coop/enemy_targeting.cpp
+        src/dusk/coop/event_presentation.cpp
+        src/dusk/coop/event_owner.cpp
+        src/dusk/coop/hud_owner.cpp
+        src/dusk/coop/hud_diagnostics.cpp
+        src/dusk/coop/horse_owner.cpp
+        src/dusk/coop/interaction_owner.cpp
+        src/dusk/coop/line_render_diagnostics.cpp
         src/dusk/coop/gibdo_state_probe.cpp
+        src/dusk/coop/message_owner.cpp
+        src/dusk/coop/midna_owner.cpp
         src/dusk/coop/player_query.cpp
         src/dusk/coop/player_slots.cpp
+        src/dusk/coop/player_button_status.cpp
+        src/dusk/coop/player_camera_status.cpp
+        src/dusk/coop/player_item_selection.cpp
+        src/dusk/coop/render_effects.cpp
+        src/dusk/coop/render_materials.cpp
+        src/dusk/coop/render_shadows.cpp
+        src/dusk/coop/render_visibility.cpp
         src/dusk/coop/selected_target_state.cpp
+        src/dusk/coop/ui_owner.cpp
         src/dusk/coop/young_gohma_state_probe.cpp
         src/dusk/coop/input.cpp
+        src/dusk/coop/player_attention.cpp
         src/dusk/diagnostics.cpp
         src/dusk/dvd_asset.cpp
         src/d/actor/d_a_alink_dusk.cpp
         src/dusk/asserts.cpp
         src/dusk/config.cpp
+        src/dusk/crash_handler.cpp
         src/dusk/crash_reporting.cpp
         src/dusk/data.cpp
         src/dusk/data.hpp
@@ -1461,6 +1499,7 @@ set(DUSK_FILES
         src/dusk/game_clock.cpp
         src/dusk/globals.cpp
         src/dusk/gyro.cpp
+        src/dusk/mouse.cpp
 		src/dusk/gamepad_color.cpp
 		src/dusk/autosave.cpp
         src/dusk/http/http.hpp
@@ -1469,7 +1508,10 @@ set(DUSK_FILES
         src/dusk/logging.cpp
         src/dusk/settings.cpp
         src/dusk/speedrun.cpp
+        src/dusk/string.cpp
         src/dusk/stubs.cpp
+        include/dusk/texture_replacements.hpp
+        src/dusk/texture_replacements.cpp
         src/dusk/update_check.cpp
         src/dusk/update_check.hpp
         #src/dusk/m_Do_ext_dusk.cpp

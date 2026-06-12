@@ -303,7 +303,8 @@ int daAlink_c::commonKandelaarPour(int param_0) {
                 }
 
                 field_0x072c->setFrame(2.0f);
-                dComIfGs_setEquipBottleItemEmpty(mSelectItemId);
+                // Co-op: lantern oil consumes the pouring ALINK's selected bottle.
+                emptyBottle(mSelectItemId);
             }
         }
     } else if (checkAnmEnd(frameCtrl_p)) {

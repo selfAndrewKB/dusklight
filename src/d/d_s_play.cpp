@@ -41,7 +41,12 @@
 
 #if TARGET_PC
 #include "dusk/autosave.h"
+#include "dusk/coop/alink_form_resources.h"
 #include "dusk/coop/camera.h"
+#include "dusk/coop/event_presentation.h"
+#include "dusk/coop/message_owner.h"
+#include "dusk/coop/midna_owner.h"
+#include "dusk/coop/player_attention.h"
 #include "dusk/memory.h"
 #include "dusk/ui/ui.hpp"
 #endif
@@ -164,22 +169,22 @@ void dScnPly_reg_childHIO_c::genMessage(JORMContext* mctx) {
     char textbuf[8];
 
     for (int i = 0; i < 20; i++) {
-        sprintf(textbuf, " F(%02d)", i);
+        SAFE_SPRINTF(textbuf, " F(%02d)", i);
         mctx->genSlider(textbuf, &mFloatReg[i], -100000.0f, 100000.0f);
     }
 
     for (int i = 20; i < 25; i++) {
-        sprintf(textbuf, " F(%02d)", i);
+        SAFE_SPRINTF(textbuf, " F(%02d)", i);
         mctx->genSlider(textbuf, &mFloatReg[i], 0.0f, 1.0f);
     }
 
     for (int i = 25; i < 30; i++) {
-        sprintf(textbuf, " F(%02d)", i);
+        SAFE_SPRINTF(textbuf, " F(%02d)", i);
         mctx->genSlider(textbuf, &mFloatReg[i], -1.0f, 1.0f);
     }
 
     for (int i = 0; i < 10; i++) {
-        sprintf(textbuf, " S(%02d)", i);
+        SAFE_SPRINTF(textbuf, " S(%02d)", i);
         mctx->genSlider(textbuf, &mShortReg[i], -0x8000, 0x7FFF);
     }
 }
@@ -680,8 +685,20 @@ static int dScnPly_Draw(dScnPly_c* i_this) {
         dPath_Draw();
         #endif
 
-        dAttention_c* attention = dComIfGp_getAttention();
-        attention->Draw();
+#if TARGET_PC
+        const bool drawAttentionHere = !dusk::coop::camera::isSplitScreenEnabled() ||
+                                       !dusk::coop::camera::isSecondaryCameraReady();
+        // Co-op: split-screen lock cursors are submitted in each camera viewport.
+        if (drawAttentionHere)
+#endif
+        {
+            dAttention_c* attention = dComIfGp_getAttention();
+            attention->Draw();
+#if TARGET_PC
+            // Co-op: draw additional players' slot-local lock cursors alongside P1's global cursor.
+            dusk::coop::player_attention::drawAll();
+#endif
+        }
     }
 
     #if DEBUG
@@ -903,7 +920,11 @@ static int dScnPly_Delete(dScnPly_c* i_this) {
 
     dComIfGp_setWindowNum(0);
 #if TARGET_PC
-    // Co-op: scene teardown clears Dusk-owned secondary camera/window state without touching vanilla structs.
+    // Co-op: scene teardown clears transient presentation and camera pointers, but session intent survives.
+    dusk::coop::alink_form_resources::resetRuntime();
+    dusk::coop::midna_owner::reset();
+    dusk::coop::message_owner::reset();
+    dusk::coop::event_presentation::reset();
     dusk::coop::camera::resetSplitScreenCameraState();
 #endif
     dComIfGd_setView(NULL);
@@ -929,6 +950,12 @@ static int dScnPly_Delete(dScnPly_c* i_this) {
     }
 
     dComIfGp_init();
+
+#if TARGET_PC
+    // Co-op: direct stage warps can tear down transient split-screen UI and actor heaps. Start the
+    // next play scene from the persistent game heap instead of carrying scene-local heap context.
+    mDoExt_setCurrentHeap(mDoExt_getGameHeap());
+#endif
 
     #if PLATFORM_WII
     data_8053a730 = 0;
@@ -1455,7 +1482,11 @@ static int phase_4(dScnPly_c* i_this) {
     dComIfGp_setWindow(0, 0.0f, 0.0f, FB_WIDTH, FB_HEIGHT, 0.0f, 1.0f, 0, 2);
     dComIfGp_setCameraInfo(0, NULL, 0, 0, -1);
 #if TARGET_PC
-    // Co-op: each play scene starts from a clean sidecar, then the debug UI/hotkey can opt back in.
+    // Co-op: each play scene starts with clean runtime sidecars; primary ALINK rebuilds requested slots.
+    dusk::coop::alink_form_resources::resetRuntime();
+    dusk::coop::midna_owner::reset();
+    dusk::coop::message_owner::reset();
+    dusk::coop::event_presentation::reset();
     dusk::coop::camera::resetSplitScreenCameraState();
 #endif
     dComIfGd_setWindow(NULL);
@@ -1645,7 +1676,7 @@ static scene_method_class l_dScnPly_Method = {
     (process_method_func)dScnPly_Draw,
 };
 
-scene_process_profile_definition g_profile_PLAY_SCENE = {
+DUSK_PROFILE scene_process_profile_definition DUSK_CONST g_profile_PLAY_SCENE = {
     /* Layer ID     */ fpcLy_ROOT_e,
     /* List ID      */ 1,
     /* List Prio    */ fpcPi_CURRENT_e,
@@ -1658,7 +1689,7 @@ scene_process_profile_definition g_profile_PLAY_SCENE = {
     /* Scene SubMtd */ &l_dScnPly_Method,
 };
 
-scene_process_profile_definition g_profile_OPENING_SCENE = {
+DUSK_PROFILE scene_process_profile_definition DUSK_CONST g_profile_OPENING_SCENE = {
     /* Layer ID     */ fpcLy_ROOT_e,
     /* List ID      */ 1,
     /* List Prio    */ fpcPi_CURRENT_e,

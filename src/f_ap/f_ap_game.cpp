@@ -34,6 +34,7 @@
 #include "dusk/coop/defender_owner.h"
 #include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/gibdo_state_probe.h"
+#include "dusk/coop/midna_owner.h"
 #include "dusk/coop/young_gohma_state_probe.h"
 #include <dusk/gamepad_color.h>
 #include <dusk/autosave.h>
@@ -211,7 +212,7 @@ char fapGm_dataMem::mCsv[0x8000];
 int dumpTagObject(void* i_object, void*) {
     char profname_str[64];
     s16 profname = fopAcM_GetProfName(i_object);
-    sprintf(profname_str, "%d", profname);
+    SAFE_SPRINTF(profname_str, "%d", profname);
 
     if (fopAcM_IsActor(i_object)) {
         fopAc_ac_c* a_actor = (fopAc_ac_c*)i_object;
@@ -745,13 +746,16 @@ static void fapGm_Before() {
 
 static void fapGm_AfterRecord() {
     dusk::frame_interp::end_record();
+    // Co-op: Midna/message service teardown waits until cameras have consumed
+    // the current management pass's retained talk actors.
+    dusk::coop::midna_owner::finishPendingEndService();
     fapGm_After();
 }
 
 BOOL isRecording = false;
 
 static void duskExecute() {
-    handleGamepadColor();
+    dusk::input::handleGamepadColor();
     updateAutoSave();
 
     if (dusk::getSettings().game.recordingMode) {

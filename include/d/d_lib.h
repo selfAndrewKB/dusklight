@@ -48,6 +48,11 @@ public:
     void setFirstWaitTime(s16 time) { mFirstWaitTime = time; }
     s16 getYwaitTimer() { return mYwaitTimer; }
     s16 getXwaitTimer() { return mXwaitTimer; }
+#if TARGET_PC
+    // Co-op: singular UI surfaces may temporarily steer this vanilla stick helper from P2's pad.
+    void setPad(int pad) { mPad = pad; }
+    int getPad() const { return mPad; }
+#endif
 
     /* 0x04 */ f32 mThreshold;
     /* 0x08 */ f32 field_0x08;
@@ -69,7 +74,10 @@ public:
     /* 0x28 */ s16 mFirstWaitTime;
     /* 0x2A */ s16 field_0x2a;
     /* 0x2C */ s16 field_0x2c;
-};  // Size = 0x30
+#if TARGET_PC
+    int mPad = 0;
+#endif
+};  // Size = 0x30 on console; TARGET_PC appends the co-op pad override.
 
 struct CSTControl : public STControl {
     CSTControl(s16 param_0, s16 param_1, s16 param_2, s16 param_3, f32 param_4, f32 param_5,

@@ -257,6 +257,9 @@ public:
     void imageDraw(f32 (*)[4]);
     void draw();
     u8 setShadowRealMtx(cXyz*, cXyz*, f32, f32, f32, dKy_tevstr_c*);
+#if TARGET_PC
+    void refreshForCurrentView();
+#endif
     u32 set(u32, J3DModel*, cXyz*, f32, f32, dKy_tevstr_c*, f32, f32);
     bool add(J3DModel*);
     ~dDlst_shadowReal_c() {}
@@ -285,7 +288,17 @@ private:
     /* 0x2548 */ f32 mCameraZ;
     /* 0x254C */ dDlst_shadowReal_c* mZsortPre;
     /* 0x2550 */ dDlst_shadowReal_c* mZsortNext;
-};  // Size: 0x2554
+#if TARGET_PC
+    /* Co-op: real shadows submit once, then replay per split viewport. Keep the vanilla setup
+       inputs so baked shadow matrices can refresh for the active view during shadow drawing. */
+    cXyz mShadowCenter;
+    f32 mShadowSize;
+    f32 mShadowGroundY;
+    f32 mShadowDensityScale;
+    dKy_tevstr_c* mpShadowTevstr;
+    bool mHasShadowSetup;
+#endif
+};  // Size: 0x2554 non-PC; PC adds co-op shadow refresh fields.
 
 class dDlst_shadowControl_c {
 public:

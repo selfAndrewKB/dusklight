@@ -10,6 +10,7 @@
 #include "f_op/f_op_actor_enemy.h"
 #include "Z2AudioLib/Z2Instances.h"
 #if TARGET_PC
+#include "dusk/coop/player_attention.h"
 #include "dusk/coop/player_query.h"
 #endif
 
@@ -1194,8 +1195,14 @@ void daE_HM_c::ActionMode() {
         mAcch.CrrPos(dComIfG_Bgsp());
         break;
     case 1:
+#if TARGET_PC
+        // Co-op: Helmasaur down/stab response should accept the player slot that actually locked on.
+        if (dusk::coop::player_attention::isActorLockedByAnyPlayer(this)) {
+            daE_HM_c* hm = this;
+#else
         if (dComIfGp_getAttention()->LockonTruth()) {
             daE_HM_c* hm = (daE_HM_c*)dComIfGp_getAttention()->LockonTarget(0);
+#endif
             if (hm == this) {
                 onDownFlg();
                 setStabPos();
@@ -1606,7 +1613,7 @@ static int daE_HM_Create(fopAc_ac_c* i_this) {
 
 AUDIO_INSTANCES
 
-static actor_method_class l_daE_HM_Method = {
+static DUSK_CONST actor_method_class l_daE_HM_Method = {
     (process_method_func)daE_HM_Create,
     (process_method_func)daE_HM_Delete,
     (process_method_func)daE_HM_Execute,
@@ -1614,7 +1621,7 @@ static actor_method_class l_daE_HM_Method = {
     (process_method_func)daE_HM_Draw,
 };
 
-actor_process_profile_definition g_profile_E_HM = {
+DUSK_PROFILE actor_process_profile_definition DUSK_CONST g_profile_E_HM = {
     /* Layer ID     */ fpcLy_CURRENT_e,
     /* List ID      */ 7,
     /* List Prio    */ fpcPi_CURRENT_e,

@@ -27,6 +27,7 @@
 #include "tracy/Tracy.hpp"
 
 #ifndef __MWERKS__
+#include "dusk/coop/render_effects.h"
 #include "dusk/math.h"
 #endif
 
@@ -734,7 +735,15 @@ void dPa_simpleEcallBack::executeAfter(JPABaseEmitter* i_emitter) {
         i_emitter->playCreateParticle();
         for (; field_0xc != 0; field_0xc--) {
             Vec local_3c;
-            if ((int)mDoLib_clipper::clip(j3dSys.getViewMtx(), pData->field_0x00, 200.0f) == 0) {
+            // Co-op: simple particle creation is updated once per frame, not per split viewport.
+            // Do not let the last global view matrix suppress torch/haze particles needed by
+            // another active camera.
+            if (
+#ifndef __MWERKS__
+                dusk::coop::render_effects::shouldBypassSharedParticleCreationCulling() ||
+#endif
+                (int)mDoLib_clipper::clip(j3dSys.getViewMtx(), pData->field_0x00, 200.0f) == 0)
+            {
                 JGeometry::TVec3<f32> aTStack_30;
                 i_emitter->getLocalTranslation(&aTStack_30);
                 i_emitter->setGlobalTranslation(pData->field_0x00.x, pData->field_0x00.y + aTStack_30.y, pData->field_0x00.z);
@@ -1263,7 +1272,7 @@ bool dPa_control_c::readScene(u8 param_0, mDoDvdThd_toMainRam_c** param_1) {
     JUT_ASSERT(2647, !mSceneCount++);
     field_0x18 = param_0;
     static char jpcName[32];
-    sprintf(jpcName, "/res/Particle/Pscene%03d.jpc", param_0);
+    SAFE_SPRINTF(jpcName, "/res/Particle/Pscene%03d.jpc", param_0);
     *param_1 = mDoDvdThd_toMainRam_c::create(jpcName, 0, m_resHeap);
     return 1;
 }
@@ -1359,6 +1368,7 @@ void dPa_control_c::calcMenu() {
 }
 
 void dPa_control_c::draw(JPADrawInfo* param_0, u8 param_1) {
+    ZoneScoped;
     if (mEmitterMng != NULL) {
         j3dSys.reinitGX();
         dKy_setLight_again();
@@ -1957,6 +1967,7 @@ void dPa_gen_d_light8PcallBack::execute(JPABaseEmitter* i_emitter, JPABasePartic
 }
 
 void dPa_light8PcallBack::draw(JPABaseEmitter* param_1, JPABaseParticle* param_2) {
+    ZoneScoped;
     Mtx local_60;
     Mtx auStack_90;
     Mtx auStack_c0;
@@ -2084,6 +2095,7 @@ void dPa_light8PcallBack::draw(JPABaseEmitter* param_1, JPABaseParticle* param_2
 }
 
 void dPa_gen_b_light8PcallBack::draw(JPABaseEmitter* param_1, JPABaseParticle* param_2) {
+    ZoneScoped;
     Mtx local_80;
     JGeometry::TVec3<f32> local_8c;
     JGeometry::TVec3<f32> aTStack_98;
@@ -2172,6 +2184,7 @@ void dPa_gen_b_light8PcallBack::draw(JPABaseEmitter* param_1, JPABaseParticle* p
 }
 
 void dPa_gen_d_light8PcallBack::draw(JPABaseEmitter* param_1, JPABaseParticle* param_2) {
+    ZoneScoped;
     Mtx local_60;
     Mtx auStack_90;
     Mtx auStack_c0;

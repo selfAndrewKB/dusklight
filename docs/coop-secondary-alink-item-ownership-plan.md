@@ -130,5 +130,6 @@ Failure conditions:
 
 - Once an item ownership pattern is confirmed, decide whether it belongs in a reusable helper.
 - Reduce old action-mirror human logs once structured diagnostics cover the same evidence.
-- Decide which secondary ALINK probe flags should become default co-op containment rather than debug checkboxes.
+- Shared ALINK model-data calculator scoping is now enforced by `alink_model_data_owner`; the
+  remaining Actor Spawner switches are historical isolation probes only.
 - If P2 execute becomes unstable again, temporarily re-enable `Skip execute` only to isolate the regression; do not treat it as the normal test path.

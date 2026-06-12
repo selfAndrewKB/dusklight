@@ -2,8 +2,10 @@
 
 #include "aurora/gfx.h"
 #include "d/actor/d_a_alink.h"
+#include "d/actor/d_a_horse.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_item.h"
+#include "dusk/coop/alink_form_resources.h"
 #include "dusk/coop/alink_probes.h"
 #include "dusk/coop/bokoblin_attack_probe.h"
 #include "dusk/coop/camera.h"
@@ -11,8 +13,15 @@
 #include "dusk/coop/damage_owner.h"
 #include "dusk/coop/defender_owner.h"
 #include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/event_presentation.h"
 #include "dusk/coop/gibdo_state_probe.h"
+#include "dusk/coop/hud_diagnostics.h"
+#include "dusk/coop/horse_owner.h"
 #include "dusk/coop/input.h"
+#include "dusk/coop/line_render_diagnostics.h"
+#include "dusk/coop/message_owner.h"
+#include "dusk/coop/player_attention.h"
+#include "dusk/coop/player_camera_status.h"
 #include "dusk/coop/player_query.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/coop/selected_target_state.h"
@@ -29,6 +38,7 @@
 #include "nlohmann/json.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <ctime>
 #include <deque>
 #include <fstream>
@@ -44,6 +54,7 @@ constexpr int kEventVersion = 1;
 constexpr int kManifestVersion = 1;
 constexpr const char* kProfileSecondaryAlinkActionMirror = "coop.secondary_alink.action_mirror";
 constexpr size_t kRingBufferMaxEvents = 3600;
+constexpr size_t kCameraAreaLoadMaxCheckpoints = 24;
 constexpr u32 kLatestWriteMinFrameInterval = 15;
 constexpr u64 kBudgetWindowUs = 60ull * 1000ull * 1000ull;
 
@@ -71,7 +82,7 @@ struct ProviderStats {
 };
 
 struct State {
-    bool enabled = false;
+    bool enabled = true;
     bool initialized = false;
     u32 lastFrame = 0;
     std::string sessionId;
@@ -87,6 +98,8 @@ struct State {
     u32 lastLatestWriteFrame = 0;
     SecondaryAlinkState secondaryAlinkState{};
     bool hasSecondaryAlinkState = false;
+    std::deque<json> cameraAreaLoadCheckpoints;
+    u32 cameraAreaLoadRevision = 0;
 };
 
 State s_state;
@@ -454,6 +467,51 @@ json playerStatusEventKey(const json& data) {
         {"attention_lock", data.value("attention_lock", false)},
         {"secondary_attention_lock", data.value("secondary_attention_lock", false)},
         {"secondary_proc", data.value("secondary_proc", 0)},
+    };
+}
+
+json horseOwnerActorIdentityEventData(const json& data) {
+    json eventData = actorIdentityEventData(data);
+    eventData.erase("attention_flags");
+    return eventData;
+}
+
+json horseOwnerEventKey(const json& data) {
+    json slots = json::array();
+    if (data.contains("slots") && data["slots"].is_array()) {
+        for (const json& slot : data["slots"]) {
+            slots.push_back({
+                {"slot", slot.value("slot", -1)},
+                {"horse", horseOwnerActorIdentityEventData(slot.value("horse", json::object()))},
+                {"player", horseOwnerActorIdentityEventData(slot.value("player", json::object()))},
+                {"retained_ride_actor",
+                 horseOwnerActorIdentityEventData(
+                     slot.value("retained_ride_actor", json::object()))},
+                {"canonical", slot.value("canonical", false)},
+                {"runtime_clone", slot.value("runtime_clone", false)},
+                {"spawn_pending", slot.value("spawn_pending", false)},
+                {"pending_spawn_id", slot.value("pending_spawn_id", 0u)},
+                {"riding", slot.value("riding", false)},
+                {"call_wait", slot.value("call_wait", false)},
+                {"call_deferred", slot.value("call_deferred", false)},
+                {"placement_deferred", slot.value("placement_deferred", false)},
+                {"call_target_valid", slot.value("call_target_valid", false)},
+                {"last_summon_decision", slot.value("last_summon_decision", "")},
+                {"localized_animation_count", slot.value("localized_animation_count", 0)},
+                {"owner_mismatch", slot.value("owner_mismatch", false)},
+                {"retained_horse_mismatch", slot.value("retained_horse_mismatch", false)},
+            });
+        }
+    }
+
+    return {
+        {"schema_version", data.value("schema_version", 1)},
+        {"canonical_horse", data.value("canonical_horse", "0x0")},
+        {"duplicate_retained_horse", data.value("duplicate_retained_horse", false)},
+        {"last_summon_revision", data.value("last_summon_revision", 0u)},
+        {"last_summon_activator", data.value("last_summon_activator", -1)},
+        {"last_summon_pos_valid", data.value("last_summon_pos_valid", false)},
+        {"slots", slots},
     };
 }
 
@@ -854,6 +912,40 @@ json alinkSecondaryEventKey(const json& data) {
     return eventKey;
 }
 
+json hudPresentationEventKey(const json& data) {
+    json snapshots = json::array();
+    for (const json& snapshot : data.value("snapshots", json::array())) {
+        json items = json::array();
+        for (const json& item : snapshot.value("items", json::array())) {
+            const json pane = item.value("pane", json::object());
+            items.push_back({
+                {"button", item.value("button", "")},
+                {"select_index", item.value("select_index", 0xff)},
+                {"mix_index", item.value("mix_index", 0xff)},
+                {"item", item.value("item", 0xff)},
+                {"count", item.value("count", 0)},
+                {"max_count", item.value("max_count", 0)},
+                {"visible", pane.value("visible", false)},
+                {"texture_visible", pane.value("texture_visible", false)},
+                {"third_digit_visible", pane.value("third_digit_visible", false)},
+            });
+        }
+        snapshots.push_back({
+            {"phase", snapshot.value("phase", "")},
+            {"presentation_slot", snapshot.value("presentation_slot", -1)},
+            {"do_status", snapshot.value("do_status", 0)},
+            {"items", items},
+        });
+    }
+
+    return {
+        {"schema_version", data.value("schema_version", 2)},
+        {"slot_items", data.value("slot_items", json::array())},
+        {"snapshots", snapshots},
+        {"ring_admission", data.value("ring_admission", json::object())},
+    };
+}
+
 const char* alinkProcName(u16 proc) {
     switch (proc) {
     case daAlink_c::PROC_SERVICE_WAIT:
@@ -916,6 +1008,29 @@ json eventKeyForProvider(const char* provider, const json& data) {
     if (name == "player.slots") {
         return playerSlotsEventKey(data);
     }
+    if (name == "horse.owner") {
+        return horseOwnerEventKey(data);
+    }
+    if (name == "render.lines") {
+        json records = json::array();
+        for (const json& record : data.value("records", json::array())) {
+            records.push_back({
+                {"material", record.value("material", "")},
+                {"material_id", record.value("material_id", -1)},
+                {"line_kind", record.value("line_kind", 0)},
+                {"line_index", record.value("line_index", 0)},
+                {"point_count", record.value("point_count", 0)},
+                {"presentation_refresh", record.value("presentation_refresh", false)},
+                {"control_non_finite_count", record.value("control_non_finite_count", 0)},
+                {"expanded_non_finite_count", record.value("expanded_non_finite_count", 0)},
+                {"suspicious", record.value("suspicious", false)},
+            });
+        }
+        return {
+            {"schema_version", data.value("schema_version", 1)},
+            {"records", records},
+        };
+    }
     if (name == "input.pad") {
         return inputPadEventKey(data);
     }
@@ -939,6 +1054,7 @@ json eventKeyForProvider(const char* provider, const json& data) {
             const json body = camera.value("body", json::object());
             return json{
                 {"camera_id", body.value("camera_id", 0u)},
+                {"owner", body.value("owner", std::string("0x0"))},
                 {"type", body.value("type", 0)},
                 {"mode", body.value("mode", 0)},
                 {"active", body.value("active", false)},
@@ -965,6 +1081,13 @@ json eventKeyForProvider(const char* provider, const json& data) {
             {"camera1_body", camera_body_key(camera1)},
         };
     }
+    if (name == "camera.area_load") {
+        return {
+            {"schema_version", data.value("schema_version", 1)},
+            {"revision", data.value("revision", 0u)},
+            {"last_phase", data.value("last_phase", std::string())},
+        };
+    }
     if (name == "attention.state") {
         return attentionStateEventKey(data);
     }
@@ -988,6 +1111,9 @@ json eventKeyForProvider(const char* provider, const json& data) {
     }
     if (name == "alink.secondary") {
         return alinkSecondaryEventKey(data);
+    }
+    if (name == "hud.presentation") {
+        return hudPresentationEventKey(data);
     }
     return data;
 }
@@ -1090,6 +1216,10 @@ json cameraSummary(int idx) {
     data["distance"] = camera->view.lookat.eye.abs(camera->view.lookat.center);
     data["body"] = {
         {"camera_id", static_cast<unsigned int>(camera->mCamera.CameraID())},
+        {"owner", ptrString(reinterpret_cast<uintptr_t>(camera->mCamera.mpPlayerActor))},
+        {"owner_angle_y", camera->mCamera.mpPlayerActor != nullptr
+                              ? static_cast<int>(camera->mCamera.mpPlayerActor->shape_angle.y)
+                              : 0},
         {"owner_room", camera->mCamera.mpPlayerActor != nullptr
                            ? static_cast<int>(fopAcM_GetRoomNo(camera->mCamera.mpPlayerActor))
                            : -1},
@@ -1101,6 +1231,7 @@ json cameraSummary(int idx) {
         {"mode", camera->mCamera.Mode()},
         {"active", camera->mCamera.Active()},
         {"state", camera->mCamera.mCurState},
+        {"is_wolf", camera->mCamera.mIsWolf},
         {"style", camera->mCamera.mCamStyle},
         {"style_timer", camera->mCamera.mCurCamStyleTimer},
         {"trim_height", camera->mCamera.TrimHeight()},
@@ -1110,8 +1241,27 @@ json cameraSummary(int idx) {
         {"window_height", camera->mCamera.mWindowHeight},
         {"window_aspect", camera->mCamera.mWindowAspect},
         {"view_cache_distance", camera->mCamera.iEye().abs(camera->mCamera.iCenter())},
+        {"view_cache_yaw", camera->mCamera.iU()},
+        {"controlled_yaw", camera->mCamera.U2()},
+        {"stored_yaw", camera->mCamera.U()},
         {"map", cameraMapSummary(camera->mCamera)},
     };
+    fopAc_ac_c* owner = camera->mCamera.mpPlayerActor;
+    if (owner != nullptr && fopAcM_GetName(owner) == fpcNm_ALINK_e) {
+        daAlink_c* player = static_cast<daAlink_c*>(owner);
+        const coop::PlayerSlot slot = coop::getSlotForActor(owner);
+        const int slotIndex = slot != coop::PlayerSlot::Invalid ? static_cast<int>(slot) : -1;
+        data["body"]["wolf_aoe"] = {
+            {"owner_slot", slotIndex},
+            {"camera_pad_id", camera->mCamera.mPadID},
+            {"charge_status0", coop::player_camera_status::checkStatus0ForPlayer(player, 0x40000000) != 0},
+            {"dome_status1", coop::player_camera_status::checkStatus1ForPlayer(player, 0x800000) != 0},
+            {"lock_attack_status1",
+             coop::player_camera_status::checkStatus1ForPlayer(player, 0x1000000) != 0},
+            {"search_ball_scale", player->getSearchBallScale()},
+            {"status_source", slot == coop::PlayerSlot::Secondary ? "slot_local" : "global"},
+        };
+    }
     return data;
 }
 
@@ -1157,8 +1307,9 @@ json collectRenderWindows() {
     }
 
     return {
-        {"schema_version", 1},
+        {"schema_version", 2},
         {"split_screen_enabled", dusk::coop::camera::isSplitScreenEnabled()},
+        {"split_screen_requested", dusk::coop::camera::isSplitScreenRequested()},
         {"window_count", windowCount},
         {"secondary_ready", dusk::coop::camera::isSecondaryCameraReady()},
         {"secondary_requested", dusk::coop::camera::isSecondaryCameraRequested()},
@@ -1172,13 +1323,29 @@ json collectRenderWindows() {
 
 json collectCameraState() {
     return {
-        {"schema_version", 1},
+        {"schema_version", 2},
         {"split_screen_enabled", dusk::coop::camera::isSplitScreenEnabled()},
+        {"split_screen_requested", dusk::coop::camera::isSplitScreenRequested()},
         {"window_count", dComIfGp_getWindowNum()},
         {"secondary_ready", dusk::coop::camera::isSecondaryCameraReady()},
         {"secondary_requested", dusk::coop::camera::isSecondaryCameraRequested()},
         {"camera0", cameraSummary(0)},
         {"camera1", cameraSummary(1)},
+    };
+}
+
+json collectCameraAreaLoad() {
+    json checkpoints = json::array();
+    for (const json& checkpoint : s_state.cameraAreaLoadCheckpoints) {
+        checkpoints.push_back(checkpoint);
+    }
+
+    return {
+        {"schema_version", 1},
+        {"revision", s_state.cameraAreaLoadRevision},
+        {"last_phase", checkpoints.empty() ? std::string()
+                                             : checkpoints.back().value("phase", std::string())},
+        {"checkpoints", checkpoints},
     };
 }
 
@@ -1191,6 +1358,7 @@ json collectPlayerSlots() {
             {"slot", i},
             {"actor_uid", nullptr},
             {"ptr", ptrString(reinterpret_cast<uintptr_t>(actor))},
+            {"requested", coop::isPlayerRequested(slot)},
             {"stable_actor_uid_deferred", true},
         };
 
@@ -1206,7 +1374,7 @@ json collectPlayerSlots() {
     }
 
     return {
-        {"schema_version", 1},
+        {"schema_version", 2},
         {"slots", slots},
     };
 }
@@ -1227,8 +1395,52 @@ json actorSummary(const fopAc_ac_c* actor) {
     data["argument"] = static_cast<int>(actor->argument);
     data["attention_flags"] = actor->attention_info.flags;
     data["pos"] = {actor->current.pos.x, actor->current.pos.y, actor->current.pos.z};
+    data["attention_pos"] = {actor->attention_info.position.x, actor->attention_info.position.y,
+                             actor->attention_info.position.z};
     data["angle_y"] = static_cast<int>(actor->shape_angle.y);
     return data;
+}
+
+json vecSummary(const cXyz* pos) {
+    if (pos == nullptr) {
+        return json::array();
+    }
+
+    return json::array({pos->x, pos->y, pos->z});
+}
+
+json alinkWolfAoeSummary(const daAlink_c* player, u32 status0Mask, u32 status1Mask,
+                         f32 searchBallScale, f32 cameraNearRadius, f32 cameraFarRadius,
+                         int wolfLockNum, const fopAc_ac_c* lockActor, f32 cameraFovy,
+                         f32 windowAspect, f32 windowWidth, f32 windowHeight) {
+    const coop::PlayerSlot slot = coop::getSlotForActor(static_cast<const fopAc_ac_c*>(player));
+    return {
+        {"player", actorSummary(player)},
+        {"slot", slot != coop::PlayerSlot::Invalid ? static_cast<int>(slot) : -1},
+        {"status0_mask", static_cast<unsigned int>(status0Mask)},
+        {"status1_mask", static_cast<unsigned int>(status1Mask)},
+        {"charge_status0",
+         player != nullptr ? coop::player_camera_status::checkStatus0ForPlayer(player, 0x40000000) != 0
+                           : false},
+        {"dome_status1",
+         player != nullptr ? coop::player_camera_status::checkStatus1ForPlayer(player, 0x800000) != 0
+                           : false},
+        {"lock_attack_status1",
+         player != nullptr ? coop::player_camera_status::checkStatus1ForPlayer(player, 0x1000000) != 0
+                           : false},
+        {"global_charge_status0", dComIfGp_checkPlayerStatus0(0, 0x40000000) != 0},
+        {"global_dome_status1", dComIfGp_checkPlayerStatus1(0, 0x800000) != 0},
+        {"global_lock_attack_status1", dComIfGp_checkPlayerStatus1(0, 0x1000000) != 0},
+        {"search_ball_scale", searchBallScale},
+        {"camera_near_radius", cameraNearRadius},
+        {"camera_far_radius", cameraFarRadius},
+        {"camera_fovy", cameraFovy},
+        {"window_aspect", windowAspect},
+        {"window_width", windowWidth},
+        {"window_height", windowHeight},
+        {"wolf_lock_num", wolfLockNum},
+        {"lock_actor", actorSummary(lockActor)},
+    };
 }
 
 json attentionListEntry(dAttList_c& entry) {
@@ -1256,10 +1468,265 @@ json attentionListSummary(dAttList_c* entries, int capacity) {
     return list;
 }
 
-json collectAttentionState() {
-    dAttention_c* attention = dComIfGp_getAttention();
-    json data = {
+json reinPointSummary(const cXyz* points, int count, const cXyz& horsePos) {
+    constexpr f32 kFarPointDistance = 2000.0f;
+    constexpr f32 kLongSegmentDistance = 1000.0f;
+    constexpr f32 kDistanceBucketSize = 100.0f;
+    int nonFiniteCount = 0;
+    f32 maxDistance = 0.0f;
+    f32 maxSegment = 0.0f;
+    for (int i = 0; points != nullptr && i < count; i++) {
+        const cXyz& point = points[i];
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
+            nonFiniteCount++;
+            continue;
+        }
+
+        const f32 distance = point.abs(horsePos);
+        if (distance > maxDistance) {
+            maxDistance = distance;
+        }
+        if (i > 0) {
+            const f32 segment = point.abs(points[i - 1]);
+            if (segment > maxSegment) {
+                maxSegment = segment;
+            }
+        }
+    }
+
+    const bool farPoint = maxDistance > kFarPointDistance;
+    const bool longSegment = maxSegment > kLongSegmentDistance;
+    json summary = {
+        {"non_finite_count", nonFiniteCount},
+        {"far_from_horse", farPoint},
+        {"long_segment", longSegment},
+        {"max_distance_bucket", static_cast<int>(maxDistance / kDistanceBucketSize)},
+        {"max_segment_bucket", static_cast<int>(maxSegment / kDistanceBucketSize)},
+    };
+    if (nonFiniteCount != 0 || farPoint || longSegment) {
+        summary["max_distance"] = maxDistance;
+        summary["max_segment"] = maxSegment;
+    }
+    return summary;
+}
+
+json collectHorseOwner() {
+    json slots = json::array();
+    daHorse_c* retainedHorses[coop::kPlayerSlotCount] = {};
+    bool duplicateRetainedHorse = false;
+    const cXyz* lastSummonPos = coop::horse_owner::getLastSummonPos();
+    for (int i = 0; i < coop::kPlayerSlotCount; i++) {
+        const coop::PlayerSlot slot = static_cast<coop::PlayerSlot>(i);
+        daHorse_c* horse = coop::horse_owner::getHorse(slot);
+        daAlink_c* player = static_cast<daAlink_c*>(coop::getPlayer(slot));
+        fopAc_ac_c* rideActor = player != nullptr ? player->getRideActor() : nullptr;
+        daHorse_c* retainedHorse =
+            rideActor != nullptr && fopAcM_GetName(rideActor) == fpcNm_HORSE_e
+                ? static_cast<daHorse_c*>(rideActor)
+                : nullptr;
+        retainedHorses[i] = retainedHorse;
+        for (int previous = 0; previous < i; previous++) {
+            if (retainedHorse != nullptr && retainedHorse == retainedHorses[previous]) {
+                duplicateRetainedHorse = true;
+            }
+        }
+        const fpc_ProcID pendingSpawnId = coop::horse_owner::getPendingHorseSpawnId(slot);
+        const coop::horse_owner::HorseReinSimulationState* reins =
+            coop::horse_owner::getReinSimulationState(horse);
+        const cXyz* callTarget = coop::horse_owner::getCallTarget(slot);
+        const coop::horse_owner::HorseSummonDecision lastSummonDecision =
+            coop::horse_owner::getLastSummonDecision(slot);
+
+        json slotData = {
+            {"slot", i},
+            {"horse", actorSummary(horse)},
+            {"player", actorSummary(player)},
+            {"retained_ride_actor", actorSummary(rideActor)},
+            {"canonical", coop::horse_owner::isCanonicalHorse(horse)},
+            {"runtime_clone", coop::horse_owner::isAdditionalHorse(horse)},
+            {"spawn_pending", pendingSpawnId != fpcM_ERROR_PROCESS_ID_e},
+            {"pending_spawn_id", static_cast<unsigned int>(pendingSpawnId)},
+            {"call_deferred", coop::horse_owner::isCallDeferred(slot)},
+            {"call_delay_seconds", coop::horse_owner::getCallDelaySeconds(slot)},
+            {"placement_deferred", coop::horse_owner::isPlacementDeferred(slot)},
+            {"call_target_valid", callTarget != nullptr},
+            {"call_target", vecSummary(callTarget)},
+            {"last_summon_decision",
+             coop::horse_owner::getHorseSummonDecisionName(lastSummonDecision)},
+            {"last_summon_decision_id", static_cast<unsigned int>(lastSummonDecision)},
+            {"owner_mismatch", horse != nullptr &&
+                                   coop::horse_owner::getPlayerForHorse(horse) != player},
+            {"retained_horse_mismatch", retainedHorse != nullptr && retainedHorse != horse},
+        };
+
+        if (horse != nullptr) {
+            slotData["speed_f"] = horse->speedF;
+            slotData["process"] = static_cast<unsigned int>(horse->getProcID());
+            slotData["riding"] = horse->isRidden();
+            slotData["call_wait"] = horse->checkHorseCallWait() != 0;
+            if (callTarget != nullptr) {
+                slotData["call_target_distance_xz"] = horse->current.pos.absXZ(*callTarget);
+            }
+            if (lastSummonPos != nullptr) {
+                slotData["last_summon_distance_xz"] = horse->current.pos.absXZ(*lastSummonPos);
+            }
+            if (player != nullptr) {
+                slotData["owner_distance_xz"] = horse->current.pos.absXZ(player->current.pos);
+            }
+            slotData["lash_count"] = static_cast<int>(horse->getLashCount());
+            const int reinPointCount = horse->getReinPointCount();
+            slotData["rein_point_count"] = reinPointCount;
+            slotData["rein_material"] =
+                ptrString(reinterpret_cast<uintptr_t>(horse->getReinLineMaterial()));
+            slotData["rein_points"] =
+                reinPointSummary(horse->getReinPoints(), reinPointCount, horse->current.pos);
+            slotData["rein_suppressed_by_subjectivity"] =
+                horse->isRidden() && player != nullptr && player->checkHorseSubjectivity();
+            slotData["localized_animation_count"] =
+                coop::horse_owner::getLocalizedAnimationCount(horse);
+            slotData["animations"] = json::array({
+                {
+                    {"index", static_cast<unsigned int>(horse->getAnmIdx(0))},
+                    {"frame", horse->getAnmFrame(0)},
+                    {"frame_max", horse->getAnmFrameMax(0)},
+                },
+                {
+                    {"index", static_cast<unsigned int>(horse->getAnmIdx(1))},
+                    {"frame", horse->getAnmFrame(1)},
+                    {"frame_max", horse->getAnmFrameMax(1)},
+                },
+                {
+                    {"index", static_cast<unsigned int>(horse->getAnmIdx(2))},
+                    {"frame", horse->getAnmFrame(2)},
+                    {"frame_max", horse->getAnmFrameMax(2)},
+                },
+            });
+        }
+        if (reins != nullptr) {
+            slotData["rein_interp"] = {
+                {"previous_valid", reins->previousValid},
+                {"current_valid", reins->currentValid},
+                {"previous_count", reins->previousCount},
+                {"current_count", reins->currentCount},
+            };
+            slotData["rein_snapshot"] =
+                reinPointSummary(reins->current, reins->currentCount,
+                                 horse != nullptr ? horse->current.pos : cXyz::Zero);
+        }
+        slots.push_back(slotData);
+    }
+
+    return {
+        {"schema_version", 4},
+        {"canonical_horse", ptrString(reinterpret_cast<uintptr_t>(dComIfGp_getHorseActor()))},
+        {"duplicate_retained_horse", duplicateRetainedHorse},
+        {"last_summon_revision", coop::horse_owner::getLastSummonRevision()},
+        {"last_summon_activator",
+         static_cast<int>(coop::horse_owner::getLastSummonActivator())},
+        {"last_summon_pos_valid", lastSummonPos != nullptr},
+        {"last_summon_pos", vecSummary(lastSummonPos)},
+        {"slots", slots},
+    };
+}
+
+json collectEventPresentation() {
+    const coop::event_presentation::DebugState& state =
+        coop::event_presentation::getDebugState();
+    json hiddenSlots = json::array();
+    for (int i = 0; i < coop::kPlayerSlotCount; i++) {
+        const coop::PlayerSlot slot = static_cast<coop::PlayerSlot>(i);
+        if (coop::event_presentation::shouldHideSlot(slot)) {
+            hiddenSlots.push_back(i);
+        }
+    }
+
+    return {
+        {"schema_version", 3},
+        {"revision", state.revision},
+        {"fullscreen", state.fullscreen},
+        {"split_screen_capability", coop::camera::isSplitScreenEnabled()},
+        {"split_viewports_presented", coop::event_presentation::shouldPresentSplitViewports()},
+        {"presenter_slot", static_cast<int>(state.presenterSlot)},
+        {"presenter_window", state.presenterWindowIndex},
+        {"hide_non_presenter_visuals", state.hideNonPresenterVisuals},
+        {"total_depth", state.totalDepth},
+        {"sources", {
+            {"wolf_howl", state.wolfHowlDepth},
+            {"item_ring", state.itemRingDepth},
+            {"pause_menu", state.pauseMenuDepth},
+            {"field_map", state.fieldMapDepth},
+            {"dungeon_map", state.dungeonMapDepth},
+            {"agitha_insect", state.agithaInsectDepth},
+            {"midna_service", state.midnaServiceDepth},
+            {"dialogue", state.dialogueDepth},
+        }},
+        {"last_transition", coop::event_presentation::transitionName(state.lastTransition)},
+        {"last_source", coop::event_presentation::sourceName(state.lastSource)},
+        {"hidden_slots", hiddenSlots},
+    };
+}
+
+json collectMessageOwner() {
+    const coop::message_owner::DebugState& state = coop::message_owner::getDebugState();
+    return {
+        {"schema_version", 2},
+        {"revision", state.revision},
+        {"active", state.active},
+        {"presentation_active", state.presentationActive},
+        {"slot", static_cast<int>(state.slot)},
+        {"pad", state.pad},
+        {"presenter", ptrString(state.presenter)},
+        {"listener", ptrString(state.listener)},
+        {"speaker", ptrString(state.speaker)},
+        {"fallback_actor", ptrString(state.fallbackActor)},
+        {"talk_cut", state.talkCut},
+        {"last_transition", coop::message_owner::transitionName(state.lastTransition)},
+        {"last_begin_source", coop::message_owner::beginSourceName(state.lastBeginSource)},
+    };
+}
+
+json collectAlinkFormResources() {
+    const coop::alink_form_resources::DebugState& state =
+        coop::alink_form_resources::getDebugState();
+
+    json arcs = json::array();
+    for (int i = 0; i < state.arcCount; i++) {
+        const coop::alink_form_resources::DebugArcState& arc = state.arcs[i];
+        arcs.push_back({
+            {"arc", arc.arcName != nullptr ? arc.arcName : ""},
+            {"heap", ptrString(arc.heap)},
+            {"retain_count", arc.retainCount},
+            {"phase_id", arc.phaseId},
+            {"loaded", arc.loaded},
+        });
+    }
+
+    json slots = json::array();
+    for (int i = 0; i < coop::kPlayerSlotCount; i++) {
+        const coop::alink_form_resources::DebugSlotState& slot = state.slots[i];
+        slots.push_back({
+            {"slot", static_cast<int>(slot.slot)},
+            {"actor", ptrString(slot.actor)},
+            {"current_arc", slot.currentArc != nullptr ? slot.currentArc : ""},
+            {"pending_release_arc",
+             slot.pendingReleaseArc != nullptr ? slot.pendingReleaseArc : ""},
+            {"desired_wolf", slot.desiredWolf},
+            {"desired_known", slot.desiredKnown},
+            {"swapping", slot.swapping},
+        });
+    }
+
+    return {
         {"schema_version", 1},
+        {"revision", state.revision},
+        {"arcs", arcs},
+        {"slots", slots},
+    };
+}
+
+json attentionObjectSummary(dAttention_c* attention, int slot) {
+    json data = {
+        {"slot", slot},
         {"available", attention != nullptr},
     };
     if (attention == nullptr) {
@@ -1283,6 +1750,9 @@ json collectAttentionState() {
     data["check_object_count"] = attention->GetCheckObjectCount();
     data["check_object_offset"] = attention->mCheckObjectOffset;
     data["attn_status"] = static_cast<unsigned int>(attention->mAttnStatus);
+    data["attn_button_state"] = static_cast<unsigned int>(attention->field_0x32b);
+    data["attn_refresh_timer"] = static_cast<unsigned int>(attention->field_0x32e);
+    data["attn_release_timer"] = static_cast<unsigned int>(attention->field_0x32f);
     data["attn_block_timer"] = attention->mAttnBlockTimer;
     data["lockon_target_0"] = actorSummary(attention->LockonTarget(0));
     data["action_target_0"] = actorSummary(attention->ActionTarget(0));
@@ -1294,6 +1764,29 @@ json collectAttentionState() {
     data["action_list_active"] = attentionListSummary(attention->mActionList, 4);
     data["check_object_list_capacity"] = 4;
     data["check_object_list_active"] = attentionListSummary(attention->mCheckObjectList, 4);
+    return data;
+}
+
+json collectAttentionState() {
+    dAttention_c* attention = dComIfGp_getAttention();
+    json data = {
+        {"schema_version", 2},
+        {"available", attention != nullptr},
+    };
+    if (attention == nullptr) {
+        return data;
+    }
+
+    json primary = attentionObjectSummary(attention, 0);
+    for (auto& item : primary.items()) {
+        data[item.key()] = item.value();
+    }
+
+    json slots = json::array();
+    for (int slot = 0; slot < coop::kPlayerSlotCount; slot++) {
+        slots.push_back(attentionObjectSummary(coop::player_attention::existingAttentionForSlot(slot), slot));
+    }
+    data["slots"] = slots;
     return data;
 }
 
@@ -1343,7 +1836,7 @@ json collectCameraAttentionStatus() {
 json collectPlayerStatus() {
     dAttention_c* attention = dComIfGp_getAttention();
     json data = {
-        {"schema_version", 1},
+        {"schema_version", 2},
         {"button_status", collectButtonStatus()},
         {"button_status_force", collectButtonStatusForce()},
         {"player_status_words", collectPlayerStatusWords()},
@@ -1363,6 +1856,12 @@ json collectPlayerStatus() {
         data["secondary_item_trigger_r"] = static_cast<bool>(state.itemTriggerR);
         data["secondary_raw_mask"] = static_cast<unsigned int>(state.rawMask);
         data["secondary_target"] = ptrString(state.target);
+        data["secondary_wolf_lock_num"] = static_cast<unsigned int>(state.wolfLockNum);
+        data["secondary_wolf_lock_actor"] = ptrString(state.wolfLockActor);
+        data["secondary_wolf_lock_charge"] = static_cast<bool>(state.wolfLockChargeActive);
+        data["secondary_wolf_lock_dome"] = static_cast<bool>(state.wolfLockDomeActive);
+        data["secondary_wolf_lock_attack"] = static_cast<bool>(state.wolfLockAttackActive);
+        data["secondary_wolf_search_ball_scale"] = state.wolfSearchBallScale;
     } else {
         data["secondary_attention_lock"] = false;
         data["secondary_raw_mask"] = 0;
@@ -1917,14 +2416,11 @@ json collectInputPad() {
 
 json collectCoopProbes() {
     return {
-        {"schema_version", 1},
+        {"schema_version", 2},
         {"secondary_alink_probe_flags", coop::getSecondaryAlinkProbeFlags()},
         {"skip_execute", coop::hasSecondaryAlinkProbeFlag(coop::SecondaryAlinkProbe_SkipExecute)},
         {"skip_draw", coop::hasSecondaryAlinkProbeFlag(coop::SecondaryAlinkProbe_SkipDraw)},
-        {"restore_primary_model_data_owner", coop::hasSecondaryAlinkProbeFlag(coop::SecondaryAlinkProbe_RestorePrimaryModelDataOwner)},
-        {"scoped_draw_model_data_owner", coop::hasSecondaryAlinkProbeFlag(coop::SecondaryAlinkProbe_ScopedDrawModelDataOwner)},
-        {"scoped_execute_model_data_owner", coop::hasSecondaryAlinkProbeFlag(coop::SecondaryAlinkProbe_ScopedExecuteModelDataOwner)},
-        {"ignore_shared_attention_lock", coop::hasSecondaryAlinkProbeFlag(coop::SecondaryAlinkProbe_IgnoreSharedAttentionLock)},
+        {"model_data_owner_policy", "scoped_runtime"},
     };
 }
 
@@ -2008,14 +2504,159 @@ json collectAlinkSecondary() {
     return data;
 }
 
+json collectHudPresentation() {
+    const coop::hud_diagnostics::HudPresentationDebugState& state =
+        coop::hud_diagnostics::getState();
+    json slotItems = json::array();
+    for (int slot = 0; slot < 2; slot++) {
+        json items = json::array();
+        for (int item = 0; item < 2; item++) {
+            const coop::hud_diagnostics::ItemResolverDebug& resolved = state.slotItems[slot][item];
+            items.push_back({
+                {"button", item == 0 ? "x" : "y"},
+                {"select_index", static_cast<unsigned int>(resolved.selectIndex)},
+                {"mix_index", static_cast<unsigned int>(resolved.mixIndex)},
+                {"item", static_cast<unsigned int>(resolved.item)},
+                {"count", static_cast<int>(resolved.count)},
+                {"max_count", resolved.maxCount},
+            });
+        }
+        slotItems.push_back({
+            {"slot", slot},
+            {"items", items},
+        });
+    }
+
+    json snapshots = json::array();
+    for (int i = 0; i < static_cast<int>(coop::hud_diagnostics::ReplayPhase::Count); i++) {
+        const coop::hud_diagnostics::ReplaySnapshot& snapshot = state.snapshots[i];
+        if (!snapshot.valid) {
+            continue;
+        }
+
+        json items = json::array();
+        for (int item = 0; item < 2; item++) {
+            const coop::hud_diagnostics::ItemResolverDebug& resolved = snapshot.resolved[item];
+            const coop::hud_diagnostics::ItemPaneDebug& pane = snapshot.panes[item];
+            items.push_back({
+                {"button", item == 0 ? "x" : "y"},
+                {"select_index", static_cast<unsigned int>(resolved.selectIndex)},
+                {"mix_index", static_cast<unsigned int>(resolved.mixIndex)},
+                {"item", static_cast<unsigned int>(resolved.item)},
+                {"count", static_cast<int>(resolved.count)},
+                {"max_count", resolved.maxCount},
+                {"pane", {
+                    {"visible", pane.visible},
+                    {"texture_visible", pane.textureVisible},
+                    {"alpha", static_cast<unsigned int>(pane.alpha)},
+                    {"alpha_rate", pane.alphaRate},
+                    {"third_digit_visible", pane.thirdDigitVisible},
+                    {"translate", {pane.translateX, pane.translateY}},
+                    {"scale", {pane.scaleX, pane.scaleY}},
+                }},
+            });
+        }
+
+        snapshots.push_back({
+            {"phase", coop::hud_diagnostics::replayPhaseName(snapshot.phase)},
+            {"presentation_slot", snapshot.presentationSlot != coop::PlayerSlot::Invalid
+                                      ? static_cast<int>(snapshot.presentationSlot)
+                                      : -1},
+            {"do_status", static_cast<unsigned int>(snapshot.doStatus)},
+            {"items", items},
+        });
+    }
+
+    const coop::hud_diagnostics::HudPresentationDebugState::RingAdmissionDebug& ring =
+        state.ringAdmission;
+    json ringAdmission = {
+        {"valid", ring.valid},
+        {"phase", coop::hud_diagnostics::ringAdmissionPhaseName(ring.phase)},
+        {"owner_slot", ring.owner != coop::PlayerSlot::Invalid ? static_cast<int>(ring.owner) : -1},
+        {"heap_lock", static_cast<unsigned int>(ring.heapLock)},
+        {"sub_heap_locks", {static_cast<unsigned int>(ring.subHeapLocks[0]),
+                            static_cast<unsigned int>(ring.subHeapLocks[1])}},
+        {"primary_prompt", ring.primaryPrompt},
+        {"secondary_prompt", ring.secondaryPrompt},
+        {"message_status", static_cast<unsigned int>(ring.messageStatus)},
+        {"floating_message_visible", ring.floatingMessageVisible},
+    };
+
+    return {
+        {"schema_version", 2},
+        {"revision", state.revision},
+        {"slot_items", slotItems},
+        {"snapshots", snapshots},
+        {"ring_admission", ringAdmission},
+    };
+}
+
+json collectRenderLines() {
+    constexpr f32 kWideRibbonDistance = 500.0f;
+    constexpr f32 kLongSegmentDistance = 1000.0f;
+    constexpr f32 kDistanceBucketSize = 10.0f;
+    json records = json::array();
+    const coop::line_render_diagnostics::ExpansionRecord* expansions =
+        coop::line_render_diagnostics::getRecords();
+    const int count = coop::line_render_diagnostics::getRecordCount();
+    for (int i = 0; i < count; i++) {
+        const coop::line_render_diagnostics::ExpansionRecord& expansion = expansions[i];
+        const bool suspicious = expansion.controlNonFiniteCount != 0 ||
+                                expansion.expandedNonFiniteCount != 0 ||
+                                expansion.maxControlSegment > kLongSegmentDistance ||
+                                expansion.maxExpandedWidth > kWideRibbonDistance;
+        json record = {
+            {"material", ptrString(expansion.material)},
+            {"material_id", expansion.materialId},
+            {"line_kind", expansion.lineKind},
+            {"line_index", expansion.lineIndex},
+            {"point_count", expansion.pointCount},
+            {"presentation_refresh", expansion.presentationRefresh},
+            {"actor_expansion_count", expansion.actorExpansionCount},
+            {"presentation_refresh_request_count", expansion.presentationRefreshRequestCount},
+            {"presentation_expansion_count", expansion.presentationExpansionCount},
+            {"last_presentation_eye",
+             {expansion.lastPresentationEye.x, expansion.lastPresentationEye.y,
+              expansion.lastPresentationEye.z}},
+            {"control_non_finite_count", expansion.controlNonFiniteCount},
+            {"expanded_non_finite_count", expansion.expandedNonFiniteCount},
+            {"max_control_segment_bucket",
+             static_cast<int>(expansion.maxControlSegment / kDistanceBucketSize)},
+            {"max_expanded_width_bucket",
+             static_cast<int>(expansion.maxExpandedWidth / kDistanceBucketSize)},
+            {"max_expanded_distance_from_eye_bucket",
+             static_cast<int>(expansion.maxExpandedDistanceFromEye / kDistanceBucketSize)},
+            {"suspicious", suspicious},
+        };
+        if (suspicious) {
+            record["eye"] = {expansion.eye.x, expansion.eye.y, expansion.eye.z};
+            record["max_control_segment"] = expansion.maxControlSegment;
+            record["max_expanded_width"] = expansion.maxExpandedWidth;
+            record["max_expanded_distance_from_eye"] = expansion.maxExpandedDistanceFromEye;
+        }
+        records.push_back(record);
+    }
+    return {
+        {"schema_version", 2},
+        {"revision", coop::line_render_diagnostics::getRevision()},
+        {"records", records},
+    };
+}
+
 Provider s_providers[] = {
     {"scene.current", 1, "cheap", 30, true, 20, 4096, collectSceneCurrent},
     {"render.stats", 1, "cheap", 30, true, 20, 4096, collectRenderStats},
-    {"render.windows", 1, "cheap", 1, true, 20, 8192, collectRenderWindows},
-    {"camera.state", 1, "cheap", 1, true, 20, 8192, collectCameraState},
-    {"player.slots", 1, "cheap", 1, true, 120, 8192, collectPlayerSlots},
+    {"render.windows", 2, "cheap", 1, true, 20, 8192, collectRenderWindows},
+    {"camera.state", 2, "cheap", 1, true, 20, 8192, collectCameraState},
+    {"camera.area_load", 1, "cheap", 1, true, 120, 32768, collectCameraAreaLoad},
+    {"player.slots", 2, "cheap", 1, true, 120, 8192, collectPlayerSlots},
+    {"horse.owner", 4, "cheap", 1, true, 120, 12288, collectHorseOwner},
+    {"event.presentation", 2, "cheap", 1, true, 120, 4096, collectEventPresentation},
+    {"message.owner", 1, "cheap", 1, true, 120, 4096, collectMessageOwner},
+    {"alink.form_resources", 2, "cheap", 1, true, 120, 8192, collectAlinkFormResources},
+    {"render.lines", 2, "cheap", 1, true, 120, 32768, collectRenderLines},
     {"input.pad", 1, "cheap", 1, true, 120, 4096, collectInputPad},
-    {"attention.state", 1, "medium", 5, true, 60, 12288, collectAttentionState},
+    {"attention.state", 2, "medium", 5, true, 60, 32768, collectAttentionState},
     {"player.status", 1, "cheap", 1, true, 120, 8192, collectPlayerStatus},
     {"coop.player_query", 1, "cheap", 5, true, 240, 8192, collectPlayerQuery},
     {"enemy.targeting", 1, "cheap", 5, true, 240, 12288, collectEnemyTargeting},
@@ -2026,8 +2667,9 @@ Provider s_providers[] = {
     {"bokoblin.attack", 1, "cheap", 1, true, 240, 8192, collectBokoblinAttackProbe},
     {"gibdo.state", 1, "cheap", 1, true, 240, 8192, collectGibdoStateProbe},
     {"young_gohma.state", 1, "cheap", 1, true, 240, 8192, collectYoungGohmaStateProbe},
-    {"coop.probes", 1, "cheap", 30, true, 20, 4096, collectCoopProbes},
+    {"coop.probes", 2, "cheap", 30, true, 20, 4096, collectCoopProbes},
     {"alink.secondary", 4, "cheap", 1, true, 120, 8192, collectAlinkSecondary},
+    {"hud.presentation", 2, "cheap", 1, true, 120, 8192, collectHudPresentation},
 };
 
 const Provider* findProvider(const char* name) {
@@ -2167,6 +2809,11 @@ void tick(u32 frame) {
 
         json data = provider.collect();
         updateProviderLatest(provider.name, data);
+        if (std::string(provider.name) == "camera.area_load" &&
+            data.value("revision", 0u) == 0)
+        {
+            continue;
+        }
         if (std::string(provider.name) == "coop.player_query") {
             emitPlayerQueryEvents(provider, data);
             continue;
@@ -2266,6 +2913,251 @@ void recordSecondaryAlinkState(const char* phase, const SecondaryAlinkState& sta
     } else {
         storeEvent(makeEnvelope("alink.secondary", 1, "change", data));
     }
+    updateLatestFileIfDue(false);
+}
+
+void recordCameraAreaLoadCheckpoint(const char* phase, const char* startupSource, int cameraId,
+                                    const fopAc_ac_c* actor, const cXyz* center, const cXyz* eye,
+                                    s16 cameraYaw, int startMode, int cameraFrame) {
+    const cXyz& restartCenter = dComIfGs_getTurnRestart().getCameraCtr();
+    const cXyz& restartEye = dComIfGs_getTurnRestart().getCameraEye();
+    const char* stage = dComIfGp_getStartStageName();
+    json checkpoint = {
+        {"revision", ++s_state.cameraAreaLoadRevision},
+        {"phase", phase != nullptr ? phase : ""},
+        {"startup_source", startupSource != nullptr ? startupSource : ""},
+        {"camera_id", cameraId},
+        {"camera_frame", cameraFrame},
+        {"camera_yaw", static_cast<int>(cameraYaw)},
+        {"actor", ptrString(reinterpret_cast<uintptr_t>(actor))},
+        {"actor_room", actor != nullptr ? static_cast<int>(fopAcM_GetRoomNo(actor)) : -1},
+        {"actor_argument", actor != nullptr ? static_cast<int>(actor->argument) : 0},
+        {"actor_angle_y", actor != nullptr ? static_cast<int>(actor->shape_angle.y) : 0},
+        {"actor_pos", actor != nullptr
+                          ? json{actor->current.pos.x, actor->current.pos.y, actor->current.pos.z}
+                          : json::array()},
+        {"camera_center", center != nullptr ? json{center->x, center->y, center->z} : json::array()},
+        {"camera_eye", eye != nullptr ? json{eye->x, eye->y, eye->z} : json::array()},
+        {"turn_restart_center", {restartCenter.x, restartCenter.y, restartCenter.z}},
+        {"turn_restart_eye", {restartEye.x, restartEye.y, restartEye.z}},
+        {"turn_restart_angle_y", static_cast<int>(dComIfGs_getTurnRestartAngleY())},
+        {"last_scene_mode", static_cast<unsigned int>(dComIfGs_getLastSceneMode())},
+        {"start_mode", startMode},
+        {"stage", stage != nullptr ? stage : ""},
+        {"stage_room", static_cast<int>(dComIfGp_getStartStageRoomNo())},
+        {"stage_layer", static_cast<int>(dComIfGp_getStartStageLayer())},
+        {"stage_point", static_cast<int>(dComIfGp_getStartStagePoint())},
+        {"split_screen_enabled", coop::camera::isSplitScreenEnabled()},
+        {"split_screen_requested", coop::camera::isSplitScreenRequested()},
+        {"secondary_ready", coop::camera::isSecondaryCameraReady()},
+        {"secondary_requested", coop::camera::isSecondaryCameraRequested()},
+    };
+    s_state.cameraAreaLoadCheckpoints.push_back(checkpoint);
+    while (s_state.cameraAreaLoadCheckpoints.size() > kCameraAreaLoadMaxCheckpoints) {
+        s_state.cameraAreaLoadCheckpoints.pop_front();
+    }
+
+    if (!s_state.enabled) {
+        return;
+    }
+
+    ensureInitialized();
+    if (!s_state.initialized) {
+        return;
+    }
+
+    updateProviderLatest("camera.area_load", collectCameraAreaLoad());
+    updateLatestFileIfDue(false);
+}
+
+void recordMessageOwnerCheckpoint(const char* phase, int slot, int pad,
+                                  const fopAc_ac_c* presenter, const fopAc_ac_c* listener,
+                                  const fopAc_ac_c* speaker, bool fullscreenRequested,
+                                  bool presentationActive, bool eventFullscreen,
+                                  int presenterWindow, const char* source) {
+    if (!s_state.enabled) {
+        return;
+    }
+
+    ensureInitialized();
+    if (!s_state.initialized) {
+        return;
+    }
+
+    json data = {
+        {"schema_version", 1},
+        {"phase", phase != nullptr ? phase : ""},
+        {"source", source != nullptr ? source : ""},
+        {"slot", slot},
+        {"pad", pad},
+        {"fullscreen_requested", fullscreenRequested},
+        {"presentation_active", presentationActive},
+        {"event_fullscreen", eventFullscreen},
+        {"presenter_window", presenterWindow},
+        {"presenter", actorSummary(presenter)},
+        {"listener", actorSummary(listener)},
+        {"speaker", actorSummary(speaker)},
+    };
+
+    updateProviderLatest("message.trace", data);
+    if (!shouldEmitProviderEvent("message.trace", data)) {
+        updateLatestFileIfDue(false);
+        return;
+    }
+
+    json event = makeEnvelope("message.trace", 1, "checkpoint", data);
+    storeEventDirect(event);
+    recordProviderWrite("message.trace", event.dump().size());
+    updateLatestFileIfDue(false);
+}
+
+void recordTalkCameraCheckpoint(const char* phase, int cameraId, bool skipped,
+                                const fopAc_ac_c* cameraPlayer,
+                                const fopAc_ac_c* presenter, const fopAc_ac_c* listener,
+                                const fopAc_ac_c* speaker, int talkCut, int eventAction,
+                                const char* eventActionName, int cameraIsWolf,
+                                int presenterIsWolf, int cameraStyle, int cameraType,
+                                int cameraMode, int midnaRidingVisible) {
+    if (!s_state.enabled) {
+        return;
+    }
+
+    ensureInitialized();
+    if (!s_state.initialized) {
+        return;
+    }
+
+    json data = {
+        {"schema_version", 1},
+        {"phase", phase != nullptr ? phase : ""},
+        {"camera_id", cameraId},
+        {"skipped", skipped},
+        {"talk_cut", talkCut},
+        {"event_action", eventAction},
+        {"event_action_name", eventActionName != nullptr ? eventActionName : ""},
+        {"camera_is_wolf", cameraIsWolf},
+        {"presenter_is_wolf", presenterIsWolf},
+        {"camera_style", cameraStyle},
+        {"camera_type", cameraType},
+        {"camera_mode", cameraMode},
+        {"midna_riding_visible", midnaRidingVisible},
+        {"message_owner_active", coop::message_owner::isActive()},
+        {"message_owner_slot", static_cast<int>(coop::message_owner::currentSlot())},
+        {"event_fullscreen", coop::event_presentation::isFullscreen()},
+        {"event_presenter_slot", static_cast<int>(coop::event_presentation::presenterSlot())},
+        {"event_presenter_window", coop::event_presentation::presenterWindowIndex()},
+        {"camera_player", actorSummary(cameraPlayer)},
+        {"presenter", actorSummary(presenter)},
+        {"listener", actorSummary(listener)},
+        {"speaker", actorSummary(speaker)},
+    };
+
+    updateProviderLatest("camera.talk_trace", data);
+    if (!shouldEmitProviderEvent("camera.talk_trace", data)) {
+        updateLatestFileIfDue(false);
+        return;
+    }
+
+    json event = makeEnvelope("camera.talk_trace", 1, "checkpoint", data);
+    storeEventDirect(event);
+    recordProviderWrite("camera.talk_trace", event.dump().size());
+    updateLatestFileIfDue(false);
+}
+
+void recordTalkCameraViewCheckpoint(const char* phase, int cameraId, int talkCut,
+                                    int talkTimer, int transitionTimer,
+                                    const fopAc_ac_c* presenter,
+                                    const fopAc_ac_c* listener,
+                                    const fopAc_ac_c* speaker,
+                                    const cXyz* viewCenter, const cXyz* viewEye,
+                                    f32 viewRadius, int viewPitch, int viewYaw, f32 viewFovy,
+                                    const cXyz* seededCenter, const cXyz* seededEye,
+                                    f32 seededRadius, int seededPitch, int seededYaw,
+                                    f32 seededFovy, const cXyz* listenerAim,
+                                    const cXyz* speakerAim, const cXyz* listenerSpeakerDelta) {
+    if (!s_state.enabled) {
+        return;
+    }
+
+    ensureInitialized();
+    if (!s_state.initialized) {
+        return;
+    }
+
+    json data = {
+        {"schema_version", 1},
+        {"phase", phase != nullptr ? phase : ""},
+        {"camera_id", cameraId},
+        {"talk_cut", talkCut},
+        {"talk_timer", talkTimer},
+        {"transition_timer", transitionTimer},
+        {"message_owner_active", coop::message_owner::isActive()},
+        {"message_owner_slot", static_cast<int>(coop::message_owner::currentSlot())},
+        {"event_fullscreen", coop::event_presentation::isFullscreen()},
+        {"event_presenter_slot", static_cast<int>(coop::event_presentation::presenterSlot())},
+        {"event_presenter_window", coop::event_presentation::presenterWindowIndex()},
+        {"presenter", actorSummary(presenter)},
+        {"listener", actorSummary(listener)},
+        {"speaker", actorSummary(speaker)},
+        {"view_center", vecSummary(viewCenter)},
+        {"view_eye", vecSummary(viewEye)},
+        {"view_radius", viewRadius},
+        {"view_pitch", viewPitch},
+        {"view_yaw", viewYaw},
+        {"view_fovy", viewFovy},
+        {"seeded_center", vecSummary(seededCenter)},
+        {"seeded_eye", vecSummary(seededEye)},
+        {"seeded_radius", seededRadius},
+        {"seeded_pitch", seededPitch},
+        {"seeded_yaw", seededYaw},
+        {"seeded_fovy", seededFovy},
+        {"listener_aim", vecSummary(listenerAim)},
+        {"speaker_aim", vecSummary(speakerAim)},
+        {"listener_speaker_delta", vecSummary(listenerSpeakerDelta)},
+    };
+
+    updateProviderLatest("camera.talk_view", data);
+    if (!shouldEmitProviderEvent("camera.talk_view", data)) {
+        updateLatestFileIfDue(false);
+        return;
+    }
+
+    json event = makeEnvelope("camera.talk_view", 1, "checkpoint", data);
+    storeEventDirect(event);
+    recordProviderWrite("camera.talk_view", event.dump().size());
+    updateLatestFileIfDue(false);
+}
+
+void recordWolfAoeCheckpoint(const char* phase, const daAlink_c* player, int cameraId,
+                             u32 status0Mask, u32 status1Mask, f32 searchBallScale,
+                             f32 cameraNearRadius, f32 cameraFarRadius, int wolfLockNum,
+                             const fopAc_ac_c* lockActor, f32 cameraFovy, f32 windowAspect,
+                             f32 windowWidth, f32 windowHeight) {
+    if (!s_state.enabled) {
+        return;
+    }
+
+    ensureInitialized();
+    if (!s_state.initialized) {
+        return;
+    }
+
+    json data = alinkWolfAoeSummary(player, status0Mask, status1Mask, searchBallScale,
+                                    cameraNearRadius, cameraFarRadius, wolfLockNum, lockActor,
+                                    cameraFovy, windowAspect, windowWidth, windowHeight);
+    data["schema_version"] = 1;
+    data["phase"] = phase != nullptr ? phase : "";
+    data["camera_id"] = cameraId;
+
+    updateProviderLatest("wolf.aoe_trace", data);
+    if (!shouldEmitProviderEvent("wolf.aoe_trace", data)) {
+        updateLatestFileIfDue(false);
+        return;
+    }
+
+    json event = makeEnvelope("wolf.aoe_trace", 1, "checkpoint", data);
+    storeEventDirect(event);
+    recordProviderWrite("wolf.aoe_trace", event.dump().size());
     updateLatestFileIfDue(false);
 }
 

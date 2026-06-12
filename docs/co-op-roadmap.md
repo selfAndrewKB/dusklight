@@ -61,9 +61,18 @@ The follow-up duplication audit is documented in `docs/coop-alink-duplication-au
 
 The first item/action ownership pass is documented in `docs/coop-secondary-alink-item-ownership-plan.md`. Boomerang, fishing rod, Dominion Rod, bow/arrow, Spinner, bombs, slingshot, and Iron Boots all confirmed the same broad lesson: item actors often know their concrete owning ALINK, but still reach through P1/global helpers for matrices, counters, camera/status, sound, or lifecycle cleanup. Narrow owner-routing fixes made those item families usable for P2 without regressing P1.
 
-The current active plan is `docs/coop-enemy-targeting-plan.md`. Split-screen is now usable enough for co-op testing, with known V1 render/HUD limitations documented in `docs/coop-native-split-screen-camera-plan.md`. The first world-acknowledgement proof exists: Dusk-owned player-query helpers can let ordinary enemy logic react to P2 without mass-rewriting global player helpers. Bokoblin and Tektite have validated the first enemy API families: `enemy_targeting` for combat target choice, `damage_owner` for who hit an enemy, `selected_target_state` for facts about a known target, and `defender_owner` for who an enemy attack touched.
+The current active plan is `docs/coop-p2-independent-control-plan.md`. Split-screen is now usable enough for co-op testing, with known V1 render/HUD limitations documented in `docs/coop-native-split-screen-camera-plan.md`. The first world-acknowledgement proof exists: Dusk-owned player-query helpers can let ordinary enemy logic react to P2 without mass-rewriting global player helpers. Bokoblin and Tektite validated the first enemy API families: `enemy_targeting` for combat target choice, `damage_owner` for who hit an enemy, `selected_target_state` for facts about a known target, and `defender_owner` for who an enemy attack touched. Enemy coverage remains tracked in `docs/coop-enemy-audit.md`.
 
 The secondary Link experiment has graduated into the supported local additional-player path for current co-op testing. Runtime systems should identify player actors through the slot registry, not by inspecting ALINK's spawn argument. Spawn arguments now encode requested extra slots (`-2` for slot 1, `-3` for slot 2, `-4` for slot 3) only as a create-time bootstrap so `daAlink_c::create()` can avoid claiming vanilla player 0 before it has registered in the sidecar.
+
+Requested additional slots and split-screen enablement are session intent, not properties of one play scene. Area loads clear scene-local actors and camera pointers normally. Once the next primary ALINK finishes creation, Dusk restores requested split-screen state and respawns requested additional slots from the new primary actor. P2 item assignments remain session-local across that reconstruction.
+
+Reconstructed additional ALINKs are runtime joins, not second protagonists entering the area. They
+keep structural `playerInit()` work, but do not register the global scene-start demo again or replay
+P1's authored area-entry action proc. They enter an ordinary local wait/action state at the rebuilt
+position.
+
+The original ALINK model-data probe has also graduated into `dusk::coop::alink_model_data_owner`. Link body `J3DModelData` is shared while its installed matrix calculators are actor-local, so additional-player startup evaluation, execute, and draw temporarily install that ALINK's calculators and restore P1 afterward. This is runtime policy now, not an Actor Spawner checkbox.
 
 Additional player spawning should not be owned by the ImGui Actor Spawner. The current debug button and `Ctrl+F12` hotkey are callers of the Dusk co-op lifecycle API. Future player-count settings, controller-port "press Start to join", and online host/client join handling should reuse the same slot-based `spawnPlayer(...)` path so local and networked co-op do not diverge. The registry, spawn request decoding, and controller-port mapping are shaped for four slots now; camera/render sidecars and diagnostics remain proven only for slot 1 until later plans extend them.
 
@@ -251,7 +260,7 @@ Acceptance:
 - Player 1 behavior remains unchanged when co-op is disabled.
 - The implementation plan records which actors were intentionally converted and which remain primary-player-only.
 
-Active slice: `docs/coop-enemy-targeting-plan.md` tracks the regular-enemy co-op API families validated on Bokoblin (`E_OC`) and Tektite (`E_TT`). The completed world-acknowledgement proof in `docs/coop-world-acknowledgement-plan.md` covers the hanging Helmasaur upward-wait proximity trigger (`e_hm.up_wait`) plus basic Bokoblin recognition/chase evidence.
+Enemy slice: `docs/coop-enemy-targeting-plan.md` tracks the regular-enemy co-op API families validated on Bokoblin (`E_OC`) and Tektite (`E_TT`). The completed world-acknowledgement proof in `docs/coop-world-acknowledgement-plan.md` covers the hanging Helmasaur upward-wait proximity trigger (`e_hm.up_wait`) plus basic Bokoblin recognition/chase evidence.
 
 Enemy coverage is tracked in `docs/coop-enemy-audit.md`. The first policy architecture lives in `docs/coop-enemy-targeting-plan.md`. The intended long-term layering is `actor patches -> enemy_targeting -> player_query`: actor files should make narrow, evidenced hooks; `enemy_targeting` should own sticky target retention, attack follow-through, recent-attacker bias, and target-pressure rules; `selected_target_state` should answer what the chosen target is doing; `player_query` should remain the raw facts provider for active-player candidates, distances, angles, and diagnostics.
 

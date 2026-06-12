@@ -528,7 +528,7 @@ BOOL daAlink_c::checkNextActionGrab() {
         }
     }
 
-    if (doTrigger() && dComIfGp_getDoStatus() == BUTTON_STATUS_OPEN) {
+    if (doTrigger() && getDoStatus() == BUTTON_STATUS_OPEN) {
         fopAcM_orderDoorEvent(this, field_0x27f4, 0, 0);
         return 1;
     }
@@ -546,11 +546,11 @@ BOOL daAlink_c::checkNextActionGrab() {
         )
     {
         int _; // probably a debug fakematch
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_PLACE) {
+        if (getDoStatus() == BUTTON_STATUS_PLACE) {
             return procGrabPutInit();
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_THROW) {
+        if (getDoStatus() == BUTTON_STATUS_THROW) {
             return procGrabThrowInit(0);
         }
     }
@@ -1363,7 +1363,7 @@ int daAlink_c::procPickPut() {
                 if (bombActor != NULL) {
                     // Co-op: bombling lifetime can outlive the creating ALINK action, so preserve its owner.
                     static_cast<daNbomb_c*>(bombActor)->setOwner(this);
-                    dComIfGp_addSelectItemNum(mSelectItemId, -1);
+                    addSelectItemNum(mSelectItemId, -1);
                     field_0x2fcf++;
                 }
             }
@@ -1529,7 +1529,7 @@ void daAlink_c::setWallGrabStatus(u8 i_status, u8 i_flag) {
 }
 
 int daAlink_c::getWallGrabStatus() {
-    return dComIfGp_getRStatus();
+    return getRStatus();
 }
 
 BOOL daAlink_c::wallGrabTrigger() {
@@ -2095,7 +2095,7 @@ int daAlink_c::procGoatMove() {
     mDoMtx_stack_c::YrotS(-shape_angle.y);
     mDoMtx_stack_c::multVecSR(&sp8, &sp8);
 
-    if (dComIfGp_getDoStatus() == BUTTON_STATUS_GRAB && mProcVar3.field_0x300e != 0) {
+    if (getDoStatus() == BUTTON_STATUS_GRAB && mProcVar3.field_0x300e != 0) {
         if (sp14.z < 250.0f) {
             return procGoatCatchInit(temp_r3, sp8.x);
         }

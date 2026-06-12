@@ -12,6 +12,10 @@
 #include <cmath>
 #include "Z2AudioLib/Z2Instances.h"
 
+#if TARGET_PC
+#include "dusk/coop/player_attention.h"
+#endif
+
 class daE_SW_HIO_c {
 public:
     /* サンドワーム (Sandworm) */
@@ -446,11 +450,18 @@ void daE_SW_c::executeChaseSlow() {
 
                 if (field_0x6ea == 0) {
                     s16 bVar1 = 0;
+#if TARGET_PC
+                    // Co-op: Sandworm should see P2's slot-local lock-on as a real lock.
+                    if (dusk::coop::player_attention::isActorLockedByAnyPlayer(this)) {
+                        bVar1 = 1;
+                    }
+#else
                     if (dComIfGp_getAttention()->LockonTruth()) {
                         if (dComIfGp_getAttention()->LockonTarget(0) == this) {
                             bVar1 = 1;
                         }
                     }
+#endif
 
                     if (((s16)cLib_distanceAngleS(fopCamM_GetAngleY(dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0))), field_0x6cc) > 0x6000 || bVar1) && data_807B0200 == 0) {
                         field_0x6ea = 60;
@@ -1794,7 +1805,7 @@ void daE_SW_c::d_setAction(void (daE_SW_c::*action)()) {
     (this->*field_0xafc)();
 }
 
-static actor_method_class l_daE_SW_Method = {
+static DUSK_CONST actor_method_class l_daE_SW_Method = {
     (process_method_func)daE_SW_Create,
     (process_method_func)daE_SW_Delete,
     (process_method_func)daE_SW_Execute,
@@ -1802,7 +1813,7 @@ static actor_method_class l_daE_SW_Method = {
     (process_method_func)daE_SW_Draw,
 };
 
-actor_process_profile_definition g_profile_E_SW = {
+DUSK_PROFILE actor_process_profile_definition DUSK_CONST g_profile_E_SW = {
     /* Layer ID     */ fpcLy_CURRENT_e,
     /* List ID      */ 7,
     /* List Prio    */ fpcPi_CURRENT_e,
@@ -2100,11 +2111,18 @@ bool daE_SW_c::d_chaseCheck() {
         return false;
     }
 
+    // Co-op: Sandworm notice logic should accept lock-on from any local player slot.
+#if TARGET_PC
+    if (dusk::coop::player_attention::isActorLockedByAnyPlayer(this)) {
+        bVar1 = true;
+    }
+#else
     if (dComIfGp_getAttention()->LockonTruth()) {
         if (dComIfGp_getAttention()->LockonTarget(0) == this) {
             bVar1 = true;
         }
     }
+#endif
 
     camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
     

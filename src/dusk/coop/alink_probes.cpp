@@ -3,7 +3,7 @@
 namespace dusk::coop {
 namespace {
 
-// Co-op: default to the current safe-ish secondary ALINK harness while probes remain explicit in the UI.
+// Co-op: isolation probes default off; proven model-data ownership lives in its runtime sidecar.
 unsigned int s_secondaryAlinkProbeFlags = kDefaultSecondaryAlinkProbeFlags;
 
 }  // namespace

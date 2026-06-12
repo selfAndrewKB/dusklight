@@ -9,7 +9,11 @@
 #include "JSystem/J2DGraph/J2DAnmLoader.h"
 #include "d/actor/d_a_alink.h"
 #include "d/d_pane_class.h"
+#include "d/d_drawlist.h"
+#include "dusk/coop/camera.h"
+#include "dusk/coop/player_camera_status.h"
 #include "dusk/coop/player_slots.h"
+#include "dusk/coop/ui_owner.h"
 #include "m_Do/m_Do_lib.h"
 #include "d/actor/d_a_mirror.h"
 #include "Z2AudioLib/Z2Instances.h"
@@ -17,16 +21,79 @@
 
 // Co-op: boomerang actors must return to the ALINK slot that owns their actor keep, not always global P1.
 static daAlink_c* daBoomerang_getOwner(daBoomerang_c* i_boomerang) {
+    const fpc_ProcID boomerang_id = fopAcM_GetID(i_boomerang);
     for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
         fopAc_ac_c* actor = dusk::coop::getPlayer(static_cast<dusk::coop::PlayerSlot>(i));
         daAlink_c* player = static_cast<daAlink_c*>(actor);
-        if (player != NULL && player->getBoomerangActor() == i_boomerang) {
+        if (player == NULL) {
+            continue;
+        }
+
+        daPy_actorKeep_c* throw_keep = player->getThrowBoomerangAcKeep();
+        if ((throw_keep->getActor() == i_boomerang || throw_keep->getID() == boomerang_id) ||
+            player->getItemID() == boomerang_id)
+        {
             return player;
         }
     }
 
     return daAlink_getAlinkActorClass();
 }
+
+// Co-op: boomerang camera/status effects follow the owner slot instead of P1 globals.
+static u32 daBoomerang_checkOwnerStatus0(daBoomerang_c* i_boomerang, u32 i_flag) {
+    return dusk::coop::player_camera_status::checkStatus0ForPlayer(daBoomerang_getOwner(i_boomerang),
+                                                                   i_flag);
+}
+
+// Co-op: boomerang targeting traces should use the owner viewport camera.
+static dusk::coop::PlayerSlot daBoomerang_getOwnerSlot(daBoomerang_c* i_boomerang) {
+    dusk::coop::PlayerSlot slot = dusk::coop::getSlotForActor(daBoomerang_getOwner(i_boomerang));
+    if (slot == dusk::coop::PlayerSlot::Invalid) {
+        slot = dusk::coop::PlayerSlot::Primary;
+    }
+
+    return slot;
+}
+
+static camera_process_class* daBoomerang_getOwnerCamera(daBoomerang_c* i_boomerang) {
+    dusk::coop::PlayerSlot slot = daBoomerang_getOwnerSlot(i_boomerang);
+    return dComIfGp_getCamera(dComIfGp_getPlayerCameraID(static_cast<int>(slot)));
+}
+
+#if TARGET_PC
+struct SightDrawOwner {
+    daBoomerang_sight_c* sight;
+    dusk::coop::PlayerSlot slot;
+};
+
+static SightDrawOwner s_sightDrawOwners[dusk::coop::kPlayerSlotCount];
+
+static void daBoomerang_recordSightDrawOwner(daBoomerang_sight_c* i_sight,
+                                              dusk::coop::PlayerSlot i_slot) {
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        if (s_sightDrawOwners[i].sight == i_sight || s_sightDrawOwners[i].sight == NULL) {
+            s_sightDrawOwners[i].sight = i_sight;
+            s_sightDrawOwners[i].slot = i_slot;
+            return;
+        }
+    }
+
+    JUT_ASSERT(105, 0);
+    s_sightDrawOwners[0].sight = i_sight;
+    s_sightDrawOwners[0].slot = i_slot;
+}
+
+static dusk::coop::PlayerSlot daBoomerang_findSightDrawSlot(daBoomerang_sight_c* i_sight) {
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        if (s_sightDrawOwners[i].sight == i_sight) {
+            return s_sightDrawOwners[i].slot;
+        }
+    }
+
+    return dusk::coop::PlayerSlot::Primary;
+}
+#endif
 
 int daBoomerang_sight_c::createHeap() {
     void* tmpData;
@@ -357,8 +424,38 @@ void daBoomerang_sight_c::setSight(const cXyz* i_pos, int i_no) {
     }
 }
 
+#if TARGET_PC
+void daBoomerang_sight_c::setSightForPlayer(const cXyz* i_pos, int i_no,
+                                            dusk::coop::PlayerSlot i_slot) {
+    if (!m_alpha[i_no]) {
+        return;
+    }
+
+    if (i_pos != NULL) {
+        m_pos[i_no] = *i_pos;
+    }
+
+    // Co-op: boomerang lock marker projection belongs to the throwing player's camera,
+    // not whichever draw-list viewport happened to be current during actor submission.
+    Vec proj;
+    if (dusk::coop::ui_owner::projectWorldPointLocal(i_slot, m_pos[i_no], &proj)) {
+        m_proj_posX[i_no] = proj.x;
+        m_proj_posY[i_no] = proj.y;
+    }
+}
+#endif
+
 void daBoomerang_sight_c::draw() {
     J2DGrafContext* ctx = dComIfGp_getCurrentGrafPort();
+#if TARGET_PC
+    dusk::coop::ui_owner::ViewportState viewport_state;
+    bool restore_viewport = false;
+    if (dusk::coop::camera::isSplitScreenEnabled()) {
+        // Co-op: boomerang lock cursors are view overlays, not shared P1 HUD elements.
+        restore_viewport = dusk::coop::ui_owner::beginViewport(
+            daBoomerang_findSightDrawSlot(this), &viewport_state);
+    }
+#endif
     u8* alpha_p = m_alpha;
 
     J2DPane* cursor0_pane;
@@ -422,6 +519,11 @@ void daBoomerang_sight_c::draw() {
             screen->draw(0.0f, 0.0f, ctx);
         }
     }
+#if TARGET_PC
+    if (restore_viewport) {
+        dusk::coop::ui_owner::endViewport(viewport_state);
+    }
+#endif
 }
 
 void daBoomerang_c::windModelCallBack() {
@@ -450,7 +552,20 @@ static int daBoomeang_windModelCallBack(J3DJoint* i_joint, int param_1) {
 
 int daBoomerang_c::draw() {
     if (!checkStateFlg0(FLG0_4)) {
-        for (int i = 0; i < BOOMERANG_LOCK_MAX; i++) {
+#if TARGET_PC
+        dusk::coop::PlayerSlot sight_slot = daBoomerang_getOwnerSlot(this);
+        int sight_camera_id = dComIfGp_getPlayerCameraID(static_cast<int>(sight_slot));
+        if (sight_camera_id < 0) {
+            sight_camera_id = 0;
+        }
+        camera_process_class* sight_camera = dComIfGp_getCamera(sight_camera_id);
+        dDlst_window_c* sight_window = dComIfGp_getWindow(dComIfGp_getCameraWinID(sight_camera_id));
+        view_port_class* sight_viewport = sight_window != NULL ? sight_window->getViewPort() : NULL;
+        bool draw_sight = sight_camera != NULL && sight_viewport != NULL;
+#else
+        bool draw_sight = true;
+#endif
+        for (int i = 0; draw_sight && i < BOOMERANG_LOCK_MAX; i++) {
             if (m_sight.getAlpha(i) != 0) {
                 if (m_lockActors[i] != NULL) {
                     m_lockActors[i] = fopAcM_SearchByID(m_lockActorIDs[i]);
@@ -458,31 +573,55 @@ int daBoomerang_c::draw() {
                         pushLockList(i);
                         i--;
                     } else {
+#if TARGET_PC
+                        m_sight.setSightForPlayer(&m_lockActors[i]->eyePos, i, sight_slot);
+#else
                         m_sight.setSight(&m_lockActors[i]->eyePos, i);
+#endif
                     }
                 } else {
                     if (field_0x718[i] != 0) {
+#if TARGET_PC
+                        m_sight.setSightForPlayer(&m_lockActorsPositions[i], i, sight_slot);
+#else
                         m_sight.setSight(&m_lockActorsPositions[i], i);
+#endif
                     } else {
+#if TARGET_PC
+                        m_sight.setSightForPlayer(NULL, i, sight_slot);
+#else
                         m_sight.setSight(NULL, i);
+#endif
                     }
                 }
             }
         }
 
-        if (m_sight.getAlpha(5) != 0) {
+        if (draw_sight && m_sight.getAlpha(5) != 0) {
             if (field_0x6d8 != NULL) {
                 field_0x6d8 = fopAcM_SearchByID(field_0x6d4);
             }
 
             if (field_0x6d8 != NULL) {
+#if TARGET_PC
+                m_sight.setSightForPlayer(&field_0x6d8->eyePos, 5, sight_slot);
+#else
                 m_sight.setSight(&field_0x6d8->eyePos, 5);
+#endif
             } else {
+#if TARGET_PC
+                m_sight.setSightForPlayer(NULL, 5, sight_slot);
+#else
                 m_sight.setSight(NULL, 5);
+#endif
             }
         }
 
-        if (!dComIfGp_event_runCheck()) {
+        if (draw_sight && !dComIfGp_event_runCheck()) {
+#if TARGET_PC
+            // Co-op: retain the owner slot for the delayed shared 2D draw-list replay.
+            daBoomerang_recordSightDrawOwner(&m_sight, sight_slot);
+#endif
             dComIfGd_set2DXlu(&m_sight);
         }
     }
@@ -496,7 +635,7 @@ int daBoomerang_c::draw() {
         g_env_light.setLightTevColorType_MAJI(mp_shippuModel, &tevStr);
         mDoExt_modelEntryDL(mp_shippuModel);
         daMirror_c::entry(mp_shippuModel);
-    } else if (dComIfGp_checkPlayerStatus0(0, 0x80000)) {
+    } else if (daBoomerang_checkOwnerStatus0(this, 0x80000)) {
         g_env_light.setLightTevColorType_MAJI(mp_setboomEfModel, &tevStr);
         mDoExt_modelUpdateDL(mp_setboomEfModel);
     }
@@ -883,7 +1022,7 @@ void daBoomerang_c::setEffect() {
         m_windAtCyl.SetH(wind_cyl_height);
     }
 
-    if (dComIfGp_checkPlayerStatus0(0, 0x80000) && fopAcM_GetParam(this) == 0) {
+    if (daBoomerang_checkOwnerStatus0(this, 0x80000) && fopAcM_GetParam(this) == 0) {
         setEffectTraceMatrix(&field_0x968, 0x740);
     } else {
         JPABaseEmitter* emitter = dComIfGp_particle_getEmitter(field_0x968);
@@ -952,7 +1091,7 @@ int daBoomerang_c::procWait() {
 
         procMove();
     } else if (dCam_getBody()->Mode() != 8) {
-        if (dComIfGp_checkPlayerStatus0(0, 0x80000) && player->getAtnActor() != NULL && m_lockCnt < BOOMERANG_LOCK_MAX) {
+        if (daBoomerang_checkOwnerStatus0(this, 0x80000) && player->getAtnActor() != NULL && m_lockCnt < BOOMERANG_LOCK_MAX) {
             fpc_ProcID atn_actor_id = (fpc_ProcID)fopAcM_GetID(player->getAtnActor());
             
             int var_r27 = 0;
@@ -971,7 +1110,7 @@ int daBoomerang_c::procWait() {
                 mDoAud_seStart(l_lockSeFlg[m_lockCnt], NULL, 0, 0);
                 m_lockCnt++;
             }
-        } else if (!dComIfGp_checkPlayerStatus0(0, 0x80000)) {
+        } else if (!daBoomerang_checkOwnerStatus0(this, 0x80000)) {
             resetLockActor();
         }
 
@@ -1007,7 +1146,7 @@ int daBoomerang_c::procWait() {
             field_0x6d8 = lock_line_actor;
         }
     
-        camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
+        camera_process_class* camera = daBoomerang_getOwnerCamera(this);
         f32 cps_size;
         if (field_0x6d8 != NULL) {
             cps_size = 30.0f;
@@ -1036,7 +1175,7 @@ int daBoomerang_c::procWait() {
         m_lockLineActorID = fpcM_ERROR_PROCESS_ID_e;
     }
 
-    if (dComIfGp_checkPlayerStatus0(0, 0x80000)) {
+    if (daBoomerang_checkOwnerStatus0(this, 0x80000)) {
         m_sound.startLevelSound(Z2SE_BOOM_POWER_RESUME, 0, -1);
     }
 
@@ -1275,7 +1414,7 @@ int daBoomerang_c::execute() {
         field_0x962--;
     }
 
-    camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
+    camera_process_class* camera = daBoomerang_getOwnerCamera(this);
     s16 cam_angleY = fopCamM_GetAngleY(camera);
     s16 cam_angleX = fopCamM_GetAngleX(camera);
 
@@ -1503,7 +1642,7 @@ static int daBoomerang_Create(fopAc_ac_c* i_this) {
     return ((daBoomerang_c*)i_this)->create();
 }
 
-static actor_method_class l_daBoomerang_Method = {
+static DUSK_CONST actor_method_class l_daBoomerang_Method = {
     (process_method_func)daBoomerang_Create,
     (process_method_func)daBoomerang_Delete,
     (process_method_func)daBoomerang_Execute,
@@ -1511,7 +1650,7 @@ static actor_method_class l_daBoomerang_Method = {
     (process_method_func)daBoomerang_Draw,
 };
 
-actor_process_profile_definition g_profile_BOOMERANG = {
+DUSK_PROFILE actor_process_profile_definition DUSK_CONST g_profile_BOOMERANG = {
     /* Layer ID     */ fpcLy_CURRENT_e,
     /* List ID      */ 6,
     /* List Prio    */ fpcPi_CURRENT_e,

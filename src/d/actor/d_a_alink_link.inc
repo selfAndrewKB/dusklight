@@ -11,8 +11,10 @@
 #include "d/actor/d_a_tag_mhint.h"
 
 #if TARGET_PC
-#include "dusk/gyro.h"
 #include "dusk/action_bindings.h"
+#include "dusk/coop/player_camera_status.h"
+#include "dusk/gyro.h"
+#include "dusk/mouse.h"
 #endif
 
 bool daAlink_c::checkNoSubjectModeCamera() {
@@ -116,37 +118,70 @@ BOOL daAlink_c::setBodyAngleToCamera() {
                 var_f31 *= 0.6f;
             }
 
-            if (dComIfGp_checkPlayerStatus0(0, 0x200000)) {
+            // Co-op: scoped/zoomed subject aim belongs to this player, not player 0.
+            if (
+#if TARGET_PC
+                dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x200000)
+#else
+                dComIfGp_checkPlayerStatus0(0, 0x200000)
+#endif
+            ) {
                 var_f31 /= dComIfGp_getCameraZoomScale(field_0x317c);
             }
 
-            shape_angle.y = shape_angle.y + (var_f31 * cM_ssin(mStickAngle) IF_DUSK(* (dusk::getSettings().game.invertFirstPersonXAxis ? -1.0f : 1.0f)));
-            sp8 = mBodyAngle.x + (var_f31 * cM_scos(mStickAngle) IF_DUSK(* (dusk::getSettings().game.invertFirstPersonYAxis ? -1.0f : 1.0f)));
-
-            if (checkNotItemSinkLimit() && sp8 > 0 && sp8 > mBodyAngle.x) {
+#if TARGET_PC
+            if (dusk::getSettings().game.enableMouseAim && checkAimContext()) {
                 sp8 = mBodyAngle.x;
+            } else
+#endif
+            {
+                shape_angle.y = shape_angle.y + (var_f31 * cM_ssin(mStickAngle) IF_DUSK(* (dusk::getSettings().game.invertFirstPersonXAxis ? -1.0f : 1.0f)));
+                sp8 = mBodyAngle.x + (var_f31 * cM_scos(mStickAngle) IF_DUSK(* (dusk::getSettings().game.invertFirstPersonYAxis ? -1.0f : 1.0f)));
+
+                if (checkNotItemSinkLimit() && sp8 > 0 && sp8 > mBodyAngle.x) {
+                    sp8 = mBodyAngle.x;
+                }
             }
         } else {
             sp8 = mBodyAngle.x;
         }
 
 #if TARGET_PC
-        if (dusk::getSettings().game.enableGyroAim && checkGyroAimContext()) {
+        if ((dusk::getSettings().game.enableGyroAim ||
+             dusk::getSettings().game.enableMouseAim) &&
+             checkAimContext())
+        {
             f32 gyro_scale = 1.0f;
             if (checkWolfEyeUp()) {
                 gyro_scale *= 0.6f;
             }
 
-            if (dComIfGp_checkPlayerStatus0(0, 0x200000)) {
+            // Co-op: gyro zoom scaling must follow this player's scoped camera status.
+            if (
+#if TARGET_PC
+                dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x200000)
+#else
+                dComIfGp_checkPlayerStatus0(0, 0x200000)
+#endif
+            ) {
                 gyro_scale /= dComIfGp_getCameraZoomScale(field_0x317c);
             }
 
-            f32 gy_yaw = 0.f;
-            f32 gy_pitch = 0.f;
-            dusk::gyro::getAimDeltas(gy_yaw, gy_pitch);
+            f32 final_yaw = 0.f;
+            f32 final_pitch = 0.f;
+            if (dusk::getSettings().game.enableMouseAim) {
+                dusk::mouse::getAimDeltas(final_yaw, final_pitch);
+            }
+            if (dusk::getSettings().game.enableGyroAim) {
+                f32 gyro_yaw = 0.f;
+                f32 gyro_pitch = 0.f;
+                dusk::gyro::getAimDeltas(gyro_yaw, gyro_pitch);
+                final_yaw += gyro_yaw;
+                final_pitch += gyro_pitch;
+            }
 
-            shape_angle.y = shape_angle.y + cM_rad2s(gy_yaw * gyro_scale);
-            sp8 = sp8 + cM_rad2s(gy_pitch * gyro_scale);
+            shape_angle.y = shape_angle.y + cM_rad2s(final_yaw * gyro_scale);
+            sp8 = sp8 + cM_rad2s(final_pitch * gyro_scale);
 
             if (checkNotItemSinkLimit() && sp8 > 0 && sp8 > mBodyAngle.x) {
                 sp8 = mBodyAngle.x;
@@ -159,7 +194,14 @@ BOOL daAlink_c::setBodyAngleToCamera() {
         }
 
         s16 var_r29;
-        if (!dComIfGp_checkPlayerStatus0(0, 0x202000) && mEquipItem == dItemNo_IRONBALL_e) {
+        // Co-op: first-person aim limit checks must read this player's camera status.
+        if (!(
+#if TARGET_PC
+                dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x202000)
+#else
+                dComIfGp_checkPlayerStatus0(0, 0x202000)
+#endif
+            ) && mEquipItem == dItemNo_IRONBALL_e) {
             var_r29 = -10000;
         } else {
             var_r29 = mpHIO->mItem.m.mItemFPUpMaxUnk;
@@ -176,7 +218,12 @@ BOOL daAlink_c::setBodyAngleToCamera() {
 }
 
 void daAlink_c::setSubjectMode() {
+#if TARGET_PC
+    // Co-op: first-person/subject mode is owned by this player's camera status.
+    dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x2000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x2000);
+#endif
     seStartSystem(Z2SE_SUBJ_VIEW_IN);
 }
 
@@ -194,7 +241,8 @@ BOOL daAlink_c::checkSubjectEnd(BOOL i_isPlaySe) {
     setDoStatus(BUTTON_STATUS_BACK);
 
     // Allow pressing the first person binding to also leave first person
-    if (IF_DUSK(dusk::getActionBindTrig(dusk::ActionBinds::FIRST_PERSON_CAMERA, 0)) ||
+    if (IF_DUSK(dusk::getActionBindTrig(dusk::ActionBinds::FIRST_PERSON_CAMERA,
+                                         dusk::coop::getPadForSlot(dusk::coop::getSlotForActor(this)))) ||
         checkEventRun() || checkEquipAnime() || doTrigger() || checkSetItemTrigger(dItemNo_HAWK_EYE_e) || subjectCancelTrigger() || checkEndResetFlg0(ERFLG0_FORCE_SUBJECT_CANCEL) || dComIfGp_checkCameraAttentionStatus(field_0x317c, 0x2000)) {
         if (i_isPlaySe) {
             seStartSystem(Z2SE_SUBJ_VIEW_OUT);
@@ -251,7 +299,13 @@ int daAlink_c::procCoSubjectivity() {
         return 1;
     }
 
-    if (checkSubjectEnd(FALSE) || (dComIfGp_checkPlayerStatus0(0, 0x200000) && checkSetItemTrigger(dItemNo_HAWK_EYE_e))) {
+    if (checkSubjectEnd(FALSE) || (
+#if TARGET_PC
+        dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x200000)
+#else
+        dComIfGp_checkPlayerStatus0(0, 0x200000)
+#endif
+        && checkSetItemTrigger(dItemNo_HAWK_EYE_e))) {
         seStartSystem(Z2SE_SUBJ_VIEW_OUT);
         checkWaitAction();
     } else if (!checkWolf() && (checkItemAction() || checkItemChangeFromButton())) {

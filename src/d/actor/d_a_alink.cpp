@@ -54,9 +54,18 @@
 
 #if TARGET_PC
 #include "dusk/action_bindings.h"
+#include "dusk/coop/alink_form_resources.h"
+#include "dusk/coop/alink_model_data_owner.h"
 #include "dusk/coop/alink_probes.h"
 #include "dusk/coop/camera.h"
+#include "dusk/coop/event_presentation.h"
+#include "dusk/coop/horse_owner.h"
 #include "dusk/coop/input.h"
+#include "dusk/coop/message_owner.h"
+#include "dusk/coop/midna_owner.h"
+#include "dusk/coop/player_attention.h"
+#include "dusk/coop/player_button_status.h"
+#include "dusk/coop/player_camera_status.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/diagnostics.h"
 #include "dusk/logging.h"
@@ -66,6 +75,9 @@
 #include "res/Object/Alink.h"
 #include <cstdint>
 #include <cstring>
+#if TARGET_PC
+#include <dusk/string.hpp>
+#endif
 
 static int daAlink_Create(fopAc_ac_c* i_this);
 static int daAlink_Delete(daAlink_c* i_this);
@@ -138,6 +150,7 @@ void populateCoopSecondaryAlinkState(const char* phase, daAlink_c* player,
     diag->copyRodActor = reinterpret_cast<uintptr_t>(player->mCopyRodAcKeep.getActor());
     diag->copyRodControlActor = reinterpret_cast<uintptr_t>(player->getCopyRodControllActor());
     diag->copyRodCameraActor = reinterpret_cast<uintptr_t>(player->getCopyRodCameraActor());
+    diag->wolfLockActor = reinterpret_cast<uintptr_t>(player->getWolfLockActorEnd());
     if (player->mItemAcKeep.getActor() != NULL) {
         diag->itemActorId = fopAcM_GetID(player->mItemAcKeep.getActor());
         diag->itemActorName = fopAcM_GetName(player->mItemAcKeep.getActor());
@@ -145,6 +158,10 @@ void populateCoopSecondaryAlinkState(const char* phase, daAlink_c* player,
     if (player->mRideAcKeep.getActor() != NULL) {
         diag->rideActorId = fopAcM_GetID(player->mRideAcKeep.getActor());
         diag->rideActorName = fopAcM_GetName(player->mRideAcKeep.getActor());
+    }
+    if (player->getWolfLockActorEnd() != NULL) {
+        diag->wolfLockActorId = fopAcM_GetID(player->getWolfLockActorEnd());
+        diag->wolfLockActorName = fopAcM_GetName(player->getWolfLockActorEnd());
     }
     diag->proc = player->mProcID;
     diag->equipItem = player->mEquipItem;
@@ -156,6 +173,7 @@ void populateCoopSecondaryAlinkState(const char* phase, daAlink_c* player,
     diag->itemTrigger = player->mItemTrigger;
     diag->useButtonFlags = player->mUseButtonFlags;
     diag->previousUseButtonFlags = player->field_0x2faf;
+    diag->wolfLockNum = player->mWolfLockNum;
     diag->stickAngle = player->mStickAngle;
     diag->moveAngle = player->mMoveAngle;
     diag->currentAngleY = player->current.angle.y;
@@ -175,7 +193,9 @@ void populateCoopSecondaryAlinkState(const char* phase, daAlink_c* player,
     diag->rawMask |= p2_hold_r_button ? 1u << 11 : 0;
     diag->rawMask |= p2_hold_l_button ? 1u << 12 : 0;
     diag->rawMask |= p2_hold_z_button ? 1u << 13 : 0;
-    diag->rStatus = dComIfGp_getRStatus();
+    // Co-op: diagnostics compare the sampled player's R prompt owner, not P1's global meter copy.
+    diag->rStatus = dusk::coop::player_button_status::getStatusForPlayer(
+        player, dusk::coop::player_button_status::ButtonStatusKind::R);
     diag->speedF = player->speedF;
     diag->normalSpeed = player->mNormalSpeed;
     diag->stickValue = player->mStickValue;
@@ -193,6 +213,14 @@ void populateCoopSecondaryAlinkState(const char* phase, daAlink_c* player,
     diag->copyRodTopUse = (diag->copyRodActor != 0 || diag->copyRodControlActor != 0 ||
                            diag->copyRodCameraActor != 0 || player->mEquipItem == dItemNo_COPY_ROD_e) &&
                           player->checkCopyRodTopUse();
+    // Co-op: wolf AOE diagnostics track the slot-local camera bits that used to be P1 globals.
+    diag->wolfSearchBallScale = player->getSearchBallScale();
+    diag->wolfLockChargeActive =
+        dusk::coop::player_camera_status::checkStatus0ForPlayer(player, 0x40000000) != 0;
+    diag->wolfLockDomeActive =
+        dusk::coop::player_camera_status::checkStatus1ForPlayer(player, 0x800000) != 0;
+    diag->wolfLockAttackActive =
+        dusk::coop::player_camera_status::checkStatus1ForPlayer(player, 0x1000000) != 0;
 }
 
 void coopLogSecondaryExecuteState(const char* phase, daAlink_c* player) {
@@ -246,7 +274,9 @@ void coopLogSecondaryActionMirrorState(const char* phase, daAlink_c* player) {
     const dusk::coop::PlayerInputState p1_input = dusk::coop::readLocalInput(dusk::coop::PlayerSlot::Primary);
     const dusk::coop::PlayerInputState p2_input = dusk::coop::readLocalInput(dusk::coop::PlayerSlot::Secondary);
     const uintptr_t target = reinterpret_cast<uintptr_t>(player->mTargetedActor);
-    const u8 r_status = dComIfGp_getRStatus();
+    // Co-op: mirror diagnostics must follow the sampled player's prompt owner.
+    const u8 r_status = dusk::coop::player_button_status::getStatusForPlayer(
+        player, dusk::coop::player_button_status::ButtonStatusKind::R);
     const u8 btn_r = static_cast<u8>(daAlink_c::BTN_R);
     const bool p1_hold_r_button = (p1_input.holdButtons & PAD_TRIGGER_R) != 0;
     const bool p1_hold_l_button = (p1_input.holdButtons & PAD_TRIGGER_L) != 0;
@@ -301,74 +331,102 @@ void coopLogSecondaryActionMirrorState(const char* phase, daAlink_c* player) {
 }
 
 BOOL checkCoopAttentionLock(daAlink_c* player) {
-    // Co-op: extra player Links must not mirror P1's shared attention lock.
-    if (dusk::coop::isAdditionalPlayer(player) &&
-        dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_IgnoreSharedAttentionLock))
-    {
-        return FALSE;
-    }
-
-    return player->mAttention->Lockon();
+    return dusk::coop::player_attention::isLockOn(player);
 }
 
-void coopInstallModelDataOwner(daAlink_c* player) {
-    if (player->checkWolf()) {
-        player->changeModelDataDirectWolf(0);
-    } else {
-        player->changeModelDataDirect(0);
-    }
 }
 
-void coopLogModelDataOwner(const char* phase, daAlink_c* player) {
-    if (player == nullptr || player->mpLinkModel == nullptr) {
-        CoopAlinkLog.debug("draw-owner {} actor empty", phase);
+#endif
+
+#if TARGET_PC
+static void daAlink_recordWolfAoeStatus(const char* i_phase, daAlink_c* i_player, u32 i_status0,
+                                        u32 i_status1) {
+    constexpr u32 kWolfAoeStatus0Mask = 0x40000000;
+    constexpr u32 kWolfAoeStatus1Mask = 0x800000 | 0x1000000;
+    if ((i_status0 & kWolfAoeStatus0Mask) == 0 && (i_status1 & kWolfAoeStatus1Mask) == 0) {
         return;
     }
 
-    J3DModelData* bodyData = player->mpLinkModel->getModelData();
-    J3DMtxCalc* mtx0 = nullptr;
-    J3DMtxCalc* mtx1 = nullptr;
-    J3DMtxCalc* mtx2 = nullptr;
-    uintptr_t cb0 = 0;
-    uintptr_t cb1 = 0;
-    uintptr_t cb2 = 0;
-    u16 j0 = 0;
-    u16 j1 = player->checkWolf() ? 3 : 1;
-    u16 j2 = player->checkWolf() ? 15 : 16;
+    dusk::diagnostics::recordWolfAoeCheckpoint(
+        i_phase, i_player, -1, i_status0, i_status1,
+        i_player != NULL ? i_player->getSearchBallScale() : 0.0f,
+        0.0f, 0.0f,
+        i_player != NULL ? static_cast<int>(i_player->mWolfLockNum) : 0,
+        i_player != NULL ? i_player->getWolfLockActorEnd() : NULL);
+}
 
-    if (bodyData != nullptr) {
-        J3DJoint* joint0 = bodyData->getJointNodePointer(j0);
-        J3DJoint* joint1 = bodyData->getJointNodePointer(j1);
-        J3DJoint* joint2 = bodyData->getJointNodePointer(j2);
-        if (joint0 != nullptr) {
-            mtx0 = joint0->getMtxCalc();
-            cb0 = reinterpret_cast<uintptr_t>(joint0->getCallBack());
-        }
-        if (joint1 != nullptr) {
-            mtx1 = joint1->getMtxCalc();
-            cb1 = reinterpret_cast<uintptr_t>(joint1->getCallBack());
-        }
-        if (joint2 != nullptr) {
-            mtx2 = joint2->getMtxCalc();
-            cb2 = reinterpret_cast<uintptr_t>(joint2->getCallBack());
-        }
+static void daAlink_setOwnerCameraStatus0(daAlink_c* i_player, u32 i_flag) {
+    // Co-op: climb/hang/ladder camera hints belong to the ALINK actor changing state.
+    dusk::coop::player_camera_status::setStatus0ForPlayer(i_player, i_flag);
+    daAlink_recordWolfAoeStatus("status0_set", i_player, i_flag, 0);
+}
+
+static void daAlink_setOwnerCameraStatus1(daAlink_c* i_player, u32 i_flag) {
+    // Co-op: climb/hang/ladder camera hints belong to the ALINK actor changing state.
+    dusk::coop::player_camera_status::setStatus1ForPlayer(i_player, i_flag);
+    daAlink_recordWolfAoeStatus("status1_set", i_player, 0, i_flag);
+}
+
+static void daAlink_clearOwnerCameraStatus0(daAlink_c* i_player, u32 i_flag) {
+    // Co-op: wolf charge/lock camera hints clear on the ALINK actor leaving that state.
+    dusk::coop::player_camera_status::clearStatus0ForPlayer(i_player, i_flag);
+    daAlink_recordWolfAoeStatus("status0_clear", i_player, i_flag, 0);
+}
+
+static void daAlink_clearOwnerCameraStatus1(daAlink_c* i_player, u32 i_flag) {
+    // Co-op: wolf dome/lock camera hints clear on the ALINK actor leaving that state.
+    dusk::coop::player_camera_status::clearStatus1ForPlayer(i_player, i_flag);
+    daAlink_recordWolfAoeStatus("status1_clear", i_player, 0, i_flag);
+}
+
+static bool daAlink_checkOwnerCameraStatus1(const daAlink_c* i_player, u32 i_flag) {
+    // Co-op: wolf lock camera/state reads belong to the ALINK actor changing state.
+    return dusk::coop::player_camera_status::checkStatus1ForPlayer(i_player, i_flag) != 0;
+}
+
+static bool daAlink_checkOwnerCameraStatus0(const daAlink_c* i_player, u32 i_flag) {
+    // Co-op: Midna appear/talk staging belongs to the ALINK actor that summoned her.
+    return dusk::coop::player_camera_status::checkStatus0ForPlayer(i_player, i_flag) != 0;
+}
+
+static void daAlink_endMidnaServiceForOwner(daAlink_c* i_player) {
+    if (dusk::coop::midna_owner::isServiceActive() &&
+        dusk::coop::midna_owner::currentPlayer() == i_player)
+    {
+        // Co-op: the transform proc, not the message screen, owns the final
+        // release of Midna-service presentation and hidden HUD state.
+        dusk::coop::midna_owner::endService();
     }
+}
 
-    J3DModelData* faceData = player->mpLinkFaceModel != nullptr ? player->mpLinkFaceModel->getModelData() : nullptr;
-    J3DModelData* hatData = player->mpLinkHatModel != nullptr ? player->mpLinkHatModel->getModelData() : nullptr;
-    CoopAlinkLog.debug(
-        "draw-owner {} actor 0x{:x} slot {} bodyData 0x{:x} faceData 0x{:x} hatData 0x{:x} "
-        "modelUser 0x{:x} ownerUnder 0x{:x} ownerUpper 0x{:x} joints {}/{}/{} mtx 0x{:x}/0x{:x}/0x{:x} "
-        "cb 0x{:x}/0x{:x}/0x{:x}",
-        phase, reinterpret_cast<uintptr_t>(player),
-        static_cast<int>(dusk::coop::getSlotForActor(player)), reinterpret_cast<uintptr_t>(bodyData),
-        reinterpret_cast<uintptr_t>(faceData), reinterpret_cast<uintptr_t>(hatData),
-        player->mpLinkModel->getUserArea(), reinterpret_cast<uintptr_t>(player->field_0x1f20),
-        reinterpret_cast<uintptr_t>(player->field_0x1f24), j0, j1, j2,
-        reinterpret_cast<uintptr_t>(mtx0), reinterpret_cast<uintptr_t>(mtx1), reinterpret_cast<uintptr_t>(mtx2),
-        cb0, cb1, cb2);
+#else
+
+static void daAlink_setOwnerCameraStatus0(daAlink_c*, u32 i_flag) {
+    dComIfGp_setPlayerStatus0(0, i_flag);
 }
+
+static void daAlink_setOwnerCameraStatus1(daAlink_c*, u32 i_flag) {
+    dComIfGp_setPlayerStatus1(0, i_flag);
 }
+
+static void daAlink_clearOwnerCameraStatus0(daAlink_c*, u32 i_flag) {
+    dComIfGp_clearPlayerStatus0(0, i_flag);
+}
+
+static void daAlink_clearOwnerCameraStatus1(daAlink_c*, u32 i_flag) {
+    dComIfGp_clearPlayerStatus1(0, i_flag);
+}
+
+static bool daAlink_checkOwnerCameraStatus1(const daAlink_c*, u32 i_flag) {
+    return dComIfGp_checkPlayerStatus1(0, i_flag) != 0;
+}
+
+static bool daAlink_checkOwnerCameraStatus0(const daAlink_c*, u32 i_flag) {
+    return dComIfGp_checkPlayerStatus0(0, i_flag) != 0;
+}
+
+static void daAlink_endMidnaServiceForOwner(daAlink_c*) {}
+
 #endif
 
 BOOL daAlink_c::getE3Zhint() {
@@ -418,31 +476,31 @@ static void daAlink_coHitCallback(fopAc_ac_c* i_coActorA, dCcD_GObjInf* i_coObjI
     static_cast<daAlink_c*>(i_coActorA)->coHitCallback(i_coActorB, i_coObjInfA);
 }
 
-static cXyz l_waitBaseAnime(1.24279f, 102.00054f, 5.0f);
+static DUSK_CONSTEXPR cXyz l_waitBaseAnime(1.24279f, 102.00054f, 5.0f);
 
-static cXyz l_ironBallBaseAnime(-4.248938f, 89.0f, -5.267045f);
+static DUSK_CONSTEXPR cXyz l_ironBallBaseAnime(-4.248938f, 89.0f, -5.267045f);
 
-static cXyz l_halfAtnWaitBaseAnime(3.5f, 97.0f, -7.0f);
+static DUSK_CONSTEXPR cXyz l_halfAtnWaitBaseAnime(3.5f, 97.0f, -7.0f);
 
-static cXyz l_rWaitBaseAnime(4.313951f, 93.94436f, -5.207283f);
+static DUSK_CONSTEXPR cXyz l_rWaitBaseAnime(4.313951f, 93.94436f, -5.207283f);
 
-static cXyz l_lWaitBaseAnime(-4.300988f, 93.95595f, -5.218504f);
+static DUSK_CONSTEXPR cXyz l_lWaitBaseAnime(-4.300988f, 93.95595f, -5.218504f);
 
-static cXyz l_horseBaseAnime(-l_waitBaseAnime.x, 225.7f, 1.81f - l_waitBaseAnime.z);
+static DUSK_CONSTEXPR cXyz l_horseBaseAnime(-l_waitBaseAnime.x, 225.7f, 1.81f - l_waitBaseAnime.z);
 
-static cXyz l_boarBaseAnime(-l_waitBaseAnime.x, 186.17f, -20.29f - l_waitBaseAnime.z);
+static DUSK_CONSTEXPR cXyz l_boarBaseAnime(-l_waitBaseAnime.x, 186.17f, -20.29f - l_waitBaseAnime.z);
 
-static cXyz l_localHorseRidePos(-68.208984f, 41.609924f, 0.883789f);
+static DUSK_CONSTEXPR cXyz l_localHorseRidePos(-68.208984f, 41.609924f, 0.883789f);
 
-static cXyz l_localBoarRidePos(0.0f, 15.0f, 0.0f);
+static DUSK_CONSTEXPR cXyz l_localBoarRidePos(0.0f, 15.0f, 0.0f);
 
-static cXyz l_canoeBaseAnime(1.24279f - l_waitBaseAnime.x, 56.0f, -72.0f - l_waitBaseAnime.z);
+static DUSK_CONSTEXPR cXyz l_canoeBaseAnime(1.24279f - l_waitBaseAnime.x, 56.0f, -72.0f - l_waitBaseAnime.z);
 
-static cXyz l_sumouBaseAnimeSp(0.0f, 0.0f, 32.0f - l_waitBaseAnime.z);
+static DUSK_CONSTEXPR cXyz l_sumouBaseAnimeSp(0.0f, 0.0f, 32.0f - l_waitBaseAnime.z);
 
-static cXyz l_wolfBaseAnime(1.0f, 88.63934f, -28.497932f);
+static cXyz DUSK_CONST l_wolfBaseAnime(1.0f, 88.63934f, -28.497932f);
 
-static cXyz l_wolfRopeBaseAnime(0.115164f, 68.336296f, -7.667817f);
+static cXyz DUSK_CONST l_wolfRopeBaseAnime(0.115164f, 68.336296f, -7.667817f);
 
 static void dummy_lit_3757() {
     Vec temp = { 0.0f, 0.0f, 0.0f };
@@ -3255,11 +3313,35 @@ cXyz* daAlink_c::getNeckAimPos(cXyz* param_0, int* param_1, int param_2) {
         || mProcID == PROC_GOAT_STROKE)
     {
         look_actor = field_0x280c.getActor();
-    } else if (dComIfGp_checkPlayerStatus0(0, 0x10)) {
+    } else if (
+#if TARGET_PC
+        // Co-op: neck/talk presentation follows this ALINK's camera-local status.
+        dusk::coop::midna_owner::checkTalkStatus(this)
+#else
+        dComIfGp_checkPlayerStatus0(0, 0x10)
+#endif
+    ) {
         if (mProcID != PROC_NOD && mProcID != PROC_EYE_AWAY && mProcID != PROC_GLARE) {
+#if TARGET_PC
+            if (dusk::coop::message_owner::isActive()) {
+                // Co-op: owned dialogue head aim follows the retained speaker for this ALINK only.
+                if (dusk::coop::message_owner::currentPlayer() != this) {
+                    look_actor = NULL;
+                } else {
+                    look_actor = dusk::coop::message_owner::speaker();
+                }
+            } else {
+                look_actor = fopAcM_getTalkEventPartner(this);
+            }
+#else
             look_actor = fopAcM_getTalkEventPartner(this);
+#endif
             if (look_actor != NULL) {
+#if TARGET_PC
+                daMidna_c* midna = dusk::coop::midna_owner::getMidnaForPlayer(this);
+#else
                 daMidna_c* midna = (daMidna_c*)getMidnaActor();
+#endif
                 s16 actor_name = fopAcM_GetName(look_actor);
 
                 if (actor_name == fpcNm_MIDNA_e
@@ -3269,10 +3351,19 @@ cXyz* daAlink_c::getNeckAimPos(cXyz* param_0, int* param_1, int param_2) {
                     || (actor_name == fpcNm_Tag_Mwait_e && ((daTagMwait_c*)look_actor)->checkEndMessage()))
                 {
                     *param_1 = 1;
-                    return &midna->eyePos;
+#if TARGET_PC
+                    if (actor_name == fpcNm_MIDNA_e) {
+                        return &static_cast<daMidna_c*>(look_actor)->eyePos;
+                    }
+#endif
+                    if (midna != NULL) {
+                        return &midna->eyePos;
+                    }
                 }
 
-                if (actor_name == fpcNm_Tag_Mhint_e || actor_name == fpcNm_Tag_Mstop_e) {
+                if (midna != NULL &&
+                    (actor_name == fpcNm_Tag_Mhint_e || actor_name == fpcNm_Tag_Mstop_e))
+                {
                     midna->setForceNeckAimPos(look_actor->eyePos);
                 }
             }
@@ -4914,50 +5005,59 @@ void daAlink_c::playerInit() {
     onNoResetFlg0(FLG0_SWIM_UP);
     offOxygenTimer();
 
-    int startMode = getStartMode();
-    int startEvent = getStartEvent();
-
-    if (dComIfGp_getStartStagePoint() == -2 || dComIfGp_getStartStagePoint() == -3) {
-        mStartEventID = dComIfGp_evmng_startDemo(-1);
-    } else if (dComIfGp_getStartStagePoint() == -4) {
-        mStartEventID = dComIfGp_evmng_startDemo(0xD5);
+#if TARGET_PC
+    if (dusk::coop::isAdditionalPlayer(this)) {
+        // Co-op: runtime additional Links must not register the protagonist's scene-start demo again.
+        mStartEventID = 0xFF;
     } else {
-        if (getLastSceneMode() == 9) {
-            mStartEventID = dComIfGp_evmng_startDemo(0xD3);
-        } else if (startMode == 10) {
-            if (startEvent != 0xFF) {
-                mStartEventID = dComIfGp_evmng_startDemo(startEvent);
-            } else {
-                mStartEventID = dComIfGp_evmng_startDemo(0xCF);
-            }
-        } else if (startMode == 11) {
-            if (startEvent != 0xFF) {
-                mStartEventID = dComIfGp_evmng_startDemo(startEvent);
-            } else {
-                mStartEventID = dComIfGp_evmng_startDemo(0xD0);
-            }
-        } else if (startMode == 6) {
-            mStartEventID = dComIfGp_evmng_startDemo(0xCD);
-        } else if (startMode == 7) {
-            mStartEventID = dComIfGp_evmng_startDemo(0xCE);
-        } else if (startMode == 8) {
-            if (startEvent != 0xFF) {
-                mStartEventID = dComIfGp_evmng_startDemo(startEvent);
-            } else {
-                mStartEventID = dComIfGp_evmng_startDemo(0xD4);
-            }
-        } else if (startMode == 12) {
-            mStartEventID = dComIfGp_evmng_startDemo(0xC9);
-        } else if (getLastSceneMode() == 11) {
-            mStartEventID = dComIfGp_evmng_startDemo(0xFF);
-        } else if (getLastSceneMode() == 12) {
-            mStartEventID = dComIfGp_evmng_startDemo(0xD1);
-        } else {
-            mStartEventID = dComIfGp_evmng_startDemo(startEvent);
-        }
-    }
+#endif
+        int startMode = getStartMode();
+        int startEvent = getStartEvent();
 
-    dComIfGp_getPEvtManager()->orderStartDemo();
+        if (dComIfGp_getStartStagePoint() == -2 || dComIfGp_getStartStagePoint() == -3) {
+            mStartEventID = dComIfGp_evmng_startDemo(-1);
+        } else if (dComIfGp_getStartStagePoint() == -4) {
+            mStartEventID = dComIfGp_evmng_startDemo(0xD5);
+        } else {
+            if (getLastSceneMode() == 9) {
+                mStartEventID = dComIfGp_evmng_startDemo(0xD3);
+            } else if (startMode == 10) {
+                if (startEvent != 0xFF) {
+                    mStartEventID = dComIfGp_evmng_startDemo(startEvent);
+                } else {
+                    mStartEventID = dComIfGp_evmng_startDemo(0xCF);
+                }
+            } else if (startMode == 11) {
+                if (startEvent != 0xFF) {
+                    mStartEventID = dComIfGp_evmng_startDemo(startEvent);
+                } else {
+                    mStartEventID = dComIfGp_evmng_startDemo(0xD0);
+                }
+            } else if (startMode == 6) {
+                mStartEventID = dComIfGp_evmng_startDemo(0xCD);
+            } else if (startMode == 7) {
+                mStartEventID = dComIfGp_evmng_startDemo(0xCE);
+            } else if (startMode == 8) {
+                if (startEvent != 0xFF) {
+                    mStartEventID = dComIfGp_evmng_startDemo(startEvent);
+                } else {
+                    mStartEventID = dComIfGp_evmng_startDemo(0xD4);
+                }
+            } else if (startMode == 12) {
+                mStartEventID = dComIfGp_evmng_startDemo(0xC9);
+            } else if (getLastSceneMode() == 11) {
+                mStartEventID = dComIfGp_evmng_startDemo(0xFF);
+            } else if (getLastSceneMode() == 12) {
+                mStartEventID = dComIfGp_evmng_startDemo(0xD1);
+            } else {
+                mStartEventID = dComIfGp_evmng_startDemo(startEvent);
+            }
+        }
+
+        dComIfGp_getPEvtManager()->orderStartDemo();
+#if TARGET_PC
+    }
+#endif
     field_0x2f94 = -1;
     field_0x2f95 = -1;
     field_0x2f96 = -1;
@@ -5214,6 +5314,13 @@ int daAlink_c::create() {
     // Co-op: the spawn argument only selects an extra slot until sidecar registration exists.
     const dusk::coop::PlayerSlot coop_slot = dusk::coop::getAdditionalPlayerSpawnRequestSlot(this);
     const bool coop_secondary = coop_slot != dusk::coop::PlayerSlot::Invalid;
+    if (coop_secondary) {
+        // Co-op: runtime joins start from P1's position, not P1's authored area-entry semantics.
+        sceneMode = 0;
+        startMode = 0;
+        startPoint = 0;
+        isHorseStart = FALSE;
+    }
     auto coop_log_primary_state = [&](const char* phase) {
         if (!coop_secondary) {
             return;
@@ -5237,6 +5344,9 @@ int daAlink_c::create() {
             primary->attention_info.flags);
     };
     coop_log_primary_state("begin");
+#endif
+#if !TARGET_PC
+    const bool coop_secondary = false;
 #endif
 
     // Stage: City   Room: Entrance   Layer: 0
@@ -5339,12 +5449,22 @@ int daAlink_c::create() {
             return cPhs_INIT_e;
         }
 
+#if TARGET_PC
+        // Co-op: body form archives are retained by slot so one Link cannot free another's model data.
+        dusk::coop::alink_form_resources::applyDesiredFormOnCreate(this);
+#endif
         setArcName(checkWolf());
+#if TARGET_PC
+        if (dusk::coop::alink_form_resources::loadInitial(this, mArcName) != cPhs_COMPLEATE_e) {
+            return cPhs_INIT_e;
+        }
+#else
         setOriginalHeap(&mpArcHeap, 0xA2800);
         JKRHEAP_NAME(mpArcHeap, "Alink ArcHeap");
         if (dComIfG_resLoad(&mPhaseReq, mArcName, mpArcHeap) != cPhs_COMPLEATE_e) {
             return cPhs_INIT_e;
         }
+#endif
 #if TARGET_PC
         coop_log_primary_state("after-arc-load");
 #endif
@@ -5370,10 +5490,9 @@ int daAlink_c::create() {
 
         mAttention = dComIfGp_getAttention();
 #if TARGET_PC
-        // Co-op: only slot 1 has a native sidecar camera until more viewports are implemented.
+        // Co-op: slot 1 owns camera ID 1 even while its sidecar camera finishes native creation.
         const bool use_secondary_camera =
-            coop_slot == dusk::coop::PlayerSlot::Slot1 && dusk::coop::camera::isSplitScreenEnabled() &&
-            dusk::coop::camera::isSecondaryCameraReady();
+            coop_slot == dusk::coop::PlayerSlot::Slot1 && dusk::coop::camera::isSplitScreenEnabled();
         field_0x317c = use_secondary_camera ? dComIfGp_getPlayerCameraID(1) :
                                               dComIfGp_getPlayerCameraID(0);
 #else
@@ -5382,17 +5501,9 @@ int daAlink_c::create() {
 
         playerInit();
 #if TARGET_PC
-        if (coop_secondary &&
-            dusk::coop::hasSecondaryAlinkProbeFlag(
-                dusk::coop::SecondaryAlinkProbe_RestorePrimaryModelDataOwner))
-        {
-            daAlink_c* primary = static_cast<daAlink_c*>(dusk::coop::getPrimaryPlayer());
-            if (primary != NULL) {
-                // Co-op: ALINK writes animation matrix calculators onto shared J3DModelData; restore P1 ownership after P2's changeLink().
-                coopInstallModelDataOwner(primary);
-                CoopAlinkLog.debug("secondary create restored primary model data owner p1 0x{:x}",
-                                   reinterpret_cast<uintptr_t>(primary));
-            }
+        if (coop_secondary) {
+            // Co-op: P2 playerInit installs actor-local calculators onto shared ALINK model data.
+            dusk::coop::alink_model_data_owner::restorePrimary();
         }
 #endif
 #if TARGET_PC
@@ -5400,7 +5511,7 @@ int daAlink_c::create() {
 #endif
         bgWaitFlg = TRUE;
 
-        if (checkCanoeStart()) {
+        if (!coop_secondary && checkCanoeStart()) {
             mRideActorID = fopAcM_create(fpcNm_CANOE_e, 0, &current.pos, fopAcM_GetRoomNo(this),
                                          &shape_angle, NULL, -1);
         } else if (sceneMode == 11) {
@@ -5418,10 +5529,11 @@ int daAlink_c::create() {
         || (startMode == 14 && !dComIfG_Bgsp().ChkMoveBG(mLinkAcch.m_gnd))
         || (startPoint == -4 && !(portalActor = fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchPortal, &current.pos)))
         || (mRideActorID != fpcM_ERROR_PROCESS_ID_e && !fopAcM_SearchByID(mRideActorID))
-        || (checkCanoeStart() && !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchCanoe, NULL))
-        || (checkBoarStart() && !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchBoar, NULL))
+        || (!coop_secondary && checkCanoeStart() && !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchCanoe, NULL))
+        || (!coop_secondary && checkBoarStart() && !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchBoar, NULL))
         || (startMode == 13 && (!mLinkAcch.ChkWaterHit() || mLinkAcch.m_wtr.GetHeight() < current.pos.y))
-        || ((checkCarryStartLightBallA() || checkCarryStartLightBallB()) && !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchLightBall, NULL))
+        // Co-op: runtime joins must not replay the protagonist's scene-entry carry requirements.
+        || (!coop_secondary && (checkCarryStartLightBallA() || checkCarryStartLightBallB()) && !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchLightBall, NULL))
         || (isHorseStart && dComIfGp_getHorseActor() == NULL)
         )
     {
@@ -5487,11 +5599,9 @@ int daAlink_c::create() {
 
     int midna_prm = 0;
 #if TARGET_PC
-    if (coop_secondary &&
-        dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_SkipStartProcInit))
-    {
-        // Co-op: skip secondary proc init to test whether startup action state corrupts P1 animation.
-        coop_log_primary_state("skip-start-proc-init");
+    if (coop_secondary) {
+        // Co-op: runtime joins need an ordinary local action proc, not P1's scene-entry replay.
+        checkWaitAction();
     } else {
 #endif
         midna_prm = setStartProcInit();
@@ -5512,17 +5622,10 @@ int daAlink_c::create() {
     }
 #endif
 #if TARGET_PC
-    daAlink_c* coop_create_anim_primary = NULL;
-    if (coop_secondary &&
-        dusk::coop::hasSecondaryAlinkProbeFlag(
-            dusk::coop::SecondaryAlinkProbe_RestorePrimaryModelDataOwner))
     {
-        coop_create_anim_primary = static_cast<daAlink_c*>(dusk::coop::getPrimaryPlayer());
-        // Co-op: P2's startup animation/model calc must use P2's shared model-data calculators before P1 is restored.
-        coopInstallModelDataOwner(this);
-        CoopAlinkLog.debug("secondary create installed secondary model data owner for anime/model setup actor 0x{:x}",
-                           reinterpret_cast<uintptr_t>(this));
-    }
+    // Co-op: startup model evaluation temporarily needs this additional ALINK's calculators.
+    dusk::coop::alink_model_data_owner::ScopedOwner coop_create_model_data_owner(
+        coop_secondary ? this : NULL);
 #endif
 #if TARGET_PC
     if (coop_secondary &&
@@ -5547,11 +5650,6 @@ int daAlink_c::create() {
     mpLinkModel->calc();
 #if TARGET_PC
     }
-    if (coop_create_anim_primary != NULL) {
-        // Co-op: return shared ALINK body model data to P1 immediately after P2 startup animation/model setup.
-        coopInstallModelDataOwner(coop_create_anim_primary);
-        CoopAlinkLog.debug("secondary create restored primary model data owner after anime/model setup p1 0x{:x}",
-                           reinterpret_cast<uintptr_t>(coop_create_anim_primary));
     }
 #endif
 #if TARGET_PC
@@ -5606,18 +5704,19 @@ int daAlink_c::create() {
     }
 #endif
 
-    if ((dComIfGs_getLastSceneMode() & 0x400000) && !checkWolf() && !checkNotHeavyBootsStage() &&
+    // Co-op: global scene-entry equipment state belongs to the protagonist, not runtime joins.
+    if (!coop_secondary && (dComIfGs_getLastSceneMode() & 0x400000) && !checkWolf() && !checkNotHeavyBootsStage() &&
         !isHorseStart && !isEnteringLV7)
     {
         setHeavyBoots(1);
     }
 
-    if ((dComIfGs_getLastSceneMode() & 0x200000) && !checkCloudSea()) {
+    if (!coop_secondary && (dComIfGs_getLastSceneMode() & 0x200000) && !checkCloudSea()) {
         onNoResetFlg2(FLG2_UNK_1);
         mZ2Link.setKanteraState(2);
     }
 
-    if (checkCarryStartLightBallA() || checkCarryStartLightBallB()) {
+    if (!coop_secondary && (checkCarryStartLightBallA() || checkCarryStartLightBallB())) {
         setForceGrab((fopAc_ac_c*)fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchLightBall, NULL),
                      1, 1);
     }
@@ -5656,6 +5755,19 @@ int daAlink_c::create() {
         }
     }
 #if TARGET_PC
+    }
+#endif
+
+#if TARGET_PC
+    if (!coop_secondary) {
+        // Co-op: a fully created primary ALINK is the native rebuild point for requested session slots.
+        dusk::diagnostics::recordCameraAreaLoadCheckpoint(
+            "alink.primary-ready", "queue-session-restore", 0, this, NULL, NULL,
+            shape_angle.y, startMode);
+        dusk::coop::queueSessionRestoreAfterPrimaryCameraReady();
+        dusk::diagnostics::recordCameraAreaLoadCheckpoint(
+            "alink.primary-ready", "session-restore-queued", 0, this, NULL, NULL,
+            shape_angle.y, startMode);
     }
 #endif
 
@@ -6117,7 +6229,22 @@ void daAlink_c::setBodyPartPos() {
     } else {
         cMtx_multVec(mpLinkModel->getAnmMtx(field_0x30b4), &localEye, &eyePos);
 
-        if (dComIfGp_checkPlayerStatus0(0, 0x2000) && !dComIfGp_checkPlayerStatus1(0, 0x02010000) && (!checkModeFlg(0x40000) || !checkNoResetFlg0(FLG0_SWIM_UP)) && !dComIfGp_checkPlayerStatus0(0, 0x08000000)) {
+        // Co-op: first-person eye placement follows the player whose camera entered subject mode.
+        if (
+#if TARGET_PC
+            dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x2000) &&
+            !dusk::coop::player_camera_status::checkStatus1ForPlayer(this, 0x02010000) &&
+#else
+            dComIfGp_checkPlayerStatus0(0, 0x2000) &&
+            !dComIfGp_checkPlayerStatus1(0, 0x02010000) &&
+#endif
+            (!checkModeFlg(0x40000) || !checkNoResetFlg0(FLG0_SWIM_UP)) &&
+#if TARGET_PC
+            !dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x08000000)
+#else
+            !dComIfGp_checkPlayerStatus0(0, 0x08000000)
+#endif
+        ) {
             mDoMtx_stack_c::transS(current.pos.x, field_0x3834.y, current.pos.z);
             concatMagneBootMtx();
             mDoMtx_stack_c::ZXYrotM(field_0x310a, field_0x310c, 0);
@@ -9814,7 +9941,8 @@ void daAlink_c::setPlayerPosAndAngle(const cXyz* i_pos, s16 i_angle, BOOL param_
         }
 
         if (checkHorseRide()) {
-            daHorse_c* horse = dComIfGp_getHorseActor();
+            // Co-op: live rider repositioning must move the retained slot-assigned Epona.
+            daHorse_c* horse = daAlink_getHorseForRider(this);
             horse->setHorsePosAndAngle(&current.pos, shape_angle.y);
         } else if (checkSpinnerRide()) {
             fopAc_ac_c* rideActor = mRideAcKeep.getActor();
@@ -9904,9 +10032,11 @@ BOOL daAlink_c::spActionTrigger() {
 
 BOOL daAlink_c::midnaTalkTrigger() const {
 #if TARGET_PC
+    const dusk::coop::PlayerSlot slot = dusk::coop::getSlotForActor(this);
+    const int pad = dusk::coop::getPadForSlot(slot);
     // If we have a custom bind for Midna, check that instead
-    if (dusk::isActionBound(dusk::ActionBinds::CALL_MIDNA, 0)) {
-        return dusk::getActionBindTrig(dusk::ActionBinds::CALL_MIDNA, 0);
+    if (dusk::isActionBound(dusk::ActionBinds::CALL_MIDNA, pad)) {
+        return dusk::getActionBindTrig(dusk::ActionBinds::CALL_MIDNA, pad);
     }
 #endif
     return mItemTrigger & BTN_Z;
@@ -9954,7 +10084,7 @@ void daAlink_c::setStickData() {
                 mDemo.setMoveAngle(getSceneExitMoveAngle());
 
                 if (checkHorseRide()) {
-                    dComIfGp_getHorseActor()->changeDemoMoveAngle(mDemo.getMoveAngle());
+                    daAlink_getHorseForRider(this)->changeDemoMoveAngle(mDemo.getMoveAngle());
                 }
             } else {
                 mStickValue = 0.0f;
@@ -10180,6 +10310,12 @@ void daAlink_c::setStickData() {
 }
 
 void daAlink_c::setAtnList() {
+#if TARGET_PC
+    // Co-op: derive target/guard state from this player's attention owner, not P1's global lock.
+    dusk::coop::player_attention::updateForPlayer(this);
+    mAttention = dusk::coop::player_attention::attentionForPlayer(this);
+#endif
+
     mAttList = NULL;
     mAttList2 = NULL;
     mTargetedActor = NULL;
@@ -10188,11 +10324,21 @@ void daAlink_c::setAtnList() {
     field_0x27f8 = NULL;
 
     if (checkEventRun() || checkAttentionLock() || checkInputOnR()) {
+#if TARGET_PC
+        // Co-op: thrown-boomerang focus state is per player, not a shared P1 bit.
+        dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0x400000);
+#else
         dComIfGp_clearPlayerStatus0(0, 0x400000);
+#endif
         offNoResetFlg3(FLG3_COPY_ROD_THROW_AFTER);
     } else {
         if (mThrowBoomerangAcKeep.getActor() == NULL) {
+#if TARGET_PC
+            // Co-op: clear only this player's thrown-boomerang focus bit.
+            dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0x400000);
+#else
             dComIfGp_clearPlayerStatus0(0, 0x400000);
+#endif
         }
         if (mCopyRodAcKeep.getActor() == NULL || getCopyRodControllActor() != NULL) {
             offNoResetFlg3(FLG3_COPY_ROD_THROW_AFTER);
@@ -10211,7 +10357,14 @@ void daAlink_c::setAtnList() {
     } else if (mProcID == PROC_CUT_FINISH && field_0x280c.getActor() != NULL) {
         mTargetedActor = field_0x280c.getActor();
         field_0x27f4 = mTargetedActor;
-    } else if (dComIfGp_checkPlayerStatus0(0, 0x400000)) {
+    } else if (
+#if TARGET_PC
+        // Co-op: the boomerang can be the attention target for its throwing player only.
+        dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x400000)
+#else
+        dComIfGp_checkPlayerStatus0(0, 0x400000)
+#endif
+    ) {
         mTargetedActor = mThrowBoomerangAcKeep.getActor();
         field_0x27f4 = mTargetedActor;
     } else if (checkNoResetFlg3(FLG3_COPY_ROD_THROW_AFTER)) {
@@ -10282,27 +10435,39 @@ BOOL daAlink_c::checkAttentionLock() {
 }
 
 void daAlink_c::setRStatus(u8 i_status) {
-    dComIfGp_setRStatus(i_status, BUTTON_STATUS_FLAG_NONE);
+    // Co-op: ALINK gameplay button prompts are owned per player; the global meter stays P1.
+    dusk::coop::player_button_status::setStatusForPlayer(
+        this, dusk::coop::player_button_status::ButtonStatusKind::R, i_status, BUTTON_STATUS_FLAG_NONE);
 }
 
 void daAlink_c::setRStatusEmphasys(u8 i_status) {
-    dComIfGp_setRStatus(i_status, BUTTON_STATUS_FLAG_EMPHASIS);
+    // Co-op: ALINK gameplay button prompts are owned per player; the global meter stays P1.
+    dusk::coop::player_button_status::setStatusForPlayer(
+        this, dusk::coop::player_button_status::ButtonStatusKind::R, i_status, BUTTON_STATUS_FLAG_EMPHASIS);
 }
 
 void daAlink_c::setDoStatus(u8 i_status) {
-    dComIfGp_setDoStatus(i_status, BUTTON_STATUS_FLAG_NONE);
+    // Co-op: ALINK gameplay button prompts are owned per player; the global meter stays P1.
+    dusk::coop::player_button_status::setStatusForPlayer(
+        this, dusk::coop::player_button_status::ButtonStatusKind::Do, i_status, BUTTON_STATUS_FLAG_NONE);
 }
 
 void daAlink_c::setDoStatusEmphasys(u8 i_status) {
-    dComIfGp_setDoStatus(i_status, BUTTON_STATUS_FLAG_EMPHASIS);
+    // Co-op: ALINK gameplay button prompts are owned per player; the global meter stays P1.
+    dusk::coop::player_button_status::setStatusForPlayer(
+        this, dusk::coop::player_button_status::ButtonStatusKind::Do, i_status, BUTTON_STATUS_FLAG_EMPHASIS);
 }
 
 void daAlink_c::setDoStatusContinuation(u8 i_status) {
-    dComIfGp_setDoStatus(i_status, BUTTON_STATUS_FLAG_CONTINUATION);
+    // Co-op: ALINK gameplay button prompts are owned per player; the global meter stays P1.
+    dusk::coop::player_button_status::setStatusForPlayer(
+        this, dusk::coop::player_button_status::ButtonStatusKind::Do, i_status, BUTTON_STATUS_FLAG_CONTINUATION);
 }
 
 void daAlink_c::setBStatus(u8 i_status) {
-    dComIfGp_setAStatus(i_status, BUTTON_STATUS_FLAG_NONE);
+    // Co-op: ALINK's B action status uses the vanilla A-status storage name.
+    dusk::coop::player_button_status::setStatusForPlayer(
+        this, dusk::coop::player_button_status::ButtonStatusKind::A, i_status, BUTTON_STATUS_FLAG_NONE);
 }
 
 BOOL daAlink_c::checkAtnWaitAnime() {
@@ -10933,7 +11098,7 @@ f32 daAlink_c::getFrontRollRate() {
 }
 
 void daAlink_c::decideCommonDoStatus() {
-    if (!checkFmChainGrabAnime() && dComIfGp_getDoStatus() == BUTTON_STATUS_NONE) {
+    if (!checkFmChainGrabAnime() && getDoStatus() == BUTTON_STATUS_NONE) {
         bool isFshopStage = checkStageName("R_SP127");
 
         if (checkRoomOnly() && !checkWolf() && !isFshopStage) {
@@ -10980,12 +11145,12 @@ void daAlink_c::decideCommonDoStatus() {
             }
 
             if (checkNotJumpSinkLimit() &&
-                (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_139
-                    || dComIfGp_getDoStatus() == BUTTON_STATUS_FINISH
-                    || dComIfGp_getDoStatus() == BUTTON_STATUS_HELM_SPLITTER
-                    || dComIfGp_getDoStatus() == BUTTON_STATUS_JUMP
-                    || dComIfGp_getDoStatus() == BUTTON_STATUS_DASH
-                    || dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_147
+                (getDoStatus() == BUTTON_STATUS_UNK_139
+                    || getDoStatus() == BUTTON_STATUS_FINISH
+                    || getDoStatus() == BUTTON_STATUS_HELM_SPLITTER
+                    || getDoStatus() == BUTTON_STATUS_JUMP
+                    || getDoStatus() == BUTTON_STATUS_DASH
+                    || getDoStatus() == BUTTON_STATUS_UNK_147
                 )
                 )
             {
@@ -11045,20 +11210,20 @@ void daAlink_c::decideCommonDoStatus() {
             }
 
             if ((((checkMagneBootsOn() || checkIronBallWaitAnime() || checkNotJumpSinkLimit())
-                    && (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_121
-                        || dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_134
-                        || dComIfGp_getDoStatus() == BUTTON_STATUS_FINISH
-                        || dComIfGp_getDoStatus() == BUTTON_STATUS_HELM_SPLITTER
-                        || dComIfGp_getDoStatus() == BUTTON_STATUS_JUMP
+                    && (getDoStatus() == BUTTON_STATUS_UNK_121
+                        || getDoStatus() == BUTTON_STATUS_UNK_134
+                        || getDoStatus() == BUTTON_STATUS_FINISH
+                        || getDoStatus() == BUTTON_STATUS_HELM_SPLITTER
+                        || getDoStatus() == BUTTON_STATUS_JUMP
                         )
-                 ) || (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_121
+                 ) || (getDoStatus() == BUTTON_STATUS_UNK_121
                         && (checkKandelaarSwingAnime()
                             || mGndPolySpecialCode == dBgW_SPCODE_HEAVY_SNOW
                             || checkCopyRodThrowAnime()
                             || checkBoomerangThrowAnime()
                             )
                         )
-                 ) && (!checkMagneBootsOn() || dComIfGp_getDoStatus() != BUTTON_STATUS_UNK_121 || !cBgW_CheckBGround(mMagneBootsTopVec.y))
+                 ) && (!checkMagneBootsOn() || getDoStatus() != BUTTON_STATUS_UNK_121 || !cBgW_CheckBGround(mMagneBootsTopVec.y))
                 )
             {
                 if (mEquipItem == 0x42 && checkModeFlg(4)) {
@@ -11068,11 +11233,11 @@ void daAlink_c::decideCommonDoStatus() {
                 }
             }
 
-            if (isFshopStage && dComIfGp_getDoStatus() == BUTTON_STATUS_JUMP) {
+            if (isFshopStage && getDoStatus() == BUTTON_STATUS_JUMP) {
                 setDoStatus(BUTTON_STATUS_NONE);
             }
 
-            if (dComIfGp_getDoStatus() == BUTTON_STATUS_PUT_AWAY && checkCopyRodControllAnime()) {
+            if (getDoStatus() == BUTTON_STATUS_PUT_AWAY && checkCopyRodControllAnime()) {
                 setDoStatus(BUTTON_STATUS_QUIT);
             }
         }
@@ -11799,7 +11964,12 @@ int daAlink_c::checkItemChangeAutoAction() {
 }
 
 void daAlink_c::setFastShotTimer() {
+    // Co-op: item ready timing depends on this player's subject-camera state.
+#if TARGET_PC
+    if (!dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x2000)) {
+#else
     if (!dComIfGp_checkPlayerStatus0(0, 0x2000)) {
+#endif
         mFastShotTime = mpHIO->mItem.m.mItemFPTransitionTimer;
     }
 }
@@ -11812,7 +11982,7 @@ void daAlink_c::cancelItemUseQuake(int param_0) {
 }
 
 int daAlink_c::cancelUpperItemReadyAnime(BOOL param_0) {
-    if ((dComIfGp_getDoStatus() == BUTTON_STATUS_BACK || param_0)
+    if ((getDoStatus() == BUTTON_STATUS_BACK || param_0)
         && ((param_0 == 0 && doTrigger())
             || (checkCanoeSlider() && (subjectCancelTrigger() || checkEndResetFlg1(ERFLG1_CANOE_ITEM_CANCEL)))
             )
@@ -11901,8 +12071,8 @@ void daAlink_c::checkItemButtonChange() {
         u8 temp_r0;
         for (u8 i = 0; i < 2; i++) {
             temp_r0 = (i + 1) % 2;
-            if (mEquipItem == dComIfGp_getSelectItem(i) &&
-                (mEquipItem != dComIfGp_getSelectItem(temp_r0) || mSelectItemId != temp_r0))
+            if (mEquipItem == getSelectItem(i) &&
+                (mEquipItem != getSelectItem(temp_r0) || mSelectItemId != temp_r0))
             {
                 mSelectItemId = i;
             }
@@ -11971,7 +12141,7 @@ BOOL daAlink_c::checkUpperItemAction() {
             setBStatus(btn_status);
             setDoStatus(btn_status);
 
-            if ((btn_status == dComIfGp_getDoStatus() && doTrigger()) || (btn_status == getBStatus() && swordTrigger())) {
+            if ((btn_status == getDoStatus() && doTrigger()) || (btn_status == getBStatus() && swordTrigger())) {
                 if (btn_status == BUTTON_STATUS_THROW) {
                     return procWolfGrabThrowInit();
                 }
@@ -12056,12 +12226,12 @@ int daAlink_c::orderTalk(int i_checkZTalk) {
         return 0;
     }
 
-    if ((dComIfGp_getDoStatus() == BUTTON_STATUS_SPEAK
-        || dComIfGp_getDoStatus() == BUTTON_STATUS_LOOK
-        || dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_128
-        || dComIfGp_getDoStatus() == BUTTON_STATUS_LISTEN
-        || dComIfGp_getDoStatus() == BUTTON_STATUS_DRINK
-        || dComIfGp_getDoStatus() == BUTTON_STATUS_CHECK
+    if ((getDoStatus() == BUTTON_STATUS_SPEAK
+        || getDoStatus() == BUTTON_STATUS_LOOK
+        || getDoStatus() == BUTTON_STATUS_UNK_128
+        || getDoStatus() == BUTTON_STATUS_LISTEN
+        || getDoStatus() == BUTTON_STATUS_DRINK
+        || getDoStatus() == BUTTON_STATUS_CHECK
         )
         && talkTrigger())
     {
@@ -12072,7 +12242,7 @@ int daAlink_c::orderTalk(int i_checkZTalk) {
     if (!checkWolf() && checkRequestTalkActor(mAttList2, field_0x27f8)) {
         for (int i = 0; i < 2; i++) {
             // check if pressed X or Y and if item on button is a trade item
-            if (checkTradeItem(dComIfGp_getSelectItem(i)) && itemTriggerCheck(1 << i)) {
+            if (checkTradeItem(getSelectItem(i)) && itemTriggerCheck(1 << i)) {
                 fopAcM_orderTalkItemBtnEvent(itemTalkType[i], this, field_0x27f8, 0, 0);
                 return 1;
             }
@@ -12107,9 +12277,12 @@ static void* daAlink_searchKolin(fopAc_ac_c* i_actor, void* i_data) {
 }
 
 int daAlink_c::orderZTalk() {
+    // Co-op: one Link's prone/talk posture should not block another Link's Midna call.
+    const bool prone_talk_status = daAlink_checkOwnerCameraStatus0(this, 0x8000000);
+
     if ((!checkReinRide() && !checkModeFlg(0x40000) && !checkMagneBootsOn() && (!mLinkAcch.ChkGroundHit() || checkModeFlg(0x70C52)))
         || mThrowBoomerangAcKeep.getActor() != NULL
-        || dComIfGp_checkPlayerStatus0(0, 0x8000000)
+        || prone_talk_status
         || mProcID == PROC_CRAWL_END
         || checkHorseZelda()
         || checkCloudSea()
@@ -12121,8 +12294,19 @@ int daAlink_c::orderZTalk() {
         return 0;
     }
 
-    if (checkMidnaRide()) {
+    if (
+#if TARGET_PC
+        dusk::coop::midna_owner::canUseService(this)
+#else
+        checkMidnaRide()
+#endif
+    ) {
+#if TARGET_PC
+        // Co-op: each ALINK owns its own Z-hint scanner through player_attention.
+        fopAc_ac_c* zhint = dusk::coop::player_attention::zHintForPlayer(this);
+#else
         fopAc_ac_c* zhint = dComIfGp_att_getZHint();
+#endif
         if (zhint != NULL) {
             setMidnaTalkStatus(BUTTON_STATUS_CHECK);
         }
@@ -12137,8 +12321,14 @@ int daAlink_c::orderZTalk() {
         {
             if (zhint != NULL) {
                 if (fopAcM_GetName(zhint) == fpcNm_Tag_Mhint_e && ((daTagMhint_c*)zhint)->checkEventID()) {
+#if TARGET_PC
+                    dusk::coop::midna_owner::beginService(this, zhint);
+#endif
                     fopAcM_orderOtherEventId(zhint, ((daTagMhint_c*)zhint)->getEventID(), ((daTagMhint_c*)zhint)->getToolEventID(), 0xFFFF, 0, 1);
                 } else {
+#if TARGET_PC
+                    dusk::coop::midna_owner::beginService(this, zhint);
+#endif
                     fopAcM_orderTalkEvent(this, zhint, 0, 0);
                 }
             } else {
@@ -12146,7 +12336,16 @@ int daAlink_c::orderZTalk() {
                     dComIfGp_setMesgCameraInfoActor(mMidnaMsg, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
                 }
 
+#if TARGET_PC
+                // Co-op: manual Midna service must talk to the companion actor owned by this ALINK slot.
+                daMidna_c* midna = dusk::coop::midna_owner::getMidnaForPlayer(this);
+                if (midna != NULL) {
+                    dusk::coop::midna_owner::beginService(this, midna);
+                    fopAcM_orderTalkEvent(this, midna, 0, 0);
+                }
+#else
                 fopAcM_orderTalkEvent(this, getMidnaActor(), 0, 0);
+#endif
             }
 
             field_0x35a0 = field_0x3594;
@@ -12179,12 +12378,12 @@ int daAlink_c::checkNormalAction() {
     }
 
     if (doTrigger()) {
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_137) {
+        if (getDoStatus() == BUTTON_STATUS_UNK_137) {
             orderPeep();
             return 1;
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_ENTER) {
+        if (getDoStatus() == BUTTON_STATUS_ENTER) {
             if (checkWolf()) {
                 return procWolfLieStartInit(1);
             } else {
@@ -12192,19 +12391,19 @@ int daAlink_c::checkNormalAction() {
             }
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_PICK_UP) {
+        if (getDoStatus() == BUTTON_STATUS_PICK_UP) {
             return procWolfGrabUpInit();
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_123) {
+        if (getDoStatus() == BUTTON_STATUS_UNK_123) {
             return procWolfChainReadyInit();
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_ROLL) {
+        if (getDoStatus() == BUTTON_STATUS_ROLL) {
             return procWolfPushInit();
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_GET_ON) {
+        if (getDoStatus() == BUTTON_STATUS_GET_ON) {
             if (fopAcM_GetName(field_0x27f4) == fpcNm_Obj_IceLeaf_e) {
                 return procBoardRideInit();
             }
@@ -12226,7 +12425,7 @@ int daAlink_c::checkNormalAction() {
             }
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_32) {
+        if (getDoStatus() == BUTTON_STATUS_UNK_32) {
             if (checkWolf()) {
                 return procWolfHangReadyInit();
             } else {
@@ -12238,7 +12437,7 @@ int daAlink_c::checkNormalAction() {
             }
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_OPEN) {
+        if (getDoStatus() == BUTTON_STATUS_OPEN) {
             if (mAttList->mType == fopAc_attn_DOOR_e) {
                 if (!checkStageName("F_SP103") ||
                     !fopAcIt_Judge((fopAcIt_JudgeFunc)daAlink_searchBouDoor, NULL))
@@ -12253,15 +12452,15 @@ int daAlink_c::checkNormalAction() {
             return 1;
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_PICK) {
+        if (getDoStatus() == BUTTON_STATUS_PICK) {
             return procGrassWhistleGetInit();
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_PET) {
+        if (getDoStatus() == BUTTON_STATUS_PET) {
             return procGoatStrokeInit();
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_STRIKE) {
+        if (getDoStatus() == BUTTON_STATUS_STRIKE) {
             if (fopAcM_GetName(field_0x27f4) == fpcNm_Tag_Lv6Gate_e) {
                 static_cast<daTagLv6Gate_c*>(field_0x27f4)->stabMasterSword();
             } else {
@@ -12272,7 +12471,7 @@ int daAlink_c::checkNormalAction() {
             return 1;
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_145) {
+        if (getDoStatus() == BUTTON_STATUS_UNK_145) {
             onNoResetFlg0(FLG0_UNK_10000000);
 
             if (field_0x27f4->current.pos.abs2XZ(current.pos) < getGoatCatchDistance2()) {
@@ -12282,10 +12481,10 @@ int daAlink_c::checkNormalAction() {
                     return procGoatCatchInit(field_0x27f4, 0.0f);
                 }
             }
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_152) {
+        } else if (getDoStatus() == BUTTON_STATUS_UNK_152) {
             return procInsectCatchInit();
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_31 || dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_57 ||
-                   dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_52)
+        } else if (getDoStatus() == BUTTON_STATUS_UNK_31 || getDoStatus() == BUTTON_STATUS_UNK_57 ||
+                   getDoStatus() == BUTTON_STATUS_UNK_52)
         {
             if (checkWolf()) {
                 return procWolfGrabUpInit();
@@ -12296,35 +12495,35 @@ int daAlink_c::checkNormalAction() {
                     return procGrabReadyInit();
                 }
             }
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_153) {
+        } else if (getDoStatus() == BUTTON_STATUS_UNK_153) {
             return procHangLeverDownInit();
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_FINISH) {
+        } else if (getDoStatus() == BUTTON_STATUS_FINISH) {
             if (checkWolf()) {
                 return procWolfDownAttackInit();
             } else {
                 return checkDoCutAction();
             }
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_HELM_SPLITTER) {
+        } else if (getDoStatus() == BUTTON_STATUS_HELM_SPLITTER) {
             if (checkWolf()) {
                 return procWolfJumpAttackInit(1);
             } else {
                 return checkDoCutAction();
             }
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_139) {
+        } else if (getDoStatus() == BUTTON_STATUS_UNK_139) {
             return procWolfJumpAttackInit(1);
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_DRAW) {
+        } else if (getDoStatus() == BUTTON_STATUS_DRAW) {
             changeCutFast();
             return 1;
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_134) {
+        } else if (getDoStatus() == BUTTON_STATUS_UNK_134) {
             return checkDoCutAction();
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_HOWL) {
+        } else if (getDoStatus() == BUTTON_STATUS_HOWL) {
             return procWolfHowlDemoInit();
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_SNIFF) {
+        } else if (getDoStatus() == BUTTON_STATUS_SNIFF) {
             return procWolfGetSmellInit();
-        } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_147) {
+        } else if (getDoStatus() == BUTTON_STATUS_UNK_147) {
             return procWolfTagJumpInit(field_0x27f4);
         }
-    } else if (checkNoResetFlg0(FLG0_UNK_10000000) && dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_145) {
+    } else if (checkNoResetFlg0(FLG0_UNK_10000000) && getDoStatus() == BUTTON_STATUS_UNK_145) {
         if (field_0x27f4->current.pos.abs2XZ(current.pos) < getGoatCatchDistance2()) {
             if (checkWolf()) {
                 return procWolfGanonCatchInit();
@@ -12460,16 +12659,16 @@ BOOL daAlink_c::checkItemAction() {
             }
         } else if (mEquipItem == 0x102) {
             if (doTrigger()) {
-                if (dComIfGp_getDoStatus() == BUTTON_STATUS_THROW) {
+                if (getDoStatus() == BUTTON_STATUS_THROW) {
                     setThrowBoomerangAnime();
                     return true;
                 }
 
-                if (dComIfGp_getDoStatus() == BUTTON_STATUS_PLACE) {
+                if (getDoStatus() == BUTTON_STATUS_PLACE) {
                     return procPickPutInit(0);
                 }
             }
-        } else if (doTrigger() && dComIfGp_getDoStatus() == BUTTON_STATUS_QUIT && mCopyRodAcKeep.getActor() != NULL) {
+        } else if (doTrigger() && getDoStatus() == BUTTON_STATUS_QUIT && mCopyRodAcKeep.getActor() != NULL) {
             ((daCrod_c*)mCopyRodAcKeep.getActor())->offControll();
             resetUpperAnime(UPPER_2, 3.0f);
             return true;
@@ -12492,7 +12691,7 @@ BOOL daAlink_c::checkItemAction() {
                 && !checkModeFlg(0x70C52)
                 && checkShieldGet()
                 && !checkNotBattleStage()
-            ) && ((mLinkAcch.ChkGroundHit() || checkMagneBootsOn()) && dComIfGp_getRStatus() == 0)
+            ) && ((mLinkAcch.ChkGroundHit() || checkMagneBootsOn()) && getRStatus() == 0)
             )
         {
             setRStatus(BUTTON_STATUS_SHIELD_ATTACK);
@@ -12512,7 +12711,7 @@ BOOL daAlink_c::checkRAction() {
 
 BOOL daAlink_c::checkMoveDoAction() {
     if (doTrigger()) {
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_JUMP) {
+        if (getDoStatus() == BUTTON_STATUS_JUMP) {
             if (checkWolf()) {
                 return procWolfSideStepInit(0);
             }
@@ -12525,7 +12724,7 @@ BOOL daAlink_c::checkMoveDoAction() {
             return procSideStepInit(direction);
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_121) {
+        if (getDoStatus() == BUTTON_STATUS_UNK_121) {
             if (!checkAttentionLock() && checkInputOnR()) {
                 shape_angle.y = mMoveAngle;
             }
@@ -12533,7 +12732,7 @@ BOOL daAlink_c::checkMoveDoAction() {
             return procFrontRollInit();
         }
 
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_DASH) {
+        if (getDoStatus() == BUTTON_STATUS_DASH) {
             return procWolfDashInit();
         }
     }
@@ -12653,7 +12852,12 @@ void daAlink_c::swordUnequip() {
 void daAlink_c::itemEquip(u16 i_itemID) {
     if (mThrowBoomerangAcKeep.getActor() == NULL || i_itemID != dItemNo_BOOMERANG_e) {
         field_0x2fde = i_itemID;
+#if TARGET_PC
+        // Co-op: item changes clear only this player's thrown-boomerang focus bit.
+        dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0x400000);
+#else
         dComIfGp_clearPlayerStatus0(0, 0x400000);
+#endif
         offNoResetFlg3(FLG3_COPY_ROD_THROW_AFTER);
         itemUnequip(field_0x2fde, -1.0f);
     }
@@ -12710,7 +12914,7 @@ void daAlink_c::allUnequip(BOOL param_0) {
         mEquipItem != dItemNo_KANTERA_e)
     {
         for (u8 i = 0; i < 2; i++) {
-            if (dComIfGp_getSelectItem(i) == dItemNo_KANTERA_e) {
+            if (getSelectItem(i) == dItemNo_KANTERA_e) {
                 mSelectItemId = i;
             }
         }
@@ -12769,7 +12973,7 @@ BOOL daAlink_c::checkItemChangeFromButton() {
                 }
             }
 
-            if (doTrigger() && dComIfGp_getDoStatus() == BUTTON_STATUS_PUT_AWAY) {
+            if (doTrigger() && getDoStatus() == BUTTON_STATUS_PUT_AWAY) {
                 if (mEquipItem != dItemNo_KANTERA_e && checkNoResetFlg2(FLG2_UNK_1)) {
                     offKandelaarModel();
                 } else if (mSwordFlourishTimer != 0 && mEquipItem == 0x103 &&
@@ -12783,7 +12987,7 @@ BOOL daAlink_c::checkItemChangeFromButton() {
                        !checkCanoeRide() && checkNoUpperAnime() && checkNoResetFlg2(FLG2_UNK_1))
             {
                 for (i = 0; i < 2; i++) {
-                    if (dComIfGp_getSelectItem(i) == dItemNo_KANTERA_e) {
+                    if (getSelectItem(i) == dItemNo_KANTERA_e) {
                         mSelectItemId = i;
                     }
                 }
@@ -12819,7 +13023,7 @@ BOOL daAlink_c::checkNextActionFromButton() {
     }
 
     if (checkModeFlg(0x400)) {
-        if (dComIfGp_getDoStatus() == BUTTON_STATUS_NONE && checkCanoeRide() && checkFisingRodLure()) {
+        if (getDoStatus() == BUTTON_STATUS_NONE && checkCanoeRide() && checkFisingRodLure()) {
             setDoStatus(BUTTON_STATUS_PUT_AWAY);
         }
     } else if (!checkModeFlg(0x40000)) {
@@ -13340,7 +13544,19 @@ void daAlink_c::setMagicArmorBrk(int i_status) {
 
 BOOL daAlink_c::checkMagicArmorHeavy() const {
 #if TARGET_PC
-    return checkMagicArmorWearAbility() && (dComIfGs_getRupee() == 0 && !dusk::getSettings().game.freeMagicArmor);
+    if(!checkMagicArmorWearAbility()) {
+        return false;
+    }
+
+    switch(dusk::getSettings().game.armorRupeeDrain) {
+        case dusk::MagicArmorMode::NORMAL:
+            return dComIfGs_getRupee() == 0;
+        case dusk::MagicArmorMode::ON_DAMAGE:
+        case dusk::MagicArmorMode::DOUBLE_DEFENSE:
+        case dusk::MagicArmorMode::INVINCIBLE:
+        case dusk::MagicArmorMode::COSMETIC:
+            return false;
+    }
 #else
     return checkMagicArmorWearAbility() && dComIfGs_getRupee() == 0;
 #endif
@@ -13686,7 +13902,12 @@ void daAlink_c::posMove() {
         if (checkNoResetFlg0(FLG0_SWIM_UP) && mProcID != PROC_SWIM_DIVE) {
             current.pos.y = mWaterY;
         } else if (mDemo.getDemoType() == daPy_demo_c::DEMO_TYPE_START_e || mProcID == PROC_ELEC_DAMAGE ||
+#if TARGET_PC
+                   /* Co-op: swim talk freeze should follow the acting ALINK, not P1 globals. */
+                   dusk::coop::midna_owner::checkTalkStatus(this))
+#else
                    dComIfGp_checkPlayerStatus0(0, 0x10))
+#endif
         {
             speed.y = 0.0f;
         } else if (checkWolf()) {
@@ -14435,7 +14656,7 @@ int daAlink_c::checkSceneChange(int i_exitID) {
                 exit_speed = 15.0f;
                 demo_stick = 0.6f;
             } else {
-                exit_speed = dComIfGp_getHorseActor()->getNormalMaxSpeedF();
+                exit_speed = daAlink_getHorseForRider(this)->getNormalMaxSpeedF();
                 demo_stick = 1.0f;
             }
         } else if (checkWolf()) {
@@ -14523,7 +14744,7 @@ int daAlink_c::checkSceneChange(int i_exitID) {
 
                     mDemo.setMoveAngle(getSceneExitMoveAngle());
                     if (is_horse_ride) {
-                        daHorse_c* horse = dComIfGp_getHorseActor();
+                        daHorse_c* horse = daAlink_getHorseForRider(this);
                         horse->changeOriginalDemo();
                         horse->changeDemoMode(6, 0);
                         horse->changeDemoMoveAngle(mDemo.getMoveAngle());
@@ -14850,7 +15071,7 @@ BOOL daAlink_c::setItemActor() {
 
     if (checkBombItem(mEquipItem)) {
         if (checkHorseRide()) {
-            if (dComIfGp_getHorseActor()->checkNoBombProc()
+            if (daAlink_getHorseForRider(this)->checkNoBombProc()
                 #if PLATFORM_GCN
                 && (mProcID != PROC_HORSE_TURN || !checkModeFlg(MODE_DISABLE_ITEMS))
                 #endif
@@ -14875,7 +15096,7 @@ BOOL daAlink_c::setItemActor() {
                 static_cast<daNbomb_c*>(actor)->setOwner(this);
                 mActiveBombNum++;
                 setGrabItemActor(actor);
-                dComIfGp_addSelectItemNum(mSelectItemId, -1);
+                addSelectItemNum(mSelectItemId, -1);
                 field_0x33e4 = 38.0f;
                 setGrabUpperAnime(mpHIO->mBasic.m.mBasicInterpolation);
             }
@@ -14991,7 +15212,7 @@ BOOL daAlink_c::checkGroupItem(int i_itemNo, int i_selItem) const {
 
 int daAlink_c::checkSetItemTrigger(int i_itemNo) {
     for (u8 i = 0; i < 2; i++) {
-        if (checkGroupItem(i_itemNo, dComIfGp_getSelectItem(i)) && itemTriggerCheck(1 << i)) {
+        if (checkGroupItem(i_itemNo, getSelectItem(i)) && itemTriggerCheck(1 << i)) {
             if (i_itemNo != dItemNo_HVY_BOOTS_e) {
                 mSelectItemId = i;
             }
@@ -15004,7 +15225,7 @@ int daAlink_c::checkSetItemTrigger(int i_itemNo) {
 
 int daAlink_c::checkItemSetButton(int i_itemNo) {
     for (u8 i = 0; i < 2; i++) {
-        if (checkGroupItem(i_itemNo, dComIfGp_getSelectItem(i))) {
+        if (checkGroupItem(i_itemNo, getSelectItem(i))) {
             return i;
         }
     }
@@ -15105,7 +15326,7 @@ enum daAlink_ItemProc {
 };
 
 int daAlink_c::changeItemTriggerKeepProc(u8 i_selItemIdx, int i_procType) {
-    u32 sel_item = dComIfGp_getSelectItem(i_selItemIdx);
+    u32 sel_item = getSelectItem(i_selItemIdx);
     mSelectItemId = i_selItemIdx;
 
     if (i_procType == ITEM_PROC_GRASS_WHISTLE) {
@@ -15144,7 +15365,12 @@ int daAlink_c::changeItemTriggerKeepProc(u8 i_selItemIdx, int i_procType) {
         procNotUseItemInit((u16)sel_item);
     } else if (i_procType == ITEM_PROC_SUBJECTIVITY) {
         procCoSubjectivityInit();
+#if TARGET_PC
+        // Co-op: Hawkeye/subjectivity status belongs to the player entering scope mode.
+        dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x200000);
+#else
         dComIfGp_setPlayerStatus0(0, 0x200000);
+#endif
         seStartSystem(Z2SE_AL_HAWK_EYE_PUTON);
     } else if (i_procType == ITEM_PROC_PICK_PUT) {
         procPickPutInit(1);
@@ -15154,7 +15380,13 @@ int daAlink_c::changeItemTriggerKeepProc(u8 i_selItemIdx, int i_procType) {
         field_0x2fde = dItemNo_NONE_e;
         itemEquip(sel_item);
 
-        if (dComIfGp_checkPlayerStatus0(0, 0x2000) &&
+        // Co-op: in-subject item swapping must read this player's camera status.
+        if (
+#if TARGET_PC
+            dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x2000) &&
+#else
+            dComIfGp_checkPlayerStatus0(0, 0x2000) &&
+#endif
             ((checkBowAndSlingItem(field_0x2fde) || checkHookshotItem(field_0x2fde) ||
               field_0x2fde == dItemNo_COPY_ROD_e) ||
              field_0x2fde == dItemNo_BOOMERANG_e))
@@ -15175,7 +15407,7 @@ int daAlink_c::changeItemTriggerKeepProc(u8 i_selItemIdx, int i_procType) {
  * `changeItemTriggerKeepProc`
  */
 int daAlink_c::checkNewItemChange(u8 i_selItemIdx) {
-    u16 sel_item = dComIfGp_getSelectItem(i_selItemIdx);
+    u16 sel_item = getSelectItem(i_selItemIdx);
 
     if (checkSpinnerRide()
         || sel_item == dItemNo_BOMB_BAG_LV1_e
@@ -15257,7 +15489,7 @@ int daAlink_c::checkNewItemChange(u8 i_selItemIdx) {
                 } else if (checkItemSetButton(0x108) != 2 &&
                            (sel_item == dItemNo_WORM_e || sel_item == dItemNo_BEE_CHILD_e))
                 {
-                    int itemNo = dComIfGp_getSelectItem(checkItemSetButton(0x108));
+                    int itemNo = getSelectItem(checkItemSetButton(0x108));
                     if (itemNo == dItemNo_WORM_ROD_e || itemNo == dItemNo_JEWEL_WORM_ROD_e) {
                         if (sel_item == dItemNo_BEE_CHILD_e) {
                             return ITEM_PROC_BOTTLE_DRINK;
@@ -15284,7 +15516,7 @@ int daAlink_c::checkNewItemChange(u8 i_selItemIdx) {
                     if (acceptSubjectModeChange()) {
                         return ITEM_PROC_SUBJECTIVITY;
                     }
-                } else if (sel_item == dItemNo_POKE_BOMB_e && dComIfGp_getSelectItemNum(i_selItemIdx) &&
+                } else if (sel_item == dItemNo_POKE_BOMB_e && getSelectItemNum(i_selItemIdx) &&
                            field_0x2fcf < 2)
                 {
                     return ITEM_PROC_PICK_PUT;
@@ -15294,7 +15526,7 @@ int daAlink_c::checkNewItemChange(u8 i_selItemIdx) {
             }
         }
     } else if (sel_item != dItemNo_NONE_e && mEquipItem != sel_item) {
-        if ((checkBombItem(sel_item) && !dComIfGp_getSelectItemNum(i_selItemIdx))
+        if ((checkBombItem(sel_item) && !getSelectItemNum(i_selItemIdx))
             || ((sel_item == dItemNo_NORMAL_BOMB_e || sel_item == dItemNo_WATER_BOMB_e) && mActiveBombNum >= 3)
             || (sel_item == dItemNo_IRONBALL_e && (!mLinkAcch.ChkGroundHit() || checkModeFlg(0x70C52)))
             || (sel_item == dItemNo_KANTERA_e && (checkNoResetFlg0(FLG0_WATER_IN_MOVE) || checkEndResetFlg1(ERFLG1_UNK_4) || checkModeFlg(0x40000))))
@@ -15404,6 +15636,8 @@ void daAlink_c::deleteEquipItem(BOOL i_isPlaySound, BOOL i_isDeleteKantera) {
 #if TARGET_PC
     mIBChainInterpPrevValid = false;
     mIBChainInterpCurrValid = false;
+    mHsChainInterpPrevValid = false;
+    mHsChainInterpCurrValid = false;
 #endif
     field_0x0774 = NULL;
     field_0x0778 = NULL;
@@ -15913,8 +16147,21 @@ void daAlink_c::commonProcInit(daAlink_c::daAlink_PROC i_procID) {
         cancelHookshotCarry();
     }
 
-    if ((dComIfGp_checkPlayerStatus0(0, 8) && !checkModeFlg(MODE_VINE_CLIMB) && mProcID != PROC_HANG_CLIMB) ||
-        ((dComIfGp_checkPlayerStatus1(0, 0x2000000) && mProcID != PROC_HOOKSHOT_WALL_SHOOT && mProcID != PROC_HOOKSHOT_WALL_WAIT)))
+    if ((
+#if TARGET_PC
+            // Co-op: reset displacement checks this player's slot-local camera/action status.
+            dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 8)
+#else
+            dComIfGp_checkPlayerStatus0(0, 8)
+#endif
+            && !checkModeFlg(MODE_VINE_CLIMB) && mProcID != PROC_HANG_CLIMB) ||
+        ((
+#if TARGET_PC
+            dusk::coop::player_camera_status::checkStatus1ForPlayer(this, 0x2000000)
+#else
+            dComIfGp_checkPlayerStatus1(0, 0x2000000)
+#endif
+            && mProcID != PROC_HOOKSHOT_WALL_SHOOT && mProcID != PROC_HOOKSHOT_WALL_WAIT)))
     {
         if (mProcID == PROC_CLIMB_TO_ROOF) {
             current.pos.x += 10.0f * cM_ssin(shape_angle.y);
@@ -15925,17 +16172,39 @@ void daAlink_c::commonProcInit(daAlink_c::daAlink_PROC i_procID) {
         }
     }
 
-    if (dComIfGp_checkPlayerStatus0(0, 0x200000)) {
+    if (
+#if TARGET_PC
+        // Co-op: scope put-off sound follows the owner slot's camera status.
+        dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x200000)
+#else
+        dComIfGp_checkPlayerStatus0(0, 0x200000)
+#endif
+    ) {
         seStartSystem(Z2SE_AL_HAWK_EYE_PUTOFF);
     }
 
     if (checkUpperReadyThrowAnime() && mEquipItem != 0x102) {
+#if TARGET_PC
+        // Co-op: reset clears this player's retained camera/action bits without touching P1.
+        dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0xfeb5ab0f);
+#else
         dComIfGp_clearPlayerStatus0(0, 0xfeb5ab0f);
+#endif
     } else {
+#if TARGET_PC
+        // Co-op: reset clears this player's retained camera/action bits without touching P1.
+        dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0xffbfffcf);
+#else
         dComIfGp_clearPlayerStatus0(0, 0xffbfffcf);
+#endif
     }
 
+#if TARGET_PC
+    // Co-op: status1 reset is slot-local for hookshot hang/flight camera states.
+    dusk::coop::player_camera_status::clearStatus1ForPlayer(this, 0x7fb7b78);
+#else
     dComIfGp_clearPlayerStatus1(0, 0x7fb7b78);
+#endif
 
     cancelHookshotShot();
     if (mEquipItem == 0x109) {
@@ -18148,6 +18417,7 @@ int daAlink_c::procCoMetamorphose() {
 
                 field_0x2f99 = 0xC;
                 mProcVar1.field_0x300a = 1;
+                daAlink_endMidnaServiceForOwner(this);
                 return 1;
             }
 
@@ -18185,6 +18455,7 @@ int daAlink_c::procCoMetamorphose() {
 
             if (field_0x3198 != 0) {
                 resetSpecialEvent();
+                daAlink_endMidnaServiceForOwner(this);
                 return checkWaitAction();
             }
 
@@ -18198,6 +18469,7 @@ int daAlink_c::procCoMetamorphose() {
 
             field_0x2f99 = 0xC;
             mProcVar1.field_0x300a = 1;
+            daAlink_endMidnaServiceForOwner(this);
             return 1;
         }
 
@@ -18314,6 +18586,7 @@ int daAlink_c::procCoMetamorphoseOnly() {
         }
 
         dComIfGp_evmng_cutEnd(mAlinkStaffId);
+        daAlink_endMidnaServiceForOwner(this);
     }
 
     return 1;
@@ -18401,8 +18674,9 @@ int daAlink_c::execute() {
         *mCcStts.GetCCMoveP() = field_0x372c * var_f26;
     }
 
-    if (checkHorseRide() && checkBoarSingleBattle() && dComIfGp_getHorseActor() != NULL) {
-        shape_angle.y = dComIfGp_getHorseActor()->shape_angle.y;
+    daHorse_c* riddenHorse = checkHorseRide() ? daAlink_getHorseForRider(this) : NULL;
+    if (riddenHorse != NULL && checkBoarSingleBattle()) {
+        shape_angle.y = riddenHorse->shape_angle.y;
         current.angle.y = shape_angle.y;
     } else if (checkMagneBootsOn()) {
         shape_angle.y = field_0x3118;
@@ -18439,6 +18713,16 @@ int daAlink_c::execute() {
 
     if (dComIfGp_event_runCheck()) {
         mAlinkStaffId = dComIfGp_evmng_getMyStaffId("Alink", this, 0);
+#if TARGET_PC
+        // Co-op: generic Alink staff tracks are singular; Midna's retained service owner
+        // takes precedence over generic event_owner because Midna requests its own potential event.
+        if (!dusk::coop::midna_owner::shouldConsumeAlinkStaff(this) &&
+            (alinkShouldSkipNonOwnedEventStaff(this) ||
+             dusk::coop::midna_owner::shouldSkipAlinkStaff(this)))
+        {
+            mAlinkStaffId = -1;
+        }
+#endif
 
         if (eventInfo.checkCommandDoor() && !dComIfGp_event_chkEventFlag(4) &&
             mEquipItem == 0x102)
@@ -18452,11 +18736,10 @@ int daAlink_c::execute() {
     }
 
 #if TARGET_PC
-    // Co-op: keep slot 1 movement/aiming on camera 1 once it exists, with a safe camera 0 fallback.
+    // Co-op: slot 1 movement and aiming stay owned by camera 1 after its native startup gate.
     const bool use_secondary_camera =
         dusk::coop::isPlayerInSlot(this, dusk::coop::PlayerSlot::Slot1) &&
-        dusk::coop::camera::isSplitScreenEnabled() &&
-        dusk::coop::camera::isSecondaryCameraReady();
+        dusk::coop::camera::isSplitScreenEnabled();
     const int camera_id = use_secondary_camera ? dComIfGp_getPlayerCameraID(1) :
                                                  dComIfGp_getPlayerCameraID(0);
     field_0x317c = camera_id;
@@ -18717,7 +19000,7 @@ int daAlink_c::execute() {
             || mProcID == PROC_WOLF_DIG
             || mProcID == PROC_WOLF_DIG_THROUGH
             || checkNoResetFlg0(FLG0_UNK_4000)
-            || dComIfGp_checkPlayerStatus1(0, 0x1000000)
+            || daAlink_checkOwnerCameraStatus1(this, 0x1000000)
             || (checkEventRun() && partner != NULL && (partner->attention_info.flags & fopAc_AttnFlag_UNK_0x400000))
             || strcmp(dComIfGp_getEventManager().getRunEventName(), l_defaultGetEventName) == 0)
         {
@@ -19326,7 +19609,7 @@ int daAlink_c::execute() {
 #if TARGET_PC
             // This handles rupee drain and transitions between rupees/no rupees
             // We can skip all of that if the magic armor doesn't use rupees
-            if (!dusk::getSettings().game.freeMagicArmor && checkMagicArmorWearAbility() && mClothesChangeWaitTimer == 0) {
+            if (dusk::getSettings().game.armorRupeeDrain.getValue() == dusk::MagicArmorMode::NORMAL && checkMagicArmorWearAbility() && mClothesChangeWaitTimer == 0) {
 #else
             if (checkMagicArmorWearAbility() && mClothesChangeWaitTimer == 0) {
 #endif
@@ -19354,8 +19637,8 @@ int daAlink_c::execute() {
                 u8 tmp;
                 for (u8 i = 0; i < 2; i++) {
                     tmp = (i + 1) % 2;
-                    if (dComIfGp_getSelectItem(i) == dItemNo_EMPTY_BOTTLE_e && (mUseButtonFlags & (1 << i)) &&
-                        dComIfGp_getSelectItem(tmp) == dItemNo_EMPTY_BOTTLE_e)
+                    if (getSelectItem(i) == dItemNo_EMPTY_BOTTLE_e && (mUseButtonFlags & (1 << i)) &&
+                        getSelectItem(tmp) == dItemNo_EMPTY_BOTTLE_e)
                     {
                         mUseButtonFlags |= (u8)(1 << tmp);
                     }
@@ -19397,25 +19680,25 @@ int daAlink_c::execute() {
                 }
                 setRStatus(BUTTON_STATUS_NONE);
             } else {
-                if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_134 || dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_139) {
+                if (getDoStatus() == BUTTON_STATUS_UNK_134 || getDoStatus() == BUTTON_STATUS_UNK_139) {
                     setDoStatus(BUTTON_STATUS_ATTACK);
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_137) {
+                } else if (getDoStatus() == BUTTON_STATUS_UNK_137) {
                     setDoStatus(BUTTON_STATUS_CHECK);
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_147) {
+                } else if (getDoStatus() == BUTTON_STATUS_UNK_147) {
                     setDoStatusEmphasys(BUTTON_STATUS_JUMP);
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_142) {
+                } else if (getDoStatus() == BUTTON_STATUS_UNK_142) {
                     setDoStatusEmphasys(BUTTON_STATUS_GRAB);
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_140) {
+                } else if (getDoStatus() == BUTTON_STATUS_UNK_140) {
                     setDoStatus(BUTTON_STATUS_NONE);
-                } else if (checkStageName("F_SP127") && checkCanoeRide() && dComIfGp_getDoStatus() == BUTTON_STATUS_PUT_AWAY) {
+                } else if (checkStageName("F_SP127") && checkCanoeRide() && getDoStatus() == BUTTON_STATUS_PUT_AWAY) {
                     setDoStatus(BUTTON_STATUS_NONE);
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_144) {
+                } else if (getDoStatus() == BUTTON_STATUS_UNK_144) {
                     setDoStatus(BUTTON_STATUS_NONE);
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_152) {
+                } else if (getDoStatus() == BUTTON_STATUS_UNK_152) {
                     setDoStatusEmphasys(BUTTON_STATUS_UNK_57);
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_153) {
+                } else if (getDoStatus() == BUTTON_STATUS_UNK_153) {
                     setDoStatusEmphasys(BUTTON_STATUS_GRAB);
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_145) {
+                } else if (getDoStatus() == BUTTON_STATUS_UNK_145) {
                     if (checkWolf() ||
                         (field_0x27f4 != NULL &&
                             (field_0x27f4->speedF > 0.1f ||
@@ -19425,22 +19708,22 @@ int daAlink_c::execute() {
                     } else {
                         setDoStatus(BUTTON_STATUS_NONE);
                     }
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_151) {
+                } else if (getDoStatus() == BUTTON_STATUS_UNK_151) {
                     if (current.pos.y + 200.0f < mWaterY) {
                         setDoStatus(BUTTON_STATUS_SWIM);
                     } else {
                         setDoStatus(BUTTON_STATUS_NONE);
                     }
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_JUMP && dComIfGp_getHorseActor() != NULL &&
+                } else if (getDoStatus() == BUTTON_STATUS_JUMP && dComIfGp_getHorseActor() != NULL &&
                             dComIfGp_getHorseActor()->getZeldaActor() != NULL)
                 {
                     setDoStatus(BUTTON_STATUS_JUMP);
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_HOWL && field_0x27f4 != NULL &&
+                } else if (getDoStatus() == BUTTON_STATUS_HOWL && field_0x27f4 != NULL &&
                             (fopAcM_GetName(field_0x27f4) == fpcNm_Obj_WindStone_e ||
                             fopAcM_GetName(field_0x27f4) == fpcNm_Obj_SmWStone_e))
                 {
                     setDoStatusEmphasys(BUTTON_STATUS_LISTEN);
-                } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_PLACE) {
+                } else if (getDoStatus() == BUTTON_STATUS_PLACE) {
                     if (checkEndResetFlg1(ERFLG1_DO_EXCHANGE_PUT_IN)) {
                         setDoStatusEmphasys(BUTTON_STATUS_INSERT);
                     } else if (checkEndResetFlg1(ERFLG1_DO_PUT_EMPHASYS)) {
@@ -19460,7 +19743,7 @@ int daAlink_c::execute() {
                         setWallGrabStatus(BUTTON_STATUS_GRAB, checkChainEmphasys());
                     }
 
-                    if (dComIfGp_getRStatus() == BUTTON_STATUS_SHIELD_ATTACK && checkShieldAttackEmphasys() == 0) {
+                    if (getRStatus() == BUTTON_STATUS_SHIELD_ATTACK && checkShieldAttackEmphasys() == 0) {
                         setRStatus(BUTTON_STATUS_NONE);
                     }
                 }
@@ -19476,7 +19759,13 @@ int daAlink_c::execute() {
         }
     }
 
-    if (checkEndResetFlg2(ERFLG2_UNK_20) && dComIfGp_checkPlayerStatus0(0, 0x200000) &&
+    if (checkEndResetFlg2(ERFLG2_UNK_20) &&
+#if TARGET_PC
+        // Co-op: Hawkeye pan sound follows this player's scoped camera status.
+        dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x200000) &&
+#else
+        dComIfGp_checkPlayerStatus0(0, 0x200000) &&
+#endif
         (field_0x310e != field_0x310a || field_0x3110 != field_0x310c))
     {
         mDoAud_seStartLevel(Z2SE_AL_HAWK_EYE_PAN, NULL, 0, 0);
@@ -19535,26 +19824,28 @@ static int daAlink_Execute(daAlink_c* i_this) {
         return 1;
     }
 
-    if (dusk::coop::isAdditionalPlayer(i_this) &&
-        dusk::coop::hasSecondaryAlinkProbeFlag(
-            dusk::coop::SecondaryAlinkProbe_ScopedExecuteModelDataOwner))
-    {
-        daAlink_c* primary = static_cast<daAlink_c*>(dusk::coop::getPrimaryPlayer());
+    if (dusk::coop::isAdditionalPlayer(i_this)) {
+        if (dusk::coop::isPlayerInSlot(i_this, dusk::coop::PlayerSlot::Slot1) &&
+            dusk::coop::camera::isSplitScreenEnabled() &&
+            !dusk::coop::camera::isSecondaryCameraReady())
+        {
+            // Co-op: camera 1 initializes from P2's position; P2 must not borrow camera 0 meanwhile.
+            return 1;
+        }
         coopLogSecondaryExecuteState("before", i_this);
         coopLogSecondaryActionMirrorState("before", i_this);
-        coopInstallModelDataOwner(i_this);
+        // Co-op: additional ALINK execution consumes actor-local calculators installed on shared model data.
+        dusk::coop::alink_model_data_owner::ScopedOwner coop_model_data_owner(i_this);
         const int result = i_this->execute();
         coopLogSecondaryExecuteState("after", i_this);
         coopLogSecondaryActionMirrorState("after", i_this);
-        if (primary != nullptr) {
-            // Co-op: extra Link execute touches shared Link model data, so return ownership to P1 immediately.
-            coopInstallModelDataOwner(primary);
-        }
         return result;
     }
 #endif
     int result = i_this->execute();
 #if TARGET_PC
+    // Co-op: rebuild requested players only after P1's native startup camera has settled.
+    dusk::coop::tryRestoreQueuedSession(i_this);
     coopLogPrimaryRuntimeState(i_this);
 #endif
     return result;
@@ -19730,7 +20021,7 @@ int daAlink_c::initShadowScaleLight() {
     fopAc_ac_c* talkActor = fopAcM_getTalkEventPartner(this);
 
     f32 var_f30;
-    if (dComIfGp_checkPlayerStatus0(0, 0x100000)) {
+    if (daAlink_checkOwnerCameraStatus0(this, 0x100000)) {
         var_f30 = 0.0f;
     } else {
         var_f30 = 150.0f;
@@ -19846,7 +20137,7 @@ void daAlink_c::shadowDraw() {
 
         u32 shadowID;
         if (checkHorseRide()) {
-            shadowID = ((daHorse_c*)dComIfGp_getHorseActor())->getShadowID();
+            shadowID = daAlink_getHorseForRider(this)->getShadowID();
             if (shadowID != 0) {
                 dComIfGd_addRealShadow(shadowID, mpLinkModel);
             }
@@ -20108,9 +20399,19 @@ int daAlink_c::draw() {
     initTevCustomColor();
 
     if (mSight.getDrawFlg() && !checkEventRun()) {
-        #if PLATFORM_GCN
+#if PLATFORM_GCN || TARGET_PC
+#if TARGET_PC
+        if (dusk::coop::camera::isSplitScreenEnabled()) {
+            // Co-op: Link draw submission is shared, so queue the reticle through this
+            // Link's UI viewport instead of the last draw-list viewport.
+            mSight.setSightForPlayer(dusk::coop::getSlotForActor(this));
+        } else {
+            mSight.setSight();
+        }
+#else
         mSight.setSight();
-        #endif
+#endif
+#endif
     }
 
     if (checkNoResetFlg1(FLG1_UNK_80)) {
@@ -20417,23 +20718,37 @@ int daAlink_c::draw() {
                 dComIfGd_getOpaListDark()->entryImm(mpHookChain, 0);
 
 #if TARGET_PC
-                if (dusk::frame_interp::is_enabled() &&
-                    mEquipItem == dItemNo_IRONBALL_e &&
-                    mIronBallChainPos != NULL && mIronBallChainAngle != NULL)
-                {
-                    if (mIBChainInterpCurrValid) {
-                        memcpy(mIBChainInterpPrevPos, mIBChainInterpCurrPos, IRON_BALL_CHAIN_COUNT * sizeof(cXyz));
-                        memcpy(mIBChainInterpPrevAngle, mIBChainInterpCurrAngle, IRON_BALL_CHAIN_COUNT * sizeof(csXyz));
-                        mIBChainInterpPrevHandRoot = mIBChainInterpCurrHandRoot;
-                        mIBChainInterpPrevValid = true;
+                if (dusk::frame_interp::is_enabled()) {
+                    if (mEquipItem == dItemNo_IRONBALL_e &&
+                        mIronBallChainPos != NULL && mIronBallChainAngle != NULL)
+                    {
+                        if (mIBChainInterpCurrValid) {
+                            memcpy(mIBChainInterpPrevPos, mIBChainInterpCurrPos, IRON_BALL_CHAIN_COUNT * sizeof(cXyz));
+                            memcpy(mIBChainInterpPrevAngle, mIBChainInterpCurrAngle, IRON_BALL_CHAIN_COUNT * sizeof(csXyz));
+                            mIBChainInterpPrevHandRoot = mIBChainInterpCurrHandRoot;
+                            mIBChainInterpPrevValid = true;
+                        }
+
+                        memcpy(mIBChainInterpCurrPos, mIronBallChainPos, IRON_BALL_CHAIN_COUNT * sizeof(cXyz));
+                        memcpy(mIBChainInterpCurrAngle, mIronBallChainAngle, IRON_BALL_CHAIN_COUNT * sizeof(csXyz));
+                        mIBChainInterpCurrHandRoot = mHookshotTopPos;
+                        mIBChainInterpCurrValid = true;
+
+                        dusk::frame_interp::add_interpolation_callback(&ironBallChainInterpCallback, this);
+                    } else {
+                        if (mHsChainInterpCurrValid) {
+                            mHsChainInterpPrevTop = mHsChainInterpCurrTop;
+                            mHsChainInterpPrevRoot = mHsChainInterpCurrRoot;
+                            mHsChainInterpPrevSubRoot = mHsChainInterpCurrSubRoot;
+                            mHsChainInterpPrevSubTop = mHsChainInterpCurrSubTop;
+                            mHsChainInterpPrevValid = true;
+                        }
+                        mHsChainInterpCurrTop = mHookshotTopPos;
+                        mHsChainInterpCurrRoot = mHeldItemRootPos;
+                        mHsChainInterpCurrSubRoot = field_0x3810;
+                        mHsChainInterpCurrSubTop = mIronBallBgChkPos;
+                        mHsChainInterpCurrValid = true;
                     }
-
-                    memcpy(mIBChainInterpCurrPos, mIronBallChainPos, IRON_BALL_CHAIN_COUNT * sizeof(cXyz));
-                    memcpy(mIBChainInterpCurrAngle, mIronBallChainAngle, IRON_BALL_CHAIN_COUNT * sizeof(csXyz));
-                    mIBChainInterpCurrHandRoot = mHookshotTopPos;
-                    mIBChainInterpCurrValid = true;
-
-                    dusk::frame_interp::add_interpolation_callback(&ironBallChainInterpCallback, this);
                 }
 #endif
             }
@@ -20482,50 +20797,20 @@ int daAlink_c::draw() {
 
 static int daAlink_Draw(daAlink_c* i_this) {
 #if TARGET_PC
+    if (dusk::coop::event_presentation::shouldHideSlot(dusk::coop::getSlotForActor(i_this))) {
+        // Co-op: singular fullscreen sequences hide non-presenting ALINK visuals without stopping simulation.
+        return 1;
+    }
     if (dusk::coop::isAdditionalPlayer(i_this) &&
         dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_SkipDraw))
     {
         // Co-op: skip extra ALINK drawing to test whether draw/model-calc state pins P1's visible animation.
         return 1;
     }
-    if (dusk::coop::isAdditionalPlayer(i_this) &&
-        dusk::coop::hasSecondaryAlinkProbeFlag(dusk::coop::SecondaryAlinkProbe_ScopedDrawModelDataOwner))
-    {
-        static daAlink_c* s_loggedSecondary = nullptr;
-        static int s_loggedDraws = 0;
-        if (s_loggedSecondary != i_this) {
-            s_loggedSecondary = i_this;
-            s_loggedDraws = 0;
-        }
-        const bool shouldLog = s_loggedDraws < 3;
-        s_loggedDraws++;
-
-        daAlink_c* primary = static_cast<daAlink_c*>(dusk::coop::getPrimaryPlayer());
-        // Co-op: shared J3DModelData can only point at one ALINK's matrix calculators at a time; scope P2 ownership to P2 draw.
-        if (shouldLog) {
-            CoopAlinkLog.debug("draw-test begin secondary 0x{:x} primary 0x{:x}",
-                               reinterpret_cast<uintptr_t>(i_this), reinterpret_cast<uintptr_t>(primary));
-            coopLogModelDataOwner("before-secondary-install:p1", primary);
-            coopLogModelDataOwner("before-secondary-install:p2", i_this);
-        }
-        coopInstallModelDataOwner(i_this);
-        if (shouldLog) {
-            coopLogModelDataOwner("after-secondary-install:p2", i_this);
-        }
-        int result = i_this->draw();
-        if (shouldLog) {
-            coopLogModelDataOwner("after-secondary-draw:p2", i_this);
-        }
-        if (primary != nullptr) {
-            coopInstallModelDataOwner(primary);
-            if (shouldLog) {
-                coopLogModelDataOwner("after-primary-restore:p1", primary);
-            }
-        }
-        if (shouldLog) {
-            CoopAlinkLog.debug("draw-test end secondary 0x{:x} result {}", reinterpret_cast<uintptr_t>(i_this), result);
-        }
-        return result;
+    if (dusk::coop::isAdditionalPlayer(i_this)) {
+        // Co-op: shared ALINK model data must point at the actor being submitted for draw.
+        dusk::coop::alink_model_data_owner::ScopedOwner coop_model_data_owner(i_this);
+        return i_this->draw();
     }
 #endif
     return i_this->draw();
@@ -20540,8 +20825,11 @@ daAlink_c::~daAlink_c() {
     }
     const bool coop_secondary = coop_slot != dusk::coop::PlayerSlot::Invalid &&
                                 coop_slot != dusk::coop::PlayerSlot::Slot0;
-    // Co-op: secondary Link should not clear primary player's global status flags.
-    if (!coop_secondary) {
+    // Co-op: secondary Link clears its sidecar camera/action state instead of P1's global status flags.
+    if (coop_secondary) {
+        dusk::coop::player_camera_status::clearStatus0ForPlayer(this, ~0x400030);
+        dusk::coop::player_camera_status::clearStatus1ForPlayer(this, 0x7FB7B78);
+    } else {
 #endif
     dComIfGp_clearPlayerStatus0(0, ~0x400030);
     dComIfGp_clearPlayerStatus1(0, 0x7FB7B78);
@@ -20576,7 +20864,14 @@ daAlink_c::~daAlink_c() {
         changeWarpMaterial(WARP_MAT_MODE_1);
     }
 
+#if TARGET_PC
+    // Co-op: release only this slot's body form retain; shared backing heaps live until final release.
+    if (!dusk::coop::alink_form_resources::releaseActor(this)) {
+        dComIfG_resDelete(&mPhaseReq, mArcName);
+    }
+#else
     dComIfG_resDelete(&mPhaseReq, mArcName);
+#endif
     if (mpArcHeap != NULL) {
         mDoExt_destroyExpHeap(mpArcHeap);
     }
@@ -20619,13 +20914,13 @@ static int daAlink_Delete(daAlink_c* i_this) {
     }
 }
 
-static actor_method_class l_daAlink_Method = {
+static DUSK_CONST actor_method_class l_daAlink_Method = {
     (process_method_func)daAlink_Create,  (process_method_func)daAlink_Delete,
     (process_method_func)daAlink_Execute, (process_method_func)NULL,
     (process_method_func)daAlink_Draw,
 };
 
-actor_process_profile_definition g_profile_ALINK = {
+DUSK_PROFILE actor_process_profile_definition DUSK_CONST g_profile_ALINK = {
     /* Layer ID     */ fpcLy_CURRENT_e,
     /* List ID      */ 5,
     /* List Prio    */ fpcPi_CURRENT_e,

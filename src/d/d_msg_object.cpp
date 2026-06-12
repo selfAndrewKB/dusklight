@@ -27,10 +27,16 @@
 
 #include "JSystem/JKernel/JKRExpHeap.h"
 #include "dusk/version.hpp"
+#include "dusk/coop/event_owner.h"
+#include "dusk/coop/event_presentation.h"
+#include "dusk/coop/message_owner.h"
+#include "dusk/coop/midna_owner.h"
+#include "dusk/coop/player_button_status.h"
 #include "m_Do/m_Do_controller_pad.h"
 #include "m_Do/m_Do_lib.h"
 
 #if TARGET_PC
+#include "dusk/diagnostics.h"
 #include "dusk/settings.h"
 #include <vector>
 #include <array>
@@ -41,6 +47,53 @@ static void dMsgObject_addFundRaising(s16 param_0);
 static void dMsgObject_addTotalPayment(s16 param_0);
 
 static s16 s_groupID;
+
+#if TARGET_PC
+static void beginCoopInteractiveDialogue(dMsgObject_c* msg,
+                                         dusk::coop::message_owner::BeginSource source) {
+    if (msg == NULL) {
+        return;
+    }
+
+    if (dusk::coop::midna_owner::isServiceActive()) {
+        const dusk::coop::PlayerSlot slot = dusk::coop::midna_owner::currentSlot();
+        // Co-op: Midna transform dialogue uses the retained service slot once the message is live.
+        dusk::coop::message_owner::begin(
+            slot,
+            static_cast<fopAc_ac_c*>(dusk::coop::midna_owner::currentPlayer()),
+            static_cast<fopAc_ac_c*>(dusk::coop::midna_owner::getMidna(slot)),
+            true,
+            source);
+        return;
+    }
+
+    fopAc_ac_c* talkActor = msg->mpTalkActor;
+    if (talkActor == NULL) {
+        talkActor = msg->mpTalkPartner;
+    }
+    if (talkActor == NULL) {
+        talkActor = dComIfGp_event_getTalkPartner();
+    }
+
+    if (talkActor == NULL) {
+        // Co-op: refused dialogue ownership needs an explicit breadcrumb for missing native owners.
+        dusk::diagnostics::recordMessageOwnerCheckpoint(
+            "begin_refused_no_talk_actor", -1, -1, NULL, NULL, NULL, true, false,
+            dusk::coop::event_presentation::isFullscreen(),
+            dusk::coop::event_presentation::presenterWindowIndex(),
+            dusk::coop::message_owner::beginSourceName(source));
+        return;
+    }
+
+    // Co-op: ordinary interactive talks fall back to the event/talk actor owner.
+    dusk::coop::message_owner::begin(
+        dusk::coop::event_owner::ownerSlotForActor(talkActor),
+        static_cast<fopAc_ac_c*>(dusk::coop::event_owner::ownerPlayerForActor(talkActor)),
+        talkActor,
+        true,
+        source);
+}
+#endif
 
 s16 dMsgObject_getGroupID() {
     return s_groupID;
@@ -461,12 +514,12 @@ int dMsgObject_c::_execute() {
             mpCtrl->setMessageCode(mpRefer->getRevoMessageID());
             mpRefer->setRevoMessageID(0);
             jmessage_tReference* pRef = (jmessage_tReference*)mpRenProc->getReference();
-            strcpy(pRef->getTextPtr(), "");
-            strcpy(pRef->getTextSPtr(), "");
-            strcpy(pRef->getRubyPtr(), "");
+            SAFE_STRCPY(pRef->getTextPtr(), "");
+            SAFE_STRCPY(pRef->getTextSPtr(), "");
+            SAFE_STRCPY(pRef->getRubyPtr(), "");
             for (int i = 0; i < 3; i++) {
-                strcpy(pRef->getSelTextPtr(i), "");
-                strcpy(pRef->getSelRubyPtr(i), "");
+                SAFE_STRCPY(pRef->getSelTextPtr(i), "");
+                SAFE_STRCPY(pRef->getSelRubyPtr(i), "");
             }
         }
         field_0x4ca = mpCtrl->update();
@@ -604,6 +657,70 @@ int dMsgObject_c::_delete() {
     return 1;
 }
 
+#if TARGET_PC
+struct MirrorMsgOverride {
+    u32 gcMsgId;
+    u32 wiiMsgId;
+};
+
+static const MirrorMsgOverride mirrorMsgOverrides[] = {
+    {0x153a, 0x3c4a},
+    {0x1553, 0x3c63},
+    {0x1558, 0x3c68},
+    {0x155c, 0x3c6c},
+    {0x1569, 0x3c79},
+    {0x156f, 0x3c7f},
+    {0x1f81, 0x4691},
+    {0x232a, 0x4a3a},
+    {0x13f2, 0x3b02},
+    {0x1416, 0x3b26},
+    {0x1417, 0x3b27},
+    {0x1419, 0x3b29},
+    {0x1521, 0x3c31},
+    {0x1614, 0x3d24},
+    {0x1626, 0x3d36},
+    {0x1628, 0x3d38},
+    {0x16aa, 0x3dba},
+    {0x16b8, 0x3dc8},
+    {0x16b9, 0x3dc9},
+    {0x1904, 0x4014},
+    {0x1919, 0x4029},
+    {0x19cd, 0x40dd},
+    {0x19d3, 0x40e3},
+    {0x19d6, 0x40e6},
+    {0x19e6, 0x40f6},
+    {0x19eb, 0x40fb},
+    {0x14b6, 0x3bc6},
+    {0x151a, 0x3c2a},
+    {0x1530, 0x3c40},
+    {0x1532, 0x3c42},
+    {0x2726, 0x4e36},
+    {0x2736, 0x4e46},
+    {0x2739, 0x4e49},
+    {0x274c, 0x4e5c},
+    {0x24da, 0x4bea},
+    {0x24db, 0x4beb},
+    {0x13d8, 0x3ae8},
+    {0x13dc, 0x3aec},
+    {0x13eb, 0x3afb},
+    {0x17df, 0x3eef},
+    {0x17e2, 0x3ef2},
+    {0x1dae, 0x44be},
+    {0x14ca, 0x3bda},
+    {0x470, 0x493}, 
+    {0x473, 0x492},
+};
+
+static u32 getMirrorMsgOverride(u32 msgId) {
+    for (size_t i = 0; i < sizeof(mirrorMsgOverrides) / sizeof(mirrorMsgOverrides[0]); i++) {
+        if (mirrorMsgOverrides[i].gcMsgId == msgId) {
+            return mirrorMsgOverrides[i].wiiMsgId;
+        }
+    }
+    return msgId;
+}
+#endif
+
 void dMsgObject_c::setMessageIndex(u32 revoIndex, u32 param_2, bool param_3) {
     field_0x158 = revoIndex;
     revoIndex = getRevoMessageIndex(revoIndex);
@@ -641,6 +758,10 @@ void dMsgObject_c::setMessageIndex(u32 revoIndex, u32 param_2, bool param_3) {
     }
     if (param_3) {
         mpCtrl->setMessageID(mMessageID, 0, NULL);
+#if TARGET_PC
+        // Co-op: retain dialogue ownership after the native controller accepts the message.
+        beginCoopInteractiveDialogue(this, dusk::coop::message_owner::BeginSource::MessageAccept);
+#endif
     }
 }
 
@@ -670,6 +791,10 @@ void dMsgObject_c::setMessageIndexDemo(u32 revoMsgIndex, bool param_2) {
     mpRefer->setSelMsgPtr(NULL);
     if (param_2) {
         mpCtrl->setMessageID(mMessageID, 0, NULL);
+#if TARGET_PC
+        // Co-op: demo-message presentation starts from the accepted message controller state.
+        beginCoopInteractiveDialogue(this, dusk::coop::message_owner::BeginSource::MessageAcceptDemo);
+#endif
     }
 }
 
@@ -692,9 +817,14 @@ u32 dMsgObject_c::getMessageIndex(u32 param_0) {
 }
 
 u32 dMsgObject_c::getRevoMessageIndex(u32 param_1) {
-    if (!g_MsgObject_HIO_c.mMessageDisplay) {
-        return param_1;
-    }
+#if TARGET_PC 
+    if (!dusk::getSettings().game.enableMirrorMode) { 
+        if (!g_MsgObject_HIO_c.mMessageDisplay) { return param_1; } } 
+    if (param_1 == getMirrorMsgOverride(param_1)) { return param_1; } 
+#else 
+    if (!g_MsgObject_HIO_c.mMessageDisplay) { return param_1; } 
+#endif
+
     u32 msgIndexCount;
     JMSMesgInfo_c* pMsg;
     int i = 0;
@@ -806,12 +936,13 @@ void dMsgObject_c::openProc() {
             }
             pRef->setStopFlag(0);
         } else {
-            if (mDoCPd_c::getTrigA(0)) {
+            // Co-op: dialogue choices follow the player that started the current message event.
+            if (dusk::coop::player_button_status::messageTrigA()) {
                 if (getSelectCursorPosLocal() != 0xff) {
                     field_0x1a3 = 1;
                     field_0x16a = 9;
                 }
-            } else if (mDoCPd_c::getTrigB(0) && getSelectCancelPos() != 0) {
+            } else if (dusk::coop::player_button_status::messageTrigB() && getSelectCancelPos() != 0) {
                 setSelectCursorPosLocal(getSelectCancelPos() - 1);
                 uVar12 = 1;
                 field_0x1a3 = 2;
@@ -907,7 +1038,7 @@ void dMsgObject_c::outnowProc() {
     jmessage_tReference* pRef =
         (jmessage_tReference*)mpRenProc->getReference();
     if (pRef->getCharAllAlphaRate() < 1.0f) {
-        if (mDoCPd_c::getTrigA(0)) {
+        if (dusk::coop::player_button_status::messageTrigA()) {
             pRef->setCharAllAlphaRate(1.0f);
         } else {
             pRef->addCharAllAlphaRate();
@@ -1008,7 +1139,7 @@ void dMsgObject_c::continueProc() {
     {
         mpScrnDraw->arwAnimeMove();
     }
-    if (((mDoCPd_c::getTrigA(0) == 0 && mDoCPd_c::getTrigB(0) == 0) || !isHowlMessage()) &&
+    if (((!dusk::coop::player_button_status::messageTrigA() && !dusk::coop::player_button_status::messageTrigB()) || !isHowlMessage()) &&
         isSend())
     {
         mpCtrl->render_synchronize();
@@ -1021,12 +1152,12 @@ void dMsgObject_c::continueProc() {
         offAutoMessageFlagLocal();
         setMessageIndex(field_0x100->msg_idx, field_0x100->field_0xf0, true);
         mpScrnDraw->fukiPosCalc(pRef->getFukiPosType());
-        strcpy(pRef->getTextPtr(), "");
-        strcpy(pRef->getTextSPtr(), "");
-        strcpy(pRef->getRubyPtr(), "");
+        SAFE_STRCPY(pRef->getTextPtr(), "");
+        SAFE_STRCPY(pRef->getTextSPtr(), "");
+        SAFE_STRCPY(pRef->getRubyPtr(), "");
         for (int i = 0; i < 3; i++) {
-            strcpy(pRef->getSelTextPtr(i), "");
-            strcpy(pRef->getSelRubyPtr(i), "");
+            SAFE_STRCPY(pRef->getSelTextPtr(i), "");
+            SAFE_STRCPY(pRef->getSelRubyPtr(i), "");
         }
         mpScrnDraw->arwAnimeInit();
         mpRenProc->setTextInitPos(mpScrnDraw->getTextBoxPosX(), mpScrnDraw->getTextBoxPosY());
@@ -1054,11 +1185,11 @@ void dMsgObject_c::selectProc() {
             dComIfGp_setAStatusForce(0x2a, 0);
         }
     }
-    if (mDoCPd_c::getTrigA(0)) {
+    if (dusk::coop::player_button_status::messageTrigA()) {
         if (getSelectCursorPosLocal() != 0xff) {
             field_0x1a3 = 1;
         }
-    } else if (mDoCPd_c::getTrigB(0) &&
+    } else if (dusk::coop::player_button_status::messageTrigB() &&
                (((mpScrnDraw->isSelect() || getStatusLocal() == 20) && getSelectCancelPos() != 0)))
     {
         setSelectCursorPosLocal(getSelectCancelPos() - 1);
@@ -1123,7 +1254,7 @@ void dMsgObject_c::selectProc() {
     field_0x100->select_idx = pRef->getSelectPos();
     if (isSend() && field_0x1a3 != 0 && iVar8) {
         field_0x1a3 = 0;
-        if (mDoCPd_c::getTrigB(0)) {
+        if (dusk::coop::player_button_status::messageTrigB()) {
             mSelectPushFlag = 2;
         } else {
             mSelectPushFlag = 1;
@@ -1153,7 +1284,7 @@ void dMsgObject_c::inputProc() {
     mpRefer->inputNumber();
     if (isSend()) {
         field_0x199 = 0;
-        if (mDoCPd_c::getTrigA(0)) {
+        if (dusk::coop::player_button_status::messageTrigA()) {
                          /* dSv_event_tmp_flag_c::T_0080 - Kakariko Village - Put money in fundraiser box */
             BOOL iVar2 = dComIfGs_isTmpBit(dSv_event_tmp_flag_c::tempBitLabels[80]);
                                         /* dSv_event_flag_c::F_0802 - Faron Woods - Trill attacks when stealing */
@@ -1191,7 +1322,7 @@ void dMsgObject_c::inputProc() {
             }
             dMeter2Info_offShopTalkFlag();
             setStatusLocal(14);
-        } else if (mDoCPd_c::getTrigB(0)) {
+        } else if (dusk::coop::player_button_status::messageTrigB()) {
             /* dSv_event_tmp_flag_c::T_0080 - Kakariko Village - Put money in fundraiser box */
             dComIfGs_offTmpBit(dSv_event_tmp_flag_c::tempBitLabels[80]);
             dMeter2Info_offShopTalkFlag();
@@ -1211,12 +1342,12 @@ void dMsgObject_c::finishProc() {
     {
         mpScrnDraw->dotAnimeMove();
     }
-    if (isHowlMessage() && ((dMsgScrnHowl_c*)mpScrnDraw)->isKeyCheck() && mDoCPd_c::getTrigB(0)) {
+    if (isHowlMessage() && ((dMsgScrnHowl_c*)mpScrnDraw)->isKeyCheck() && dusk::coop::player_button_status::messageTrigB()) {
         dMsgObject_onMsgSend();
     }
     u8 sendRes = isSend();
-    if (((mDoCPd_c::getTrigA(0) == 0 &&
-         (mDoCPd_c::getTrigB(0) == 0 || ((dMsgScrnHowl_c*)mpScrnDraw)->isKeyCheck())) ||
+    if (((!dusk::coop::player_button_status::messageTrigA() &&
+         (!dusk::coop::player_button_status::messageTrigB() || ((dMsgScrnHowl_c*)mpScrnDraw)->isKeyCheck())) ||
         !isHowlMessage()) && sendRes != 0)
     {
         if (mpRefer->getMsgID() == 0xc4e) {
@@ -1264,6 +1395,17 @@ void dMsgObject_c::endProc() {
 }
 
 void dMsgObject_c::deleteProc() {
+    // Co-op: dialogue fullscreen presentation lives with the message screen.
+    if (dusk::coop::message_owner::isActive()) {
+        if (dusk::coop::midna_owner::isServiceActive()) {
+            // Co-op: Midna cancel tears down the message before the same-frame
+            // talk camera has consumed its retained listener/speaker actors.
+            dusk::coop::midna_owner::requestEndService();
+        } else {
+            dusk::coop::message_owner::end();
+        }
+    }
+
     if (field_0x148 != NULL) {
         mDoExt_setCurrentHeap(field_0x148);
         field_0x148 = NULL;
@@ -1323,6 +1465,13 @@ void dMsgObject_c::textmodeProc() {
 }
 
 void dMsgObject_c::talkStartInit() {
+#if TARGET_PC
+    if (isTalkMessage() && !dusk::coop::message_owner::isActive()) {
+        // Co-op: fallback only; accepted messages should already own presentation.
+        beginCoopInteractiveDialogue(this, dusk::coop::message_owner::BeginSource::TalkStartFallback);
+    }
+#endif
+
     f32 dVar19 = 0.0f;
     JUTFont* local_30 = mDoExt_getMesgFont();
     field_0x19b = 0;
@@ -1574,8 +1723,9 @@ u8 dMsgObject_c::isSend() {
         if (pRef->getSendFlag() == 5) {
             if (getStatusLocal() == 21) {
                 setButtonStatusLocal();
-                if (IF_DUSK((dusk::getSettings().game.instantText && mDoCPd_c::getHoldB(0)) ||)
-                    mDoCPd_c::getTrigA(0) != 0 || mDoCPd_c::getTrigB(0) != 0) {
+                // Co-op: instant-text acceleration follows the active message owner.
+                if (IF_DUSK((dusk::getSettings().game.instantText && dusk::coop::player_button_status::messageHoldB()) ||)
+                    dusk::coop::player_button_status::messageTrigA() || dusk::coop::player_button_status::messageTrigB()) {
                     return 2;
                 }
                 return 0;
@@ -1594,8 +1744,9 @@ u8 dMsgObject_c::isSend() {
         }
         if (pRef->getSendFlag() == 2) {
             setButtonStatusLocal();
-            if (IF_DUSK((dusk::getSettings().game.instantText && mDoCPd_c::getHoldB(0)) ||)
-                mDoCPd_c::getTrigA(0) != 0 || mDoCPd_c::getTrigB(0) != 0) {
+            // Co-op: instant-text acceleration follows the active message owner.
+            if (IF_DUSK((dusk::getSettings().game.instantText && dusk::coop::player_button_status::messageHoldB()) ||)
+                dusk::coop::player_button_status::messageTrigA() || dusk::coop::player_button_status::messageTrigB()) {
                 return 2;
             }
         }
@@ -1608,8 +1759,9 @@ u8 dMsgObject_c::isSend() {
                 return 2;
             }
         } else {
-            if (IF_DUSK((dusk::getSettings().game.instantText && mDoCPd_c::getHoldB(0) && !isShopItemMessage()) ||)
-                mDoCPd_c::getTrigA(0) != 0 || mDoCPd_c::getTrigB(0) != 0) {
+            // Co-op: instant-text acceleration follows the active message owner.
+            if (IF_DUSK((dusk::getSettings().game.instantText && dusk::coop::player_button_status::messageHoldB() && !isShopItemMessage()) ||)
+                dusk::coop::player_button_status::messageTrigA() || dusk::coop::player_button_status::messageTrigB()) {
                 return 2;
             }
             if (mesgCancelButton) {
@@ -1737,8 +1889,8 @@ void dMsgObject_c::changeGroupLocal(s16 param_1) {
 }
 
 bool dMsgObject_c::getStringLocal(u32 param_1, J2DTextBox* param_2, J2DTextBox* param_3,
-                                  JUTFont* param_4, COutFont_c* param_5, char* param_6,
-                                  char* param_7, char* param_8, s16* param_9) {
+                                  JUTFont* param_4, COutFont_c* param_5, TEXT_SPAN param_6,
+                                  TEXT_SPAN param_7, TEXT_SPAN param_8, s16* param_9) {
     if (field_0x4cd == 0) {
         if (getStatusLocal() == 1) {
             s16 groupID = getMessageGroup(param_1);
@@ -1769,6 +1921,13 @@ bool dMsgObject_c::getStringLocal(u32 param_1, J2DTextBox* param_2, J2DTextBox* 
             }
             mpRenProc->setCharInfoPtr(NULL);
             field_0x4cd = 1;
+#if TARGET_PC
+            if (dusk::coop::midna_owner::isServiceActive()) {
+                // Co-op: Midna local-string flows are service-owned; passive strings stay uncollapsed.
+                beginCoopInteractiveDialogue(this,
+                                             dusk::coop::message_owner::BeginSource::MidnaLocalString);
+            }
+#endif
             mpCtrl->setMessageID(param_1, 0, NULL);
         }
     } else {
@@ -1781,13 +1940,13 @@ bool dMsgObject_c::getStringLocal(u32 param_1, J2DTextBox* param_2, J2DTextBox* 
                 *param_9 = mpRefer->getCharSoundInfo().field_0x40e;
             }
             if (param_6 != NULL) {
-                strcpy(param_6, pRef->getTextPtr());
+                SAFE_STRCPY(param_6, pRef->getTextPtr());
             }
             if (param_7 != NULL) {
-                strcpy(param_7, pRef->getRubyPtr());
+                SAFE_STRCPY(param_7, pRef->getRubyPtr());
             }
             if (param_8 != NULL) {
-                strcpy(param_8, pRef->getTextSPtr());
+                SAFE_STRCPY(param_8, pRef->getTextSPtr());
             }
             mpCtrl->reset();
             mpCtrl->resetResourceCache();
@@ -2309,8 +2468,8 @@ void dMsgObject_c::changeGroup(s16 param_0) {
 }
 
 bool dMsgObject_c::getString(u32 param_0, J2DTextBox* param_1, J2DTextBox* param_2,
-                             JUTFont* param_3, COutFont_c* param_4, char* param_5, char* param_6,
-                             char* param_7, s16* param_8) {
+                             JUTFont* param_3, COutFont_c* param_4, TEXT_SPAN param_5, TEXT_SPAN param_6,
+                             TEXT_SPAN param_7, s16* param_8) {
     return dMsgObject_getMsgObjectClass()->getStringLocal(
         param_0, param_1, param_2, param_3, param_4, param_5, param_6, param_7, param_8);
 }
@@ -2555,7 +2714,7 @@ static leafdraw_method_class l_dMsgObject_Method = {
     (process_method_func)dMsgObject_Draw,
 };
 
-msg_process_profile_definition g_profile_MSG_OBJECT = {
+DUSK_PROFILE msg_process_profile_definition DUSK_CONST g_profile_MSG_OBJECT = {
     /* Layer ID    */ fpcLy_CURRENT_e,
     /* List ID     */ 12,
     /* List Prio   */ fpcPi_CURRENT_e,

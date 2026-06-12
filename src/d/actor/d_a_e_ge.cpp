@@ -11,6 +11,9 @@
 #include "f_op/f_op_actor_enemy.h"
 #include "f_op/f_op_camera_mng.h"
 
+#if TARGET_PC
+#include "dusk/coop/player_attention.h"
+#endif
 
 class daE_GE_HIO_c : public JORReflexible {
 public:
@@ -505,7 +508,12 @@ void daE_GE_c::executeAttack() {
     }
 
     bool bVar = false;
+#if TARGET_PC
+    // Co-op: Guay should react to lock-on from the slot-local attention owner that targeted it.
+    if (dusk::coop::player_attention::isActorLockedByAnyPlayer(this))
+#else
     if (dComIfGp_getAttention()->LockonTruth() && dComIfGp_getAttention()->LockonTarget(0) == this)
+#endif
     {
         bVar = true;
     }
@@ -1370,13 +1378,13 @@ static int daE_GE_Create(daE_GE_c* i_this) {
     return i_this->create();
 }
 
-static actor_method_class l_daE_GE_Method = {
+static DUSK_CONST actor_method_class l_daE_GE_Method = {
     (process_method_func)daE_GE_Create,  (process_method_func)daE_GE_Delete,
     (process_method_func)daE_GE_Execute, (process_method_func)daE_GE_IsDelete,
     (process_method_func)daE_GE_Draw,
 };
 
-actor_process_profile_definition g_profile_E_GE = {
+DUSK_PROFILE actor_process_profile_definition DUSK_CONST g_profile_E_GE = {
     /* Layer ID     */ fpcLy_CURRENT_e,
     /* List ID      */ 7,
     /* List Prio    */ fpcPi_CURRENT_e,

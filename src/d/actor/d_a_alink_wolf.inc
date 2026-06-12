@@ -65,8 +65,8 @@ extern Vec const l_crawlSideOffset;
 extern Vec const l_wolfLieSideOffset;
 extern Vec const l_crawlMinSideOffset;
 extern f32 const l_wolfFootOnFrame[][4];
-extern cXyz l_wolfBaseAnime;
-extern cXyz l_wolfRopeBaseAnime;
+extern cXyz DUSK_CONST l_wolfBaseAnime;
+extern cXyz DUSK_CONST l_wolfRopeBaseAnime;
 
 
 void daAlink_c::changeCommon() {
@@ -218,7 +218,18 @@ void daAlink_c::changeWolf() {
 
     mDoExt_setCurrentHeap(current_heap);
 
-    dComIfGs_setTransformStatus(1);
+#if TARGET_PC
+    if (dusk::coop::isAdditionalPlayer(this)) {
+        // Co-op: additional Links keep wolf state actor-local instead of rewriting P1's save/global form.
+        dusk::coop::alink_form_resources::setSlotWolf(this, true);
+    } else
+#endif
+    {
+        dComIfGs_setTransformStatus(1);
+#if TARGET_PC
+        dusk::coop::alink_form_resources::setSlotWolf(this, true);
+#endif
+    }
     mpLinkModel->setUserArea((uintptr_t)this);
     changeModelDataDirectWolf(0);
     mEyeHL1.entry(field_0x064C, "wl_eye_Hilight");
@@ -348,7 +359,7 @@ void daAlink_c::changeLink(int param_0) {
             initModel(static_cast<J3DModelData*>(dComIfG_getObjectRes(l_mArcName, "al_hands.bmd")), 0);
 
 #if TARGET_PC
-        if (dComIfGs_getRupee() != 0 || dusk::getSettings().game.freeMagicArmor)
+        if (dComIfGs_getRupee() != 0 || dusk::getSettings().game.armorRupeeDrain.getValue() != dusk::MagicArmorMode::NORMAL)
 #else
         if (dComIfGs_getRupee() != 0)
 #endif
@@ -416,7 +427,18 @@ void daAlink_c::changeLink(int param_0) {
 
     mDoExt_setCurrentHeap(current_heap);
 
-    dComIfGs_setTransformStatus(0);
+#if TARGET_PC
+    if (dusk::coop::isAdditionalPlayer(this)) {
+        // Co-op: additional Links keep human state actor-local instead of rewriting P1's save/global form.
+        dusk::coop::alink_form_resources::setSlotWolf(this, false);
+    } else
+#endif
+    {
+        dComIfGs_setTransformStatus(0);
+#if TARGET_PC
+        dusk::coop::alink_form_resources::setSlotWolf(this, false);
+#endif
+    }
     mpLinkModel->setUserArea((uintptr_t)this);
     mpLinkHatModel->setUserArea((uintptr_t)this);
     changeModelDataDirect(param_0);
@@ -458,7 +480,7 @@ void daAlink_c::changeLink(int param_0) {
         field_0x06f0 = field_0x064C->getMaterialNodePointer(2)->getShape();
 
 #if TARGET_PC
-        if (dComIfGs_getRupee() != 0 || dusk::getSettings().game.freeMagicArmor) {
+        if (dComIfGs_getRupee() != 0 || dusk::getSettings().game.armorRupeeDrain.getValue() != dusk::MagicArmorMode::NORMAL) {
 #else
         if (dComIfGs_getRupee() != 0) {
 #endif
@@ -613,7 +635,9 @@ BOOL daAlink_c::wolfSenseTrigger() {
 }
 
 void daAlink_c::setWolfSenceStatus(u8 i_status) {
-    dComIfGp_setXStatus(i_status, 0);
+    // Co-op: wolf X-button HUD/gameplay state belongs to the acting ALINK slot.
+    dusk::coop::player_button_status::setStatusForPlayer(
+        this, dusk::coop::player_button_status::ButtonStatusKind::X, i_status, 0);
 }
 
 BOOL daAlink_c::wolfClawTrigger() {
@@ -621,7 +645,9 @@ BOOL daAlink_c::wolfClawTrigger() {
 }
 
 void daAlink_c::setWolfDigStatus(u8 i_flag) {
-    dComIfGp_setYStatus(BUTTON_STATUS_DIG, i_flag);
+    // Co-op: wolf Y-button HUD/gameplay state belongs to the acting ALINK slot.
+    dusk::coop::player_button_status::setStatusForPlayer(
+        this, dusk::coop::player_button_status::ButtonStatusKind::Y, BUTTON_STATUS_DIG, i_flag);
 }
 
 BOOL daAlink_c::checkWolfShapeReverse() const {
@@ -1386,7 +1412,7 @@ int daAlink_c::checkWolfLandAction(BOOL param_0) {
 }
 
 BOOL daAlink_c::checkMidnaUseAbility() const {
-    return dComIfGp_checkPlayerStatus1(0, 0x800000) || dKy_withwarp_capture_check();
+    return daAlink_checkOwnerCameraStatus1(this, 0x800000) || dKy_withwarp_capture_check();
 }
 
 void daAlink_c::checkWolfUseAbility() {
@@ -4005,7 +4031,13 @@ int daAlink_c::procWolfHowlDemoInit() {
         } else if (name == fpcNm_Tag_WaraHowl_e) {
             mZ2WolfHowlMgr.setCorrectCurve(static_cast<daTagWrHowl_c*>(field_0x27f4)->getTuneId());
         } else {
+            #if TARGET_PC
+            if (mZ2WolfHowlMgr.getCorrectCurveID() != 9) {
+                mZ2WolfHowlMgr.setCorrectCurve(-1);
+            }
+            #else
             mZ2WolfHowlMgr.setCorrectCurve(-1);
+            #endif
         }
     } else {
         #if TARGET_PC
@@ -4036,6 +4068,10 @@ int daAlink_c::procWolfHowlDemoInit() {
         }
     }
 
+#if TARGET_PC
+    // Co-op: wolf howl stays a singular P1/global event; collapse only its authored presentation.
+    dusk::coop::event_presentation::begin(dusk::coop::event_presentation::Source::WolfHowl);
+#endif
     dCam_getBody()->StartEventCamera(12, fopAcM_GetID(this), nullptr);
     mProcVar1.field_0x300a = 0;
     mMsgClassID = fpcM_ERROR_PROCESS_ID_e;
@@ -4152,6 +4188,11 @@ int daAlink_c::procWolfHowlDemo() {
             if (checkUnderMove0BckNoArcWolf(WANM_HOWL_END) || isSkipEdge) {
                 if (checkAnmEnd(frameCtrl_p) || isSkipEdge) {
                     if (mProcVar0.mHowlExitID >= 0) {
+#if TARGET_PC
+                        // Co-op: scene-change handoff ends the singular howl presentation explicitly.
+                        dusk::coop::event_presentation::end(
+                            dusk::coop::event_presentation::Source::WolfHowl);
+#endif
                         dStage_changeScene(mProcVar0.mHowlExitID, 0.0f, 0, fopAcM_GetRoomNo(this),
                                            shape_angle.y, -1);
                     } else {
@@ -4159,6 +4200,9 @@ int daAlink_c::procWolfHowlDemo() {
                         if (daAlink_getAlinkActorClass()->getCorrectCurveID() == 9) {
                             if (dComIfGp_roomControl_getTimePass()) {
                                 g_env_light.time_change_rate = 1.0f;
+                                // Co-op: Dusk's Sun's Song shortcut closes the same global howl camera.
+                                dusk::coop::event_presentation::end(
+                                    dusk::coop::event_presentation::Source::WolfHowl);
                                 dComIfGp_event_reset();
                                 dCam_getBody()->EndEventCamera(fopAcM_GetID(this));
                             } else {
@@ -4194,6 +4238,11 @@ int daAlink_c::procWolfHowlDemo() {
                                 daHorse_c* horse = static_cast<daHorse_c*>(actor_p);
                                 int ret = horse->callHorse(&current.pos);
                                 if (ret == 1 || ret == 2) {
+#if TARGET_PC
+                                    // Co-op: horse-call handoff leaves the howl demo before its wait state.
+                                    dusk::coop::event_presentation::end(
+                                        dusk::coop::event_presentation::Source::WolfHowl);
+#endif
                                     mDoAud_taktModeMuteOff();
                                     return procCoHorseCallWaitInit(ret);
                                 }
@@ -4214,6 +4263,11 @@ int daAlink_c::procWolfHowlDemo() {
                         if (gwolf_p == NULL) {
                             resetSpecialEvent();
                         } else {
+#if TARGET_PC
+                            // Co-op: Golden Wolf handoff also leaves the shared howl presentation.
+                            dusk::coop::event_presentation::end(
+                                dusk::coop::event_presentation::Source::WolfHowl);
+#endif
                             endDemoMode();
                         }
 
@@ -4242,6 +4296,11 @@ int daAlink_c::procWolfHowlDemo() {
             if (gwolf_p != NULL) {
                 fopAcM_OnStatus(gwolf_p, 0x800);
                 gwolf_p->setHowlingFlag();
+#if TARGET_PC
+                // Co-op: Golden Wolf takes over after the authored howl camera closes.
+                dusk::coop::event_presentation::end(
+                    dusk::coop::event_presentation::Source::WolfHowl);
+#endif
                 dComIfGp_event_reset();
 
                 dCam_getBody()->EndEventCamera(fopAcM_GetID(this));
@@ -6109,9 +6168,17 @@ f32 daAlink_c::getWolfLieMoveSpeed() {
 }
 
 BOOL daAlink_c::checkMidnaDisappearMode() const {
+    // Co-op: Midna disappearance reads the owning wolf ALINK's prone-talk state.
+    const bool prone_talk_status = daAlink_checkOwnerCameraStatus0(this, 0x8000000);
+#if TARGET_PC
+    // Co-op: Midna/talk disappearance checks use this ALINK's presentation state.
+    const bool talk_status = dusk::coop::midna_owner::checkTalkStatus(this);
+#else
+    const bool talk_status = dComIfGp_checkPlayerStatus0(0, 0x10);
+#endif
+
     return mProcID == PROC_WOLF_DIG_THROUGH ||
-           (checkWolf() && dComIfGp_checkPlayerStatus0(0, 0x8000000) &&
-            !dComIfGp_checkPlayerStatus0(0, 0x10) &&
+           (checkWolf() && prone_talk_status && !talk_status &&
             !(mTargetedActor != NULL &&
               mTargetedActor->attention_info.flags & fopAc_AttnFlag_UNK_0x800000));
 }
@@ -6183,7 +6250,8 @@ int daAlink_c::procWolfLieStartInit(int param_0) {
     current.angle.y = shape_angle.y;
     field_0x2f99 = 0;
     mProcVar5.field_0x3012 = 30;
-    dComIfGp_setPlayerStatus0(0, 0x8000000);
+    // Co-op: wolf prone-talk posture state is per ALINK slot.
+    daAlink_setOwnerCameraStatus0(this, 0x8000000);
     return 1;
 }
 
@@ -6254,7 +6322,8 @@ int daAlink_c::procWolfLieMoveInit(int param_0) {
     mProcVar4.field_0x3010 = is_prev_talk;
     field_0x2f99 = 0xD;
 
-    dComIfGp_setPlayerStatus0(0, 0x8000000);
+    // Co-op: returning from talk to wolf prone movement preserves this slot's state only.
+    daAlink_setOwnerCameraStatus0(this, 0x8000000);
     if (var_r28) {
         dComIfGp_setPlayerStatus0(0, 0x2000);
     }
@@ -6406,7 +6475,8 @@ int daAlink_c::procWolfLieAutoMoveInit(int param_0, cXyz* param_1) {
     mNormalSpeed = 0.0f;
     field_0x2f99 = 13;
 
-    dComIfGp_setPlayerStatus0(0, 0x8000000);
+    // Co-op: wolf lie auto-move posture must not mark every Link as prone/talking.
+    daAlink_setOwnerCameraStatus0(this, 0x8000000);
     if (var_r30) {
         dComIfGp_setPlayerStatus0(0, 0x2000);
     }
@@ -6540,7 +6610,12 @@ void daAlink_c::setSpeedAndAngleSwimWolf() {
 
     setNormalSpeedF(speed, mpHIO->mWolf.mWlSwim.m.mDeceleration);
 
+#if TARGET_PC
+    // Co-op: wolf swim talk freeze follows this ALINK's slot-local presentation state.
+    if (dusk::coop::midna_owner::checkTalkStatus(this)) {
+#else
     if (dComIfGp_checkPlayerStatus0(0, 0x10)) {
+#endif
         mNormalSpeed = 0.0f;
     }
 }
@@ -6875,7 +6950,13 @@ void daAlink_c::setWolfLockDomeModel() {
     mItemVar0.field_0x3018 = 0;
     mSearchBallScale = mpHIO->mWolf.mWlAttack.mWlAtLock.m.mStartRadius;
 
-    dComIfGp_setPlayerStatus1(0, 0x800000);
+    daAlink_setOwnerCameraStatus1(this, 0x800000);
+#if TARGET_PC
+    // Co-op: trace the actor-side start of the wolf dome camera lifecycle.
+    dusk::diagnostics::recordWolfAoeCheckpoint(
+        "dome_model_create", this, -1, 0, 0x800000, mSearchBallScale, 0.0f, 0.0f,
+        static_cast<int>(mWolfLockNum), getWolfLockActorEnd());
+#endif
     seStartOnlyReverb(Z2SE_MIDNA_BIND_AREA_OPEN);
 
     if (dKy_darkworld_check()) {
@@ -6991,13 +7072,26 @@ void daAlink_c::searchWolfLockEnemy(fopAc_ac_c* i_actor, void* i_data) {
     }
 }
 
+struct daAlink_wolfLockSearch_c {
+    daAlink_c* owner;
+    fopAc_ac_c* actor;
+};
+
 static int daAlink_searchWolfLockEnemy(fopAc_ac_c* i_actor, void* i_data) {
-    daAlink_getAlinkActorClass()->searchWolfLockEnemy(i_actor, i_data);
+    daAlink_wolfLockSearch_c* search = static_cast<daAlink_wolfLockSearch_c*>(i_data);
+    if (search != NULL && search->owner != NULL) {
+        fopAc_ac_c* actor = NULL;
+        // Co-op: wolf lock scans use the charging ALINK's actor-local lock list.
+        search->owner->searchWolfLockEnemy(i_actor, &actor);
+        if (actor != NULL) {
+            search->actor = actor;
+        }
+    }
     return 0;
 }
 
 void daAlink_c::checkWolfComboCnt() {
-    if (!dComIfGp_checkPlayerStatus1(0, 0x1000000)) {
+    if (!daAlink_checkOwnerCameraStatus1(this, 0x1000000)) {
         if (mComboCutCount == 2 && checkAttentionLock()
             && (mAtCyl.ChkAtHit()
                 #if DEBUG
@@ -7164,7 +7258,7 @@ int daAlink_c::procWolfRollAttackMoveInit() {
     field_0x3198 = 0;
     field_0x2fe4 = shape_angle.y;
     voiceStartLevel(Z2SE_WL_V_ROAR);
-    dComIfGp_setPlayerStatus0(0, 0x40000000);
+    daAlink_setOwnerCameraStatus0(this, 0x40000000);
     return 1;
 }
 
@@ -7216,8 +7310,9 @@ int daAlink_c::procWolfRollAttackMove() {
             if (mWolfLockNum < 10) {
                 field_0x3478 = mSearchBallScale * mSearchBallScale;
 
-                fopAc_ac_c* lock_actor_p = NULL;
-                fopAcIt_Executor((fopAcIt_ExecutorFunc)daAlink_searchWolfLockEnemy, &lock_actor_p);
+                daAlink_wolfLockSearch_c search = {this, NULL};
+                fopAcIt_Executor((fopAcIt_ExecutorFunc)daAlink_searchWolfLockEnemy, &search);
+                fopAc_ac_c* lock_actor_p = search.actor;
 
                 if (lock_actor_p != NULL) {
                     for (int i = mWolfLockNum - 1; i >= 0; i--) {
@@ -7226,6 +7321,12 @@ int daAlink_c::procWolfRollAttackMove() {
 
                     mWolfLockAcKeep[0].setData(lock_actor_p);
                     mWolfLockNum++;
+#if TARGET_PC
+                    // Co-op: trace actor-local wolf lock acquisition before the camera consumes it.
+                    dusk::diagnostics::recordWolfAoeCheckpoint(
+                        "lock_acquired", this, -1, 0, 0x800000, mSearchBallScale, 0.0f,
+                        0.0f, static_cast<int>(mWolfLockNum), lock_actor_p);
+#endif
                 }
             }
         }
@@ -7515,6 +7616,8 @@ int daAlink_c::procWolfJumpAttackKick() {
 
 int daAlink_c::procWolfJumpAttackSlideLandInit(int param_0, int param_1, int param_2) {
     commonProcInit(PROC_WOLF_JUMP_AT_SLIDE_LAND);
+    // Co-op: landing exits the owner-local wolf dome/lock camera presentation state.
+    daAlink_clearOwnerCameraStatus1(this, 0x800000 | 0x1000000);
 
     if (mTargetedActor == NULL || !param_0 ||
         (fopAcM_GetGroup(mTargetedActor) == fopAc_ENEMY_e &&
@@ -7602,6 +7705,8 @@ int daAlink_c::procWolfJumpAttackSlideLand() {
 
 int daAlink_c::procWolfJumpAttackNormalLandInit(int param_0) {
     commonProcInit(PROC_WOLF_JUMP_AT_NORMAL_LAND);
+    // Co-op: landing exits the owner-local wolf dome/lock camera presentation state.
+    daAlink_clearOwnerCameraStatus1(this, 0x800000 | 0x1000000);
     setSingleAnimeWolfParam(WANM_ATTACK_A_END, &mpHIO->mWolf.mWlAttack.mWlAtLand.m.mNormalLandingAnm);
 
     setFootEffectProcType(2);
@@ -7806,6 +7911,9 @@ int daAlink_c::procWolfWaitAttack() {
 
 int daAlink_c::procWolfRollAttackInit(int param_0, int param_1) {
     commonProcInit(PROC_WOLF_ROLL_ATTACK);
+    // Co-op: non-lock release exits that ALINK's held-B dome camera lifecycle.
+    daAlink_clearOwnerCameraStatus0(this, 0x40000000);
+    daAlink_clearOwnerCameraStatus1(this, 0x800000 | 0x1000000);
 
     if (param_0 == 2) {
         param_0 = getCutTurnDirection();
@@ -8026,6 +8134,9 @@ int daAlink_c::procWolfDownAtMissLand() {
 
 int daAlink_c::procWolfLockAttackInit(int param_0) {
     commonProcInit(PROC_WOLF_LOCK_ATTACK);
+    // Co-op: lock attack owns dome/attack status after the charge state has ended.
+    daAlink_clearOwnerCameraStatus0(this, 0x40000000);
+    daAlink_clearOwnerCameraStatus1(this, 0x800000);
     setSingleAnimeWolfParam(WANM_ATTACK_A_START, &mpHIO->mWolf.mWlAttack.mWlAtNjump.m.mAerialAttackAnm);
 
     if (fopAcM_GetName(mWolfLockAcKeep[0].getActor()) == fpcNm_E_YMB_e) {
@@ -8084,7 +8195,7 @@ int daAlink_c::procWolfLockAttackInit(int param_0) {
     setCutType(CUT_TYPE_WOLF_LOCK);
     voiceStart(Z2SE_WL_V_ATTACK_THRUST);
 
-    dComIfGp_setPlayerStatus1(0, 0x1000000);
+    daAlink_setOwnerCameraStatus1(this, 0x1000000);
     dComIfGp_particle_set(ID_ZI_J_WL_LOCKATDASH_A, &current.pos, &current.angle, 0);
     return 1;
 }
@@ -8175,7 +8286,7 @@ int daAlink_c::procWolfLockAttackTurnInit(int param_0) {
     setFootEffectProcType(1);
     mNormalSpeed *= 0.5f;
     field_0x2f99 = 4;
-    dComIfGp_setPlayerStatus1(0, 0x1000000);
+    daAlink_setOwnerCameraStatus1(this, 0x1000000);
     offResetFlg0(RFLG0_UNK_8000000);
     mComboCutCount++;
     mProcVar1.field_0x300a = param_0;

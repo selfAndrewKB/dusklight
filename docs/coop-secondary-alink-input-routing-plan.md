@@ -21,7 +21,8 @@ This milestone is not full combat, item use, camera, UI, targeting, interaction,
 - P1's earlier animation lock was caused by shared `J3DModelData` matrix-calculator ownership, not by input/action state.
 - Scoped secondary `execute()` is partially viable: P2 can idle animate while P1 remains stable.
 - P2 shield/target pose mirroring was caused by secondary `checkAttentionLock()` consuming P1's shared global `dAttention_c::Lockon()` state.
-- With `Ignore shared attention lock` enabled, P2 no longer mirrors P1's shield/target pose.
+- With the old `Ignore shared attention lock` containment enabled, P2 no longer mirrored P1's
+  shield/target pose. That finding has since graduated into `player_attention`.
 - `dusk::coop::readInputForActor(this)` already exists and the first ALINK input cluster uses slot-aware snapshots for stick and item button state.
 - Diagnostics can distinguish `input.pad`, `attention.state`, `player.status`, `coop.probes`, and `alink.secondary`.
 - Slot 1 input already maps to `PAD_2` through `dusk::coop::getPadForSlot(PlayerSlot::Slot1)`. The slot API also maps slots 2 and 3 to `PAD_3` and `PAD_4`, though the rest of the ALINK/camera stack is not validated for those slots yet.
@@ -48,7 +49,8 @@ This milestone is not full combat, item use, camera, UI, targeting, interaction,
    - Prefer using existing `input.pad`, `player.status`, `attention.state`, and `alink.secondary`.
    - Keep `events.jsonl` semantic; do not add frame-churn event keys.
 3. Test secondary execute with current default containment and P2 controller input.
-   - Default probes should include scoped model-data ownership and `Ignore shared attention lock`.
+   - Historical default probes included scoped model-data ownership and the old shared-attention
+     containment flag; current builds use `player_attention` instead of that flag.
    - Spawn P2, uncheck `Skip execute`, move P2 stick, and flush diagnostics.
 4. If P2 does not move, inspect the blocked layer:
    - input snapshot not reaching secondary ALINK;
@@ -122,8 +124,9 @@ Failure conditions:
 
 Track these once basic locomotion works:
 
-- Decide which secondary ALINK probe flags graduate into normal containment.
-- Rename `Ignore shared attention lock` if it becomes a real per-player helper.
+- Shared ALINK model-data calculator scoping graduated into `alink_model_data_owner`; it is runtime
+  policy around additional-player startup evaluation, execute, and draw rather than a debug toggle.
+- The old shared-attention containment flag has been superseded by `player_attention`.
 - Reduce old `dusk::coop.alink` checkpoint logging once diagnostics artifacts cover the same facts.
 - Move the Actor Spawner secondary ALINK harness into a dedicated co-op debug panel if it survives beyond this milestone.
 - Archive completed audit details if `docs/coop-alink-duplication-audit-plan.md` becomes too bulky for active use.

@@ -27,6 +27,10 @@
 #include "m_Do/m_Do_controller_pad.h"
 
 #ifdef TARGET_PC
+#include "dusk/coop/event_presentation.h"
+#include "dusk/coop/hud_diagnostics.h"
+#include "dusk/coop/player_slots.h"
+#include "dusk/coop/ui_owner.h"
 #include "dusk/frame_interpolation.h"
 #endif
 
@@ -142,15 +146,27 @@ private:
 };
 
 BOOL dMw_UP_TRIGGER() {
+#if TARGET_PC
+    return mDoCPd_c::getTrigUp(dusk::coop::ui_owner::currentPad()) != 0;
+#else
     return mDoCPd_c::getTrigUp(PAD_1) != 0;
+#endif
 }
 
 BOOL dMw_DOWN_TRIGGER() {
+#if TARGET_PC
+    return mDoCPd_c::getTrigDown(dusk::coop::ui_owner::currentPad()) != 0;
+#else
     return mDoCPd_c::getTrigDown(PAD_1) != 0;
+#endif
 }
 
 BOOL dMw_LEFT_TRIGGER() {
+#if TARGET_PC
+    if (mDoCPd_c::getTrigLeft(dusk::coop::ui_owner::currentPad()) && !dMw_UP_TRIGGER()) {
+#else
     if (mDoCPd_c::getTrigLeft(PAD_1) && !dMw_UP_TRIGGER()) {
+#endif
         return true;
     } else {
         return false;
@@ -158,7 +174,11 @@ BOOL dMw_LEFT_TRIGGER() {
 }
 
 BOOL dMw_RIGHT_TRIGGER() {
+#if TARGET_PC
+    if (mDoCPd_c::getTrigRight(dusk::coop::ui_owner::currentPad()) && !dMw_UP_TRIGGER()) {
+#else
     if (mDoCPd_c::getTrigRight(PAD_1) && !dMw_UP_TRIGGER()) {
+#endif
         return true;
     } else {
         return false;
@@ -166,15 +186,27 @@ BOOL dMw_RIGHT_TRIGGER() {
 }
 
 BOOL dMw_A_TRIGGER() {
+#if TARGET_PC
+    return mDoCPd_c::getTrigA(dusk::coop::ui_owner::currentPad()) != 0;
+#else
     return mDoCPd_c::getTrigA(PAD_1) != 0;
+#endif
 }
 
 BOOL dMw_B_TRIGGER() {
+#if TARGET_PC
+    return mDoCPd_c::getTrigB(dusk::coop::ui_owner::currentPad()) != 0;
+#else
     return mDoCPd_c::getTrigB(PAD_1) != 0;
+#endif
 }
 
 BOOL dMw_Z_TRIGGER() {
+#if TARGET_PC
+    return mDoCPd_c::getTrigZ(dusk::coop::ui_owner::currentPad()) != 0;
+#else
     return mDoCPd_c::getTrigZ(PAD_1) != 0;
+#endif
 }
 
 BOOL dMw_START_TRIGGER() {
@@ -202,11 +234,22 @@ void dMw_onMenuRing() {
     }
 }
 
+#if TARGET_PC
+void dMw_onMenuRingForPlayer(const fopAc_ac_c* i_player) {
+    // Co-op: fishing can force the singular item wheel, so retain the requesting ALINK slot.
+    dusk::coop::ui_owner::retainSingularSlot(dusk::coop::getSlotForActor(i_player));
+    dMw_onMenuRing();
+}
+#endif
+
 void dMw_offMenuRing() {
     dMw_c* menu_window = dMeter2Info_getMenuWindowClass();
     if (menu_window != NULL) {
         menu_window->offShowFlag();
     }
+#if TARGET_PC
+    dusk::coop::ui_owner::clearSingularSlot();
+#endif
 }
 
 static BOOL dMw_isMenuRing() {
@@ -304,6 +347,10 @@ void dMw_c::key_wait_init(u8 i_proc) {
     case COLLECT_CLOSE:
         dMw_fade_in();
         dMw_collect_delete(true);
+#if TARGET_PC
+        // Co-op: retain fullscreen presentation across collection descendants, then restore here.
+        dusk::coop::event_presentation::end(dusk::coop::event_presentation::Source::PauseMenu);
+#endif
         break;
     case DMAP_CLOSE:
         dMw_dmap_delete(true);
@@ -317,10 +364,18 @@ void dMw_c::key_wait_init(u8 i_proc) {
     case SAVE_CLOSE:
         dMw_fade_in();
         dMw_save_delete();
+#if TARGET_PC
+        // Co-op: saving can exit the collection tree directly instead of returning to its root.
+        dusk::coop::event_presentation::end(dusk::coop::event_presentation::Source::PauseMenu);
+#endif
         break;
     case INSECT_AGITHA_CLOSE:
         dMw_fade_in();
         dMw_insect_delete();
+#if TARGET_PC
+        // Co-op: Agitha's standalone captured screen restores split presentation after cleanup.
+        dusk::coop::event_presentation::end(dusk::coop::event_presentation::Source::AgithaInsect);
+#endif
         break;
     }
     mpHeap->freeAll();
@@ -340,6 +395,10 @@ static f32 dummy() {
 }
 
 void dMw_c::collect_open_init(u8) {
+#if TARGET_PC
+    // Co-op: the authored Start-menu tree captures and presents one global fullscreen surface.
+    dusk::coop::event_presentation::begin(dusk::coop::event_presentation::Source::PauseMenu);
+#endif
     field_0x144 = 3;
     dMeter2Info_setWindowStatus(3);
     Z2GetAudioMgr()->seStart(Z2SE_SY_MENU_IN, NULL, 0, 0, 1.0f, 1.0f, -1.0f, -1.0f, 0);
@@ -529,6 +588,10 @@ void dMw_c::collect_insect_close_init(u8) {
 }
 
 void dMw_c::insect_open_init(u8) {
+#if TARGET_PC
+    // Co-op: Agitha's NPC-triggered insect screen is a singular captured fullscreen surface.
+    dusk::coop::event_presentation::begin(dusk::coop::event_presentation::Source::AgithaInsect);
+#endif
     field_0x144 = 10;
     dMeter2Info_setWindowStatus(10);
     Z2GetAudioMgr()->seStart(Z2SE_SY_MENU_SUB_IN, NULL, 0, 0, 1.0f, 1.0f, -1.0f, -1.0f, 0);
@@ -547,6 +610,31 @@ void dMw_c::insect_close_init(u8) {
 }
 
 void dMw_c::key_wait_proc() {
+#if TARGET_PC
+    dusk::coop::PlayerSlot ring_owner = dusk::coop::PlayerSlot::Invalid;
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        dusk::coop::PlayerSlot slot = static_cast<dusk::coop::PlayerSlot>(i);
+        // Co-op: P1 keeps vanilla menu availability before player-slot registration finishes.
+        if (slot != dusk::coop::PlayerSlot::Primary && dusk::coop::getPlayer(slot) == NULL) {
+            continue;
+        }
+
+        int pad = dusk::coop::getPadForSlot(slot);
+        if (mDoCPd_c::getTrigUp(pad) || mDoCPd_c::getTrigDown(pad)) {
+            ring_owner = slot;
+            break;
+        }
+    }
+    bool ring_owner_triggered = ring_owner != dusk::coop::PlayerSlot::Invalid;
+    bool ring_owner_scope_ready =
+        !ring_owner_triggered ||
+        !dComIfGp_checkCameraAttentionStatus(
+            dComIfGp_getPlayerCameraID(static_cast<int>(ring_owner)), 8);
+    bool primary_menu_scope_ready = !dComIfGp_checkCameraAttentionStatus(0, 8);
+    bool ring_owner_down_triggered =
+        ring_owner_triggered && mDoCPd_c::getTrigDown(dusk::coop::getPadForSlot(ring_owner));
+#endif
+
     if (field_0x14B != 0) {
         switch (field_0x14B) {
         case 1:
@@ -575,7 +663,12 @@ void dMw_c::key_wait_proc() {
         dComIfGp_getMesgStatus() == 0 &&
         dCam_getBody()->Mode() != 7 &&
         dCam_getBody()->Mode() != 8 &&
+#if TARGET_PC
+        // Co-op: retain vanilla P1 menu gating, but let an unscoped P2 request its singular wheel.
+        (primary_menu_scope_ready || (ring_owner_triggered && ring_owner_scope_ready)) &&
+#else
         !dComIfGp_checkCameraAttentionStatus(0, 8) &&
+#endif
         !dComIfGp_isPauseFlag() &&
         isPauseWindow() &&
         isPauseReady() &&
@@ -650,19 +743,63 @@ void dMw_c::key_wait_proc() {
                 mMenuProc = DMAP_OPEN;
                 dMw_dmap_create();
             }
-        } else if ((((dMw_UP_TRIGGER() || dMw_DOWN_TRIGGER()) && !dMw_LEFT_TRIGGER() && !dMw_RIGHT_TRIGGER()) || dMeter2Info_isMenuInForce(2) || dMeter2Info_isTouchKeyCheck(2)) &&
+        // Co-op: evaluate ring-opening direction against the detected owner before retaining it.
+        } else if ((((
+#if TARGET_PC
+                        ring_owner_triggered
+#else
+                        dMw_UP_TRIGGER() || dMw_DOWN_TRIGGER()
+#endif
+                       )
+#if TARGET_PC
+                       && !mDoCPd_c::getTrigLeft(dusk::coop::getPadForSlot(ring_owner))
+                       && !mDoCPd_c::getTrigRight(dusk::coop::getPadForSlot(ring_owner))
+#else
+                       && !dMw_LEFT_TRIGGER() && !dMw_RIGHT_TRIGGER()
+#endif
+                      ) || dMeter2Info_isMenuInForce(2) || dMeter2Info_isTouchKeyCheck(2)) &&
                    dMeter2Info_isWindowAccept(2) &&
                    (dMeter2Info_getMapStatus() == 0 || dMeter2Info_getMapStatus() == 1) &&
                    dMeter2Info_isItemOpenCheck() &&
+#if TARGET_PC
+                   ring_owner_scope_ready &&
+#endif
                    !dComIfGp_isEnableNextStage())
         {
+#if TARGET_PC
+            // Co-op: the item wheel remains singular, but its opening pad owns it until close.
+            if (ring_owner_triggered) {
+                dusk::coop::ui_owner::retainSingularSlot(ring_owner);
+            }
+            // Co-op: capture the transient 2D heap owners around singular-wheel admission so
+            // recovery-state menu failures can be classified without changing vanilla timing.
+            dMeter2_c* meter = dMeter2Info_getMeterClass();
+            dusk::coop::hud_diagnostics::recordRingAdmission(
+                dusk::coop::hud_diagnostics::RingAdmissionPhase::Request,
+                dusk::coop::ui_owner::singularSlot(),
+                meter != NULL && meter->hasPrimaryEmphasisButton(),
+                meter != NULL && meter->hasSecondaryEmphasisButton());
+#endif
             dMsgObject_setKillMessageFlag();
 
             if (dComIfGp_isHeapLockFlag() == 5) {
                 dMeter2Info_getMeterClass()->emphasisButtonDelete();
             }
+#if TARGET_PC
+            dusk::coop::hud_diagnostics::recordRingAdmission(
+                dusk::coop::hud_diagnostics::RingAdmissionPhase::PromptCleanup,
+                dusk::coop::ui_owner::singularSlot(),
+                meter != NULL && meter->hasPrimaryEmphasisButton(),
+                meter != NULL && meter->hasSecondaryEmphasisButton());
+#endif
 
-            if (dMw_DOWN_TRIGGER()) {
+            if (
+#if TARGET_PC
+                ring_owner_down_triggered
+#else
+                dMw_DOWN_TRIGGER()
+#endif
+            ) {
                 field_0x14B = 1;
                 dMw_ring_create(2);
             } else {
@@ -1082,6 +1219,23 @@ void dMw_c::dMw_ring_create(u8 i_origin) {
     markMemSize();
     dComIfGp_setHeapLockFlag(1);
 
+#if TARGET_PC
+    // Co-op: collapse around the retained wheel owner's camera before capturing its background.
+    dusk::coop::event_presentation::Options presentation_options;
+    presentation_options.fullscreenSlot = dusk::coop::ui_owner::singularSlot();
+    dusk::coop::event_presentation::begin(dusk::coop::event_presentation::Source::ItemRing,
+                                          presentation_options);
+    // Co-op: the retained singular wheel owner supplies both menu sticks until the wheel closes.
+    mpStick->setPad(dusk::coop::ui_owner::currentPad());
+    mpCStick->setPad(dusk::coop::ui_owner::currentPad());
+    // Co-op: leave a durable final admission snapshot immediately before wheel allocations begin.
+    dMeter2_c* meter = dMeter2Info_getMeterClass();
+    dusk::coop::hud_diagnostics::recordRingAdmission(
+        dusk::coop::hud_diagnostics::RingAdmissionPhase::Create,
+        dusk::coop::ui_owner::singularSlot(),
+        meter != NULL && meter->hasPrimaryEmphasisButton(),
+        meter != NULL && meter->hasSecondaryEmphasisButton());
+#endif
     mpMenuRing = JKR_NEW dMenu_Ring_c(mpHeap, mpStick, mpCStick, i_origin);
     JUT_ASSERT(2038, mpMenuRing != NULL);
     mpMenuRing->_create();
@@ -1111,6 +1265,19 @@ bool dMw_c::dMw_ring_delete() {
     }
 
     checkMemSize();
+#if TARGET_PC
+    // Co-op: restore split presentation only after the captured wheel surface has been released.
+    dusk::coop::event_presentation::end(dusk::coop::event_presentation::Source::ItemRing);
+    // Co-op: do not let a closed wheel leave later singular UI reads bound to P2.
+    // Scene teardown deletes these controls before it deletes the ring.
+    if (mpStick != NULL) {
+        mpStick->setPad(PAD_1);
+    }
+    if (mpCStick != NULL) {
+        mpCStick->setPad(PAD_1);
+    }
+    dusk::coop::ui_owner::clearSingularSlot();
+#endif
     return true;
 }
 
@@ -1139,6 +1306,10 @@ bool dMw_c::dMw_collect_delete(bool) {
 }
 
 void dMw_c::dMw_fmap_create() {
+#if TARGET_PC
+    // Co-op: field maps remain global, but their captured surface must present fullscreen.
+    dusk::coop::event_presentation::begin(dusk::coop::event_presentation::Source::FieldMap);
+#endif
     markMemSize();
     dComIfGp_setHeapLockFlag(2);
 
@@ -1193,10 +1364,18 @@ bool dMw_c::dMw_fmap_delete(bool param_0) {
     }
 
     checkMemSize();
+#if TARGET_PC
+    // Co-op: release fullscreen presentation after the native field-map capture is gone.
+    dusk::coop::event_presentation::end(dusk::coop::event_presentation::Source::FieldMap);
+#endif
     return true;
 }
 
 void dMw_c::dMw_dmap_create() {
+#if TARGET_PC
+    // Co-op: dungeon maps remain global, but their captured surface must present fullscreen.
+    dusk::coop::event_presentation::begin(dusk::coop::event_presentation::Source::DungeonMap);
+#endif
     markMemSize();
     dComIfGp_setHeapLockFlag(3);
 
@@ -1242,6 +1421,10 @@ bool dMw_c::dMw_dmap_delete(bool param_0) {
     }
 
     checkMemSize();
+#if TARGET_PC
+    // Co-op: release fullscreen presentation after the native dungeon-map capture is gone.
+    dusk::coop::event_presentation::end(dusk::coop::event_presentation::Source::DungeonMap);
+#endif
     return true;
 }
 
@@ -1727,6 +1910,11 @@ int dMw_c::_delete() {
         return 0;
     } else {
         dMw_capture_delete();
+#if TARGET_PC
+        // Co-op: scene teardown can bypass ordinary menu close states; clear menu-only sources.
+        dusk::coop::event_presentation::end(dusk::coop::event_presentation::Source::PauseMenu);
+        dusk::coop::event_presentation::end(dusk::coop::event_presentation::Source::AgithaInsect);
+#endif
         mDoExt_setCurrentHeap(heap);
         mDoExt_removeMesgFont();
         return 1;
@@ -1771,7 +1959,7 @@ static leafdraw_method_class l_dMw_Method = {
     (process_method_func)dMw_Draw,
 };
 
-msg_process_profile_definition g_profile_MENUWINDOW = {
+DUSK_PROFILE msg_process_profile_definition DUSK_CONST g_profile_MENUWINDOW = {
     /* Layer ID    */ fpcLy_CURRENT_e,
     /* List ID     */ 12,
     /* List Prio   */ fpcPi_CURRENT_e,

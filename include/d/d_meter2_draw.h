@@ -7,6 +7,7 @@ class CPaneMgr;
 class CPaneMgrAlpha;
 class J2DAnmColorKey;
 class J2DAnmTransformKey;
+class J2DGrafContext;
 class JKRExpHeap;
 class JKRHeap;
 
@@ -152,6 +153,9 @@ public:
     constexpr f32 getButtonZAlpha() const {
         return mButtonZAlpha;
     }
+
+    // Co-op: split-screen presents the shared button HUD once per player viewport.
+    void drawCoopSecondaryButtonHud(J2DGrafContext*);
 #endif
 
 private:

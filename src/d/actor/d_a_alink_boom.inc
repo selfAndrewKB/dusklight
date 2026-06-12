@@ -7,7 +7,14 @@
 #include "d/actor/d_a_boomerang.h"
 
 BOOL daAlink_c::checkBoomerangLockAccept() {
-    return mSight.getDrawFlg() && dComIfGp_checkPlayerStatus0(0, 0x80000);
+#if TARGET_PC
+    // Co-op: boomerang camera/lock state is owned by this player slot.
+    return mSight.getDrawFlg() &&
+           dusk::coop::player_camera_status::checkStatus0ForPlayer(this, 0x80000);
+#else
+    return mSight.getDrawFlg() &&
+           dComIfGp_checkPlayerStatus0(0, 0x80000);
+#endif
 }
 
 f32 daAlink_c::getBoomSpeed() {
@@ -185,9 +192,19 @@ void daAlink_c::throwBoomerang() {
 
         item->shape_angle.y = shape_angle.y;
         mThrowBoomerangAcKeep = mItemAcKeep;
+#if TARGET_PC
+        // Co-op: the thrown-boomerang camera focus bit belongs to the throwing player.
+        dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x400000);
+#else
         dComIfGp_setPlayerStatus0(0, 0x400000);
+#endif
         daPy_boomerangMove_c::initDropAngleY();
+#if TARGET_PC
+        // Co-op: boomerang cancel clears only this player's camera/lock state.
+        dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0x80000);
+#else
         dComIfGp_clearPlayerStatus0(0, 0x80000);
+#endif
         mFastShotTime = -1;
         daPy_boomerangMove_c::offEventKeepFlg();
     } else {
@@ -233,7 +250,12 @@ void daAlink_c::throwBoomerang() {
 }
 
 int daAlink_c::returnBoomerang(int param_0) {
+#if TARGET_PC
+    // Co-op: returning boomerangs clear only the owner player's focus bit.
+    dusk::coop::player_camera_status::clearStatus0ForPlayer(this, 0x400000);
+#else
     dComIfGp_clearPlayerStatus0(0, 0x400000);
+#endif
 
     if (mEquipItem == dItemNo_NONE_e
         && !checkMagneBootsOn()
@@ -372,7 +394,12 @@ int daAlink_c::procBoomerangSubjectInit() {
     initBoomerangUpperAnimeSpeed(1);
     setSingleAnimeBaseSpeed(ANM_ATN_WAIT_RIGHT, 0.0f,
                             mpHIO->mItem.mBoomerang.m.mStartInterpolation);
+#if TARGET_PC
+    // Co-op: boomerang subject mode drives only the owner slot's camera.
+    dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x80000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x80000);
+#endif
     current.angle.y = shape_angle.y;
 
     return 1;
@@ -412,7 +439,12 @@ int daAlink_c::procBoomerangMoveInit() {
     initBoomerangUpperAnimeSpeed(0);
     setBlendAtnMoveAnime(mpHIO->mItem.mBoomerang.m.mStartInterpolation);
 
+#if TARGET_PC
+    // Co-op: boomerang move aim drives only the owner slot's camera.
+    dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x80000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x80000);
+#endif
     return 1;
 }
 

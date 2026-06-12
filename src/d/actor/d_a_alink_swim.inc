@@ -185,7 +185,7 @@ void daAlink_c::swimBgCheck(f32 param_0) {
 }
 
 void daAlink_c::setSpeedAndAngleSwim() {
-    if (!checkBootsOrArmorHeavy() && dComIfGp_getDoStatus() == BUTTON_STATUS_NONE && (!checkHookshotAnime() || (checkHookshotItem(mEquipItem) && (mItemMode == 0 || mItemMode == 1)))) {
+    if (!checkBootsOrArmorHeavy() && getDoStatus() == BUTTON_STATUS_NONE && (!checkHookshotAnime() || (checkHookshotItem(mEquipItem) && (mItemMode == 0 || mItemMode == 1)))) {
         if (checkZoraWearAbility()) {
             if (checkNoResetFlg0(FLG0_SWIM_UP)) {
                 if (field_0x2fcd == 0) {
@@ -216,7 +216,7 @@ void daAlink_c::setSpeedAndAngleSwim() {
             if (checkEventRun()) {
                 var_r28 = mMoveAngle;
             } else {
-                var_r28 = shape_angle.y + (16384.0f * cM_ssin(mStickAngle));
+                var_r28 = shape_angle.y + (16384.0f * cM_ssin(mStickAngle) IF_DUSK(* (dusk::getSettings().game.invertAirSwimX ? -1.0f : 1.0f)));
             }
 
             cLib_addCalcAngleS(&shape_angle.y, var_r28, mpHIO->mSwim.m.mUnderwaterTurnRate, mpHIO->mSwim.m.mUnderwaterMaxTurn, mpHIO->mSwim.m.mUnderwaterMinTurn);
@@ -284,7 +284,12 @@ void daAlink_c::setSpeedAndAngleSwim() {
 
     setNormalSpeedF(var_f30, var_f28);
 
+#if TARGET_PC
+    // Co-op: swim talk freeze follows this ALINK's slot-local presentation state.
+    if (dusk::coop::midna_owner::checkTalkStatus(this)) {
+#else
     if (dComIfGp_checkPlayerStatus0(0, 0x10)) {
+#endif
         mNormalSpeed = 0.0f;
     }
 
@@ -835,7 +840,7 @@ void daAlink_c::setSwimMoveAnime() {
         } else {
             s16 var_r24;
             if (checkInputOnR() && !checkEventRun()) {
-                var_r24 = 13653.0f * cM_scos(mStickAngle);
+                var_r24 = 13653.0f * cM_scos(mStickAngle) IF_DUSK(* (dusk::getSettings().game.invertAirSwimY ? -1.0f : 1.0f));
             } else {
                 var_r24 = 0;
             }
@@ -854,11 +859,11 @@ void daAlink_c::setSwimMoveAnime() {
 }
 
 bool daAlink_c::checkSwimButtonAccept() {
-    return dComIfGp_getDoStatus() == BUTTON_STATUS_DIVE || dComIfGp_getDoStatus() == BUTTON_STATUS_SWIM;
+    return getDoStatus() == BUTTON_STATUS_DIVE || getDoStatus() == BUTTON_STATUS_SWIM;
 }
 
 bool daAlink_c::checkUpSwimButtonAccept() {
-    return dComIfGp_getDoStatus() == BUTTON_STATUS_UNK_151;
+    return getDoStatus() == BUTTON_STATUS_UNK_151;
 }
 
 BOOL daAlink_c::checkSwimButtonMove() {
@@ -1115,7 +1120,7 @@ int daAlink_c::procSwimMove() {
 
     if (checkSwimButtonAccept() && doTrigger() && !getZoraSwim()) {
         procSwimDiveInit();
-    } else if (dComIfGp_getDoStatus() == BUTTON_STATUS_DASH && doTrigger()) {
+    } else if (getDoStatus() == BUTTON_STATUS_DASH && doTrigger()) {
         onNoResetFlg1(FLG1_DASH_MODE);
         field_0x30d0 = mpHIO->mSwim.m.field_0x5c;
         setSingleAnimeParam(ANM_SWIM_DASH, &mpHIO->mSwim.m.mDashAnm);

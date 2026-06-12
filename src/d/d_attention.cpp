@@ -13,6 +13,7 @@
 #include <cstring>
 
 #if TARGET_PC
+#include "dusk/coop/player_attention.h"
 #include "dusk/settings.h"
 #endif
 
@@ -38,6 +39,33 @@ static bool padLockTrigger(s32 i_padNo) {
 
 static bool padLockButton(s32 i_padNo) {
     return mDoCPd_c::getHoldLockL(i_padNo) != 0;
+}
+
+static bool isLockBlockedByPlayerStatus(dAttention_c* attention) {
+#if TARGET_PC
+    // Co-op: slot-local attention must not be vetoed by P1's singleton player status.
+    return dusk::coop::player_attention::isLockBlockedByPlayerStatus(attention);
+#else
+    return dComIfGp_checkPlayerStatus0(0, 0x36A02311) || dComIfGp_checkPlayerStatus1(0, 0x11);
+#endif
+}
+
+static u32 attentionFlagsForOwner(dAttention_c* attention) {
+#if TARGET_PC
+    // Co-op: P2's actor attention flags are hidden, but P2's scanner still needs target capabilities.
+    return dusk::coop::player_attention::attentionFlagsForOwner(attention);
+#else
+    return attention != NULL && attention->mpPlayer != NULL ? attention->mpPlayer->attention_info.flags : 0;
+#endif
+}
+
+static bool canSelectAttentionActor(dAttention_c* attention, fopAc_ac_c* actor) {
+#if TARGET_PC
+    // Co-op: additional players should acquire world targets, not other Link actors.
+    return dusk::coop::player_attention::canSelectActor(attention, actor);
+#else
+    return true;
+#endif
 }
 }  // namespace
 
@@ -648,11 +676,11 @@ void dAttention_c::setOwnerAttentionPos() {
 int dAttention_c::SelectAttention(fopAc_ac_c* i_actor) {
     cSAngle angle;
     cSAngle inv_angle;
-    if (i_actor == mpPlayer || mpPlayer == NULL) {
+    if (i_actor == mpPlayer || mpPlayer == NULL || !canSelectAttentionActor(this, i_actor)) {
         return 0;
     }
 
-    mPlayerAttentionFlags = mpPlayer->attention_info.flags;
+    mPlayerAttentionFlags = attentionFlagsForOwner(this);
 
     cSGlobe globe(i_actor->attention_info.position - mOwnerAttnPos);
     angle = globe.U() - fopAcM_GetShapeAngle_p(mpPlayer)->y;
@@ -894,8 +922,7 @@ void dAttention_c::runDrawProc() {
         draw[0].mCursorOffsetY = mAttParam.mAttnCursorOffsetY;
         draw[0].field_0x175 = 1;
 
-        if (!dComIfGp_checkPlayerStatus0(0, 0x36a02311) ||
-            dComIfGp_checkPlayerStatus1(0, 0x11)) {
+        if (!isLockBlockedByPlayerStatus(this)) {
             lockSoundStart(Z2SE_SY_L_FOCUS_SET);
         }
     } else if (chkFlag(0x10)) {
@@ -905,8 +932,7 @@ void dAttention_c::runDrawProc() {
             setFlag(0x40000000);
         }
 
-        if (!dComIfGp_checkPlayerStatus0(0, 0x36a02311) ||
-            dComIfGp_checkPlayerStatus1(0, 0x11)) {
+        if (!isLockBlockedByPlayerStatus(this)) {
             lockSoundStart(Z2SE_SY_L_FOCUS_RESET);
         }
     } else if (chkFlag(0x1)) {
@@ -1044,7 +1070,7 @@ void dAttention_c::checkButton() {
         }
     }
 
-    if (dComIfGp_checkPlayerStatus0(0, 0x36a02311) || dComIfGp_checkPlayerStatus1(0, 0x11)) {
+    if (isLockBlockedByPlayerStatus(this)) {
         switch (field_0x32b) {
         case 0:
         case 1:
@@ -1616,13 +1642,21 @@ void dAttDraw_c::draw(cXyz& i_pos, Mtx i_mtx) {
         mNoticeCursor02Brk[mDrawType].entry(modelData);
     }
 
-    dComIfGd_setList3Dlast();
+#if TARGET_PC
+    // Co-op: split-screen lock cursors need a camera-local buffer instead of shared 3D-last.
+    if (dusk::coop::player_attention::isViewportCursorDrawActive()) {
+        dusk::coop::player_attention::setViewportCursorDrawList();
+    } else
+#endif
+    {
+        dComIfGd_setList3Dlast();
+    }
     mDoExt_modelUpdateDL(mModel[mDrawType]);
     dComIfGd_setList();
 }
 
 fopAc_ac_c* dAttention_c::LockonTarget(s32 i_no) {
-    if (dComIfGp_checkPlayerStatus0(0, 0x36A02311) || dComIfGp_checkPlayerStatus1(0, 0x11)) {
+    if (isLockBlockedByPlayerStatus(this)) {
         return NULL;
     }
 
@@ -1661,7 +1695,7 @@ f32 dAttention_c::LockonReleaseDistanse() {
 }
 
 fpc_ProcID dAttention_c::LockonTargetPId(s32 i_no) {
-    if (dComIfGp_checkPlayerStatus0(0, 0x36A02311) || dComIfGp_checkPlayerStatus1(0, 0x11)) {
+    if (isLockBlockedByPlayerStatus(this)) {
         return fpcM_ERROR_PROCESS_ID_e;
     }
 

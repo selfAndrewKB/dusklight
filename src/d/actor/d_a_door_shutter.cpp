@@ -13,16 +13,30 @@
 #include "d/d_com_inf_game.h"
 #include "d/d_msg_object.h"
 #include "d/d_map_path_dmap.h"
+#if TARGET_PC
+#include "dusk/coop/event_owner.h"
+#include "dusk/coop/interaction_owner.h"
+#endif
+#include "dusk/coop/render_visibility.h"
 #include "SSystem/SComponent/c_math.h"
 #include <cstdio>
 #include <cstring>
+
+static daPy_py_c* doorEventPlayer(daDoor20_c* door) {
+#if TARGET_PC
+    // Co-op: accepted door demos should move and animate the player that requested the event.
+    return dusk::coop::event_owner::ownerPlayerForActor(door);
+#else
+    return (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
+}
 
 #if TARGET_PC
 #include <f_ap/f_ap_game.h>
 #include <dusk/autosave.h>
 #endif
 
-char* daDoor20_c::getStopBmdName() {
+char DUSK_CONST* daDoor20_c::getStopBmdName() {
     switch (door_param2_c::getKind(this)) {
         case 3:
         case 11:
@@ -35,11 +49,11 @@ J3DModelData* daDoor20_c::getStopModelData() {
     return (J3DModelData*)dComIfG_getStageRes(getStopBmdName());
 }
 
-char* daDoor20_c::getAlwaysArcName() {
+char DUSK_CONST* daDoor20_c::getAlwaysArcName() {
     return "static";
 }
 
-char* daDoor20_c::getArcName() {
+char DUSK_CONST* daDoor20_c::getArcName() {
     switch (door_param2_c::getKind(this)) {
     default:
         return "DoorT00";
@@ -56,7 +70,7 @@ char* daDoor20_c::getArcName() {
     }
 }
 
-char* daDoor20_c::getBmdName() {
+char DUSK_CONST* daDoor20_c::getBmdName() {
     static char bmdName[32];
     switch(door_param2_c::getKind(this)) {
     case 0:
@@ -65,20 +79,20 @@ char* daDoor20_c::getBmdName() {
     case 10:
     case 12:
     default:
-        sprintf(bmdName, "door-shutter_%02d.bmd", door_param2_c::getDoorModel(this));
+        SAFE_SPRINTF(bmdName, "door-shutter_%02d.bmd", door_param2_c::getDoorModel(this));
         break;
     case 9:
-        sprintf(bmdName, "door-knob_%02d.bmd", door_param2_c::getDoorModel(this));
+        SAFE_SPRINTF(bmdName, "door-knob_%02d.bmd", door_param2_c::getDoorModel(this));
         break;
     }
     return bmdName;
 }
 
-char* daDoor20_c::getBtk() {
+char DUSK_CONST* daDoor20_c::getBtk() {
     return "door-shutter_00.btk";
 }
 
-char* daDoor20_c::getDzbName() {
+char DUSK_CONST* daDoor20_c::getDzbName() {
     switch(door_param2_c::getKind(this)) {
     case 0:
     case 1:
@@ -203,8 +217,22 @@ void daDoor20_c::setEventPrm() {
     }
 
     if (dComIfGp_roomControl_checkStatusFlag(roomNo, 1)) {
+#if TARGET_PC
+        // Co-op: choose the shared door prompt side from the active player before event
+        // ids, lock messages, and stop-side checks are derived from field_0x68c.
+        const bool chooseSideFromAngle = door_param2_c::getFRoomNo(this) == door_param2_c::getBRoomNo(this);
+        dusk::coop::interaction_owner::PromptOwnerResult owner =
+            dusk::coop::interaction_owner::selectProjectedPrompt(
+                current.pos, field_0x680, current.angle.y, field_0x68c, chooseSideFromAngle,
+                getSize2X(), 12100.0f, 62500.0f);
+        if (!owner.found) {
+            return;
+        }
+        field_0x68c = owner.side;
+        player = static_cast<daPy_py_c*>(owner.actor);
+#endif
         if (door_param2_c::getKind(this) == 9) {
-            if (daPy_py_c::checkNowWolf()) {
+            if (player->checkWolf()) {
                 return;
             }
             int iStack_48;
@@ -235,7 +263,7 @@ void daDoor20_c::setEventPrm() {
                 }
             }
         } else {
-            if (daPy_py_c::checkNowWolf()) {
+            if (player->checkWolf()) {
                 if (!player->checkMidnaRide() || !daMidna_c::checkMidnaRealBody()) {
                     return;
                 }
@@ -258,7 +286,7 @@ void daDoor20_c::setEventPrm() {
             }
             if (chkMakeKey()) {
                 if (field_0x5f0) {
-                    if (daPy_py_c::checkNowWolf()) {
+                    if (player->checkWolf()) {
                         if (dComIfGs_getKeyNum() == 0) {
                             return;
                         }
@@ -294,11 +322,14 @@ void daDoor20_c::setEventPrm() {
                     return;
                 }
             }
-            if (checkArea(getSize2X(), 12100.0f, 62500.0f)) {
-                eventInfo.setEventId(field_0x692[field_0x6cb]);
-                eventInfo.setMapToolId(field_0x6b8[field_0x6cb]);
-                eventInfo.onCondition(4);
+#if !TARGET_PC
+            if (!checkArea(getSize2X(), 12100.0f, 62500.0f)) {
+                return;
             }
+#endif
+            eventInfo.setEventId(field_0x692[field_0x6cb]);
+            eventInfo.setMapToolId(field_0x6b8[field_0x6cb]);
+            eventInfo.onCondition(4);
         }
     }
 }
@@ -319,7 +350,7 @@ int daDoor20_c::checkOpenMsgDoor(int* param_1) {
 }
 
 int daDoor20_c::adjustmentAngle() {
-    daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+    daPy_py_c* player = doorEventPlayer(this);
     cXyz playerPos;
     playerPos = player->current.pos;
     s16 angle = player->shape_angle.y;
@@ -336,7 +367,7 @@ int daDoor20_c::adjustmentAngle() {
 }
 
 int daDoor20_c::adjustmentProc() {
-    daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+    daPy_py_c* player = doorEventPlayer(this);
     cXyz local_2c;
     cXyz local_38;
     local_38 = player->current.pos;
@@ -371,7 +402,7 @@ int daDoor20_c::adjustmentProc() {
 }
 
 void daDoor20_c::setAngle() {
-    daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+    daPy_py_c* player = doorEventPlayer(this);
     player->changeDemoMoveAngle(shape_angle.y + 0x7fff);
 }
 
@@ -393,7 +424,8 @@ static u16 const l_eff_id_lv4[5] = {
 
 void daDoor20_c::openInit_0() {
     J3DAnmTransform* anm;
-    if (daPy_py_c::checkNowWolf()) {
+    daPy_py_c* player = doorEventPlayer(this);
+    if (player->checkWolf()) {
         if (door_param2_c::getKind(this) == 10) {
             anm = (J3DAnmTransform*)dComIfG_getObjectRes(getArcName(), "md_oj_DoorOpF.bck");
         } else {
@@ -409,7 +441,6 @@ void daDoor20_c::openInit_0() {
     JUT_ASSERT(832, anm != NULL);
     int rt = field_0x584.init(anm, 1, 0, 1.0f, 0, -1, true);
     JUT_ASSERT(835, rt == 0);
-    daPy_py_c* player = daPy_getPlayerActorClass();
     field_0x584.setPlaySpeed(player->getBaseAnimeFrameRate());
     u8 bVar5 = door_param2_c::getSwbit3(this);
     if (bVar5 != 0xff && !fopAcM_isSwitch(this, bVar5)) {
@@ -432,7 +463,8 @@ void daDoor20_c::openInit_0() {
 
 void daDoor20_c::openInit_1() {
     J3DAnmTransform* anm;
-    if (daPy_py_c::checkNowWolf()) {
+    daPy_py_c* player = doorEventPlayer(this);
+    if (player->checkWolf()) {
         anm = (J3DAnmTransform*)dComIfG_getObjectRes(getArcName(), "md_oj_DoorOpC.bck");
     } else {
         anm = (J3DAnmTransform*)dComIfG_getObjectRes(getArcName(), "oj_DoorOpC.bck");
@@ -480,13 +512,14 @@ int daDoor20_c::openProc(int param_1) {
     u32 sfx;
     f32 frame = field_0x584.getFrame();
     int rv = field_0x584.play();
+    daPy_py_c* player = doorEventPlayer(this);
     switch (door_param2_c::getKind(this)) {
     case 1:
         if (field_0x584.getFrame() == 17.0f) {
             dComIfGp_getVibration().StartShock(4, 15, cXyz(0.0f, 1.0f, 0.0f));
         } else {
             if (field_0x584.getFrame() == 18.0f) {
-                if (daPy_py_c::checkNowWolf()) {
+                if (player->checkWolf()) {
                     u32 mdnfx;
                     if (field_0x672) {
                         mdnfx = Z2SE_OBJ_WOOD_DR_OP_MDN_FX;
@@ -514,7 +547,7 @@ int daDoor20_c::openProc(int param_1) {
         {
             dComIfGp_getVibration().StartShock(4, 15, cXyz(0.0f, 1.0f, 0.0f));
         }
-        if (daPy_py_c::checkNowWolf()) {
+        if (player->checkWolf()) {
             if (field_0x584.getFrame() == 20.0f) {
                 if (door_param2_c::getKind(this) == 2) {
                     sfx = Z2SE_OBJ_L8_SHTR_OP;
@@ -1289,7 +1322,9 @@ int daDoor20_c::draw() {
         createKey();
         setDoorAngleSpec();
     }
-    if (fopAcM_cullingCheck(this)) {
+    // Co-op: this door has an actor-local cull in addition to the central actor draw gate.
+    // Bypass it during native split-screen so P1's camera cannot hide a door visible to P2.
+    if (!dusk::coop::render_visibility::shouldBypassDrawCulling() && fopAcM_cullingCheck(this)) {
         return 1;
     }
     calcMtx();
@@ -1324,7 +1359,7 @@ int daDoor20_c::draw() {
 }
 
 void daDoor20_c::setDoorAngleSpec() {
-    daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+    daPy_py_c* player = doorEventPlayer(this);
     cXyz cStack_1c;
     switch(door_param2_c::getKind(this)) {
     case 1:
@@ -1520,7 +1555,7 @@ int daDoor20_c::checkExecute() {
 }
 
 void daDoor20_c::startDemoProc() {
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
+    fopAc_ac_c* player = doorEventPlayer(this);
     field_0x6cc = dComIfGp_evmng_getMyStaffId("SHUTTER_DOOR", 0, 0);
     shape_angle.y = current.angle.y;
     JUT_ASSERT(2860, player);
@@ -1536,7 +1571,7 @@ void daDoor20_c::startDemoProc() {
 }
 
 void daDoor20_c::makeEventId() {
-    static char* table[19] = {
+    static DUSK_CONSTEXPR char DUSK_CONST* table[19] = {
         "DEFAULT_STOP_OPEN",
         "DEFAULT_STOP_OPEN",
         NULL,
@@ -1558,49 +1593,49 @@ void daDoor20_c::makeEventId() {
         NULL,
     };
 
-    static char* tate_table[4] = {
+    static DUSK_CONSTEXPR char DUSK_CONST* tate_table[4] = {
         "DEFAULT_SHUTTER_DOOR_10",
         "DEFAULT_SHUTTER_DOOR_10",
         "DEFAULT_SHUTTER_DOOR_F_STOP",
         "DEFAULT_SHUTTER_DOOR_F_STOP",
     };
 
-    static char* tate_w_table[4] = {
+    static DUSK_CONSTEXPR char DUSK_CONST* tate_w_table[4] = {
         "WOLF_SHUTTER_DOOR_10",
         "WOLF_SHUTTER_DOOR_10",
         "WOLF_SHUTTER_DOOR_F_STOP",
         "WOLF_SHUTTER_DOOR_F_STOP",
     };
 
-    static char* yoko_table[4] = {
+    static DUSK_CONSTEXPR char DUSK_CONST* yoko_table[4] = {
         "DEFAULT_SHUTTER_DOOR_14",
         "DEFAULT_SHUTTER_DOOR_14",
         "DEFAULT_SHUTTER_DOOR_F_STOP_14",
         "DEFAULT_SHUTTER_DOOR_F_STOP_14",
     };
 
-    static char* yoko_w_table[4] = {
+    static DUSK_CONSTEXPR char DUSK_CONST* yoko_w_table[4] = {
         "WOLF_SHUTTER_DOOR_14",
         "WOLF_SHUTTER_DOOR_14",
         "WOLF_SHUTTER_DOOR_F_STOP_14",
         "WOLF_SHUTTER_DOOR_F_STOP_14",
     };
 
-    static char* lv8_table[4] = {
+    static DUSK_CONSTEXPR char DUSK_CONST* lv8_table[4] = {
         "DEFAULT_SHUTTER_DOOR_18",
         "DEFAULT_SHUTTER_DOOR_18",
         "DEFAULT_SHUTTER_DOOR_F_STOP_18",
         "DEFAULT_SHUTTER_DOOR_F_STOP_18",
     };
 
-    static char* lv8_w_table[4] = {
+    static DUSK_CONSTEXPR char DUSK_CONST* lv8_w_table[4] = {
         "WOLF_SHUTTER_DOOR_18",
         "WOLF_SHUTTER_DOOR_18",
         "WOLF_SHUTTER_DOOR_F_STOP_18",
         "WOLF_SHUTTER_DOOR_F_STOP_18",
     };
 
-    static char* knob_table[7] = {
+    static DUSK_CONSTEXPR char DUSK_CONST* knob_table[7] = {
         "DEFAULT_KNOB_DOOR_F",
         "DEFAULT_KNOB_DOOR_B",
         "DEFAULT_KNOB_DOOR_F_STOP",
@@ -1610,28 +1645,28 @@ void daDoor20_c::makeEventId() {
         "DEFAULT_KNOB_DOOR_TALK_NOTOPEN_F",
     };
 
-    static char* lv7_table[4] = {
+    static DUSK_CONSTEXPR char DUSK_CONST* lv7_table[4] = {
         "DEFAULT_SHUTTER_DOOR_20",
         "DEFAULT_SHUTTER_DOOR_20",
         "DEFAULT_SHUTTER_DOOR_F_STOP_20",
         "DEFAULT_SHUTTER_DOOR_F_STOP_20",
     };
 
-    static char* lv7_w_table[4] = {
+    static DUSK_CONSTEXPR char DUSK_CONST* lv7_w_table[4] = {
         "WOLF_SHUTTER_DOOR_20",
         "WOLF_SHUTTER_DOOR_20",
         "WOLF_SHUTTER_DOOR_F_STOP_20",
         "WOLF_SHUTTER_DOOR_F_STOP_20",
     };
 
-    static char* lv9_table[4] = {
+    static DUSK_CONSTEXPR char DUSK_CONST* lv9_table[4] = {
         "DEFAULT_SHUTTER_DOOR_22",
         "DEFAULT_SHUTTER_DOOR_22",
         "DEFAULT_SHUTTER_DOOR_F_STOP_22",
         "DEFAULT_SHUTTER_DOOR_F_STOP_22",
     };
 
-    static char* lv9_w_table[4] = {
+    static DUSK_CONSTEXPR char DUSK_CONST* lv9_w_table[4] = {
         "WOLF_SHUTTER_DOOR_22",
         "WOLF_SHUTTER_DOOR_22",
         "WOLF_SHUTTER_DOOR_F_STOP_22",
@@ -1748,6 +1783,20 @@ void daDoor20_c::initOpenDemo(int param_1) {
 }
 
 int daDoor20_c::checkArea(f32 param_1, f32 param_2, f32 param_3) {
+#if TARGET_PC
+    const bool chooseSideFromAngle = door_param2_c::getFRoomNo(this) == door_param2_c::getBRoomNo(this);
+    dusk::coop::interaction_owner::PromptOwnerResult owner =
+        dusk::coop::interaction_owner::selectProjectedPrompt(
+            current.pos, field_0x680, current.angle.y, field_0x68c, chooseSideFromAngle,
+            param_1, param_2, param_3);
+    if (owner.found) {
+        // Co-op: shutter-door prompt condition is shared on the door actor; choose the nearest
+        // active player who satisfies the vanilla door area/facing test.
+        field_0x68c = owner.side;
+        return 1;
+    }
+    return 0;
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
     cXyz acStack_68;
     cXyz cStack_74(player->attention_info.position);
@@ -1775,6 +1824,7 @@ int daDoor20_c::checkArea(f32 param_1, f32 param_2, f32 param_3) {
     } else {
         return 1;
     }
+#endif
 }
 
 void daDoor20_c::openInitCom(int param_1) {
@@ -1803,7 +1853,7 @@ void daDoor20_c::closeEndCom() {
         dComIfGp_roomControl_onStatusFlag(field_0x67e, 8);
     }
     cXyz cStack_2c;
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
+    fopAc_ac_c* player = doorEventPlayer(this);
     cXyz cStack_38 = player->current.pos - current.pos;
     f32 dVar8 = cStack_38.inprodXZ(field_0x680);
     getRestartPos(&cStack_2c);
@@ -1819,11 +1869,11 @@ void daDoor20_c::closeEndCom() {
 }
 
 void daDoor20_c::getRestartPos(cXyz* param_1) {
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
+    daPy_py_c* player = doorEventPlayer(this);
     cXyz acStack_78 = player->current.pos - current.pos;
     f32 dVar9 = acStack_78.inprodXZ(field_0x680);
     f32 fVar1;
-    if (daPy_py_c::checkNowWolf()) {
+    if (player->checkWolf()) {
         if (dVar9 < 0.0f) {
             fVar1 = 300.0f;
         } else {
@@ -1842,7 +1892,7 @@ void daDoor20_c::getRestartPos(cXyz* param_1) {
 }
 
 int daDoor20_c::getDemoAction() {
-    static char* action_table[29] = {
+    static DUSK_CONSTEXPR char DUSK_CONST* action_table[29] = {
         "WAIT",
         "STOP_OPEN",
         "STOP_CLOSE",
@@ -1877,7 +1927,7 @@ int daDoor20_c::getDemoAction() {
 }
 
 void daDoor20_c::setGoal() {
-    daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+    daPy_py_c* player = doorEventPlayer(this);
     cXyz local_1c = player->current.pos - current.pos;
     cXyz local_28;
     s16 homeY = home.angle.y;
@@ -1885,7 +1935,7 @@ void daDoor20_c::setGoal() {
     mDoMtx_stack_c::multVec(&local_1c, &local_1c);
     local_1c.x = local_1c.x * 0.8f;
     local_1c.y = 0.0f;
-    if (daPy_py_c::checkNowWolf()) {
+    if (player->checkWolf()) {
         local_1c.z = -300.0f;
     } else {
         local_1c.z = -200.0f;
@@ -2151,13 +2201,13 @@ static int daDoor20_Create(fopAc_ac_c* i_this) {
     return static_cast<daDoor20_c*>(i_this)->create();
 }
 
-static actor_method_class l_daDoor20_Method = {
+static DUSK_CONST actor_method_class l_daDoor20_Method = {
     (process_method_func)daDoor20_Create,  (process_method_func)daDoor20_Delete,
     (process_method_func)daDoor20_Execute, (process_method_func)NULL,
     (process_method_func)daDoor20_Draw,
 };
 
-actor_process_profile_definition g_profile_DOOR20 = {
+DUSK_PROFILE actor_process_profile_definition DUSK_CONST g_profile_DOOR20 = {
     /* Layer ID     */ fpcLy_CURRENT_e,
     /* List ID      */ 3,
     /* List Prio    */ fpcPi_CURRENT_e,

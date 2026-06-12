@@ -3,6 +3,7 @@
 #include "SSystem/SComponent/c_malloc.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_drawlist.h"
+#include "dusk/coop/event_presentation.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/logging.h"
 #include "f_op/f_op_camera_mng.h"
@@ -30,6 +31,7 @@ struct PlayerInfo {
 
 struct SidecarState {
     bool enabled = false;
+    bool enabledForNextPlayScene = false;
     bool cameraRequested = false;
     SplitScreenLayout layout = SplitScreenLayout::Vertical;
     dDlst_window_c window;
@@ -68,23 +70,50 @@ void setWindowRaw(dDlst_window_c* window, f32 x, f32 y, f32 width, f32 height, f
     window->setMode(mode);
 }
 
+void applyWindowLayoutForCamera(int cameraId);
+
 void applyWindowLayout() {
-    if (!s_state.enabled) {
-        dComIfGp_setWindow(0, 0.0f, 0.0f, FB_WIDTH, FB_HEIGHT, 0.0f, 1.0f,
-                           kPrimaryCameraId, 2);
+    applyWindowLayoutForCamera(kPrimaryCameraId);
+    if (s_state.enabled) {
+        applyWindowLayoutForCamera(kSecondaryCameraId);
+    }
+}
+
+void applyWindowLayoutForCamera(int cameraId) {
+    if (!s_state.enabled || cameraId == kPrimaryCameraId) {
+        const bool presentPrimaryFullscreen =
+            dusk::coop::event_presentation::isFullscreen() &&
+            dusk::coop::event_presentation::presenterWindowIndex() == 0;
+        if (!s_state.enabled || presentPrimaryFullscreen) {
+            dComIfGp_setWindow(0, 0.0f, 0.0f, FB_WIDTH, FB_HEIGHT, 0.0f, 1.0f,
+                               kPrimaryCameraId, 2);
+        } else if (s_state.layout == SplitScreenLayout::Horizontal) {
+            const f32 halfHeight = static_cast<f32>(FB_HEIGHT) * 0.5f;
+            dComIfGp_setWindow(0, 0.0f, 0.0f, FB_WIDTH, halfHeight, 0.0f, 1.0f,
+                               kPrimaryCameraId, 2);
+        } else {
+            const f32 halfWidth = static_cast<f32>(FB_WIDTH) * 0.5f;
+            dComIfGp_setWindow(0, 0.0f, 0.0f, halfWidth, FB_HEIGHT, 0.0f, 1.0f,
+                               kPrimaryCameraId, 2);
+        }
         return;
     }
 
-    if (s_state.layout == SplitScreenLayout::Horizontal) {
+    if (cameraId != kSecondaryCameraId) {
+        return;
+    }
+
+    if (dusk::coop::event_presentation::isFullscreen() &&
+        dusk::coop::event_presentation::presenterWindowIndex() == kSecondaryWindowId)
+    {
+        setWindowRaw(&s_state.window, 0.0f, 0.0f, FB_WIDTH, FB_HEIGHT, 0.0f, 1.0f,
+                     kSecondaryCameraId, 2);
+    } else if (s_state.layout == SplitScreenLayout::Horizontal) {
         const f32 halfHeight = static_cast<f32>(FB_HEIGHT) * 0.5f;
-        dComIfGp_setWindow(0, 0.0f, 0.0f, FB_WIDTH, halfHeight, 0.0f, 1.0f,
-                           kPrimaryCameraId, 2);
         setWindowRaw(&s_state.window, 0.0f, halfHeight, FB_WIDTH, halfHeight, 0.0f, 1.0f,
                      kSecondaryCameraId, 2);
     } else {
         const f32 halfWidth = static_cast<f32>(FB_WIDTH) * 0.5f;
-        dComIfGp_setWindow(0, 0.0f, 0.0f, halfWidth, FB_HEIGHT, 0.0f, 1.0f,
-                           kPrimaryCameraId, 2);
         setWindowRaw(&s_state.window, halfWidth, 0.0f, halfWidth, FB_HEIGHT, 0.0f, 1.0f,
                      kSecondaryCameraId, 2);
     }
@@ -96,7 +125,12 @@ bool isSplitScreenEnabled() {
     return s_state.enabled;
 }
 
+bool isSplitScreenRequested() {
+    return s_state.enabledForNextPlayScene;
+}
+
 void setSplitScreenEnabled(bool enabled) {
+    s_state.enabledForNextPlayScene = enabled;
     if (s_state.enabled == enabled) {
         return;
     }
@@ -134,6 +168,10 @@ void resetSplitScreenCameraState() {
     s_state.playerInfo = {};
     s_state.playerInfo.cameraId = kSecondaryCameraId;
     applyWindowLayout();
+}
+
+void restoreSplitScreenCameraState() {
+    setSplitScreenEnabled(s_state.enabledForNextPlayScene);
 }
 
 bool ensureSecondaryCamera() {
@@ -187,6 +225,10 @@ void syncSecondaryPlayerAssignment() {
 
 void refreshWindowLayout() {
     applyWindowLayout();
+}
+
+void refreshWindowLayoutForCamera(int cameraId) {
+    applyWindowLayoutForCamera(cameraId);
 }
 
 bool isExtensionIndex(int idx) {

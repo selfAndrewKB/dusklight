@@ -77,6 +77,11 @@ int daAlink_c::loadModelDVD() {
             mpWlMidnaHairModel = NULL;
 
             if (!checkNoResetFlg2(FLG2_UNK_280000)) {
+#if TARGET_PC
+                // Co-op: retain old form resources until the new form is loaded for this slot.
+                dusk::coop::alink_form_resources::beginSwap(this, mArcName);
+                cPhs_Reset(&mPhaseReq);
+#else
                 if (!dComIfG_resDelete(&mPhaseReq, mArcName)) {
 #if TARGET_PC
                     // resDelete no-ops if load was in-progress; force-unregister before freeAll
@@ -85,6 +90,7 @@ int daAlink_c::loadModelDVD() {
                 }
                 cPhs_Reset(&mPhaseReq);
                 mpArcHeap->freeAll();
+#endif
 
                 if (mProcID == PROC_METAMORPHOSE || mProcID == PROC_METAMORPHOSE_ONLY) {
                     setArcName(!checkWolf());
@@ -97,7 +103,11 @@ int daAlink_c::loadModelDVD() {
                 mClothesChangeWaitTimer = 0;
                 changeLink(1);
             } else {
+#if TARGET_PC
+                int phase_state = dusk::coop::alink_form_resources::loadSwapArc(this, mArcName);
+#else
                 int phase_state = dComIfG_resLoad(&mPhaseReq, mArcName, mpArcHeap);
+#endif
                 if (phase_state == cPhs_COMPLEATE_e) {
                     mClothesChangeWaitTimer = 0;
 
@@ -111,6 +121,9 @@ int daAlink_c::loadModelDVD() {
                         changeLink(1);
                     }
 
+#if TARGET_PC
+                    dusk::coop::alink_form_resources::completeSwap(this);
+#endif
                     return 1;
                 }
                 mClothesChangeWaitTimer = 2;

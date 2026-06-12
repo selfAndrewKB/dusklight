@@ -21,20 +21,12 @@
 #include <cstring>
 
 #if TARGET_PC
+#include "dusk/coop/horse_owner.h"
+#include "dusk/coop/event_presentation.h"
+#include "dusk/coop/input.h"
+#include "dusk/coop/player_attention.h"
 #include "dusk/dusk.h"
 #include "dusk/frame_interpolation.h"
-
-namespace {
-// FRAME INTERP NOTE: Sim tick control point snapshots for interpolation
-constexpr int kHorseReinSimMax = 75;
-cXyz s_horseReinSimPrev[kHorseReinSimMax];
-cXyz s_horseReinSimCurr[kHorseReinSimMax];
-int s_horseReinSimNumPrev;
-int s_horseReinSimNumCurr;
-bool s_horseReinSimPrevValid;
-bool s_horseReinSimCurrValid;
-uint64_t s_horseReinSimRolledSeq;
-}  // namespace
 #endif
 
 #define ANM_HS_BACK_WALK           6
@@ -83,6 +75,51 @@ const u16 daHorse_c::m_footJointTable[] = {
 const f32 daHorse_c::m_callLimitDistance2 = 640000.0f;
 
 static f32 l_autoUpHeight = 50.0f;
+
+static daAlink_c* daHorse_getAssignedPlayer(const daHorse_c* horse) {
+#if TARGET_PC
+    // Co-op: runtime Epona clones answer rider-local questions through their assigned ALINK slot.
+    return dusk::coop::horse_owner::getPlayerForHorse(horse);
+#else
+    UNUSED(horse);
+    return daAlink_getAlinkActorClass();
+#endif
+}
+
+#if TARGET_PC
+static f32 daHorse_callTargetDistanceSq(const daHorse_c* horse) {
+    // Co-op: grass call-run arrival is measured against the retained accepted summon point.
+    const cXyz* callTarget = dusk::coop::horse_owner::getCallTarget(horse);
+    if (callTarget != nullptr) {
+        return callTarget->abs2XZ(horse->current.pos);
+    }
+
+    return daHorse_getAssignedPlayer(horse)->current.pos.abs2XZ(horse->current.pos);
+}
+#endif
+
+static int daHorse_getAssignedCameraID(const daHorse_c* horse) {
+#if TARGET_PC
+    dusk::coop::PlayerSlot slot = dusk::coop::horse_owner::getSlotForHorse(horse);
+    if (slot == dusk::coop::PlayerSlot::Invalid) {
+        slot = dusk::coop::PlayerSlot::Primary;
+    }
+    return dComIfGp_getPlayerCameraID(static_cast<int>(slot));
+#else
+    UNUSED(horse);
+    return dComIfGp_getPlayerCameraID(0);
+#endif
+}
+
+static J3DAnmTransform* daHorse_getLocalAnimation(daHorse_c* horse, J3DAnmTransform* animation) {
+#if TARGET_PC
+    // Co-op: runtime Epona clones need private mutable BCK frames while archive key data stays shared.
+    return dusk::coop::horse_owner::localizeAnimationTransform(horse, animation);
+#else
+    UNUSED(horse);
+    return animation;
+#endif
+}
 
 #if DEBUG
 void daHorse_hio_c::genMessage(JORMContext* ctx) {
@@ -456,7 +493,8 @@ void daHorse_c::coHitCallbackCowHit(fopAc_ac_c* i_hitActor) {
             m_cowHit = 5;
         }
     } else if (fopAcM_GetName(i_hitActor) == fpcNm_ALINK_e) {
-        if (daAlink_getAlinkActorClass()->checkSlideMode()) {
+        // Co-op: react to the ALINK actor that actually collided with this horse.
+        if (((daAlink_c*)i_hitActor)->checkSlideMode()) {
             onEndResetStateFlg0(ERFLG0_UNK_800);
         }
     }
@@ -486,11 +524,19 @@ static void daHorse_coHitCallbackAll(fopAc_ac_c* i_coActorA, dCcD_GObjInf* i_coO
     a_this->coHitCallbackCowHit(i_coActorB);
 }
 
-static void* daHorse_searchEnemy(fopAc_ac_c* i_actor, void* i_data) {
-    daHorse_c* horse_p = dComIfGp_getHorseActor();
-    f32 search_dist = *(f32*)i_data;
+struct daHorseEnemySearchData {
+    daHorse_c* horse;
+    f32 searchDistance;
+};
 
-    if (fopAcM_GetGroup(i_actor) == fopAc_ENEMY_e && fopAcM_GetName(i_actor) != fpcNm_E_WS_e && horse_p->current.pos.abs2XZ(i_actor->current.pos) < search_dist * search_dist) {
+static void* daHorse_searchEnemy(fopAc_ac_c* i_actor, void* i_data) {
+    // Co-op: nearby-enemy reactions belong to the Epona actor performing the search.
+    daHorseEnemySearchData* search = (daHorseEnemySearchData*)i_data;
+
+    if (fopAcM_GetGroup(i_actor) == fopAc_ENEMY_e && fopAcM_GetName(i_actor) != fpcNm_E_WS_e &&
+        search->horse->current.pos.abs2XZ(i_actor->current.pos) <
+            search->searchDistance * search->searchDistance)
+    {
         return i_actor;
     }
 
@@ -680,12 +726,20 @@ extern int g_horsePosInit;
 
 int daHorse_c::create() {
     fopAcM_ct(this, daHorse_c);
+#if TARGET_PC
+    // Co-op: runtime Epona clones bypass canonical story placement and never replace campaign Epona.
+    const dusk::coop::PlayerSlot coopHorseSlot =
+        dusk::coop::horse_owner::getAdditionalHorseSpawnRequestSlot(this);
+    const bool coopAdditionalHorse = coopHorseSlot != dusk::coop::PlayerSlot::Invalid;
+#else
+    const bool coopAdditionalHorse = false;
+#endif
 
     if (checkEnding()) {
         onStateFlg0(FLG0_UNK_8000);
     }
 
-    if (!checkStateFlg0(FLG0_UNK_8000) &&
+    if (!coopAdditionalHorse && !checkStateFlg0(FLG0_UNK_8000) &&
            /* Cutscene - Cutscene - attacked by monsters at Ordon spring */
         (((dComIfGs_isEventBit(dSv_event_flag_c::M_008)
             /* Main Event - Epona rescued flag */
@@ -705,7 +759,7 @@ int daHorse_c::create() {
             return cPhs_INIT_e;
         }
 
-        if (dComIfGp_getHorseActor() != NULL) {
+        if (!coopAdditionalHorse && dComIfGp_getHorseActor() != NULL) {
             return cPhs_ERROR_e;
         }
 
@@ -724,7 +778,8 @@ int daHorse_c::create() {
         m_onRideFlg = &daHorse_c::onRideFlgSubstance;
         m_offRideFlg = &daHorse_c::offRideFlgSubstance;
 
-        if (daAlink_getAlinkActorClass()->checkHorseStart() || checkStateFlg0(FLG0_UNK_8000) ||
+        if (coopAdditionalHorse || daAlink_getAlinkActorClass()->checkHorseStart() ||
+            checkStateFlg0(FLG0_UNK_8000) ||
             (DEBUG && g_horsePosInit) ||
             strcmp(dComIfGs_getHorseRestartStageName(), "") == 0
             /* dSv_event_flag_c::M_002 - Cutscene - [cutscene: 2] Met with Ilia (brings horse to
@@ -749,6 +804,14 @@ int daHorse_c::create() {
                 onStateFlg0(FLG0_NO_DRAW_WAIT);
             }
         }
+#if TARGET_PC
+        if (coopAdditionalHorse && dComIfGp_getHorseActor() != NULL &&
+            dComIfGp_getHorseActor()->checkHorseCallWait())
+        {
+            // Co-op: a runtime clone mirrors canonical Epona's native parked presentation state.
+            onStateFlg0(FLG0_NO_DRAW_WAIT);
+        }
+#endif
 
         if (!fopAcM_entrySolidHeap(this, daHorse_createHeap, 0x6E60)) {
             return cPhs_ERROR_e;
@@ -857,14 +920,22 @@ int daHorse_c::create() {
         }
 
         setMatrix();
-        m_model->calc();
+        calcModel();
         setBodyPart();
         field_0x17b8 = m_bodyEyePos;
 
         m_acch.CrrPos(dComIfG_Bgsp());
         setRoomInfo(1);
 
+#if TARGET_PC
+        if (!coopAdditionalHorse) {
+            dComIfGp_setHorseActor(this);
+            dusk::coop::horse_owner::registerHorse(dusk::coop::PlayerSlot::Primary, this);
+            dusk::coop::horse_owner::ensureAdditionalHorses();
+        }
+#else
         dComIfGp_setHorseActor(this);
+#endif
         field_0x16e8 = shape_angle.y;
 
         cXyz* sp2C;
@@ -896,6 +967,13 @@ int daHorse_c::create() {
         }
 
         fopAcM_setStageLayer(this);
+
+#if TARGET_PC
+        if (coopAdditionalHorse) {
+            // Co-op: publish a runtime clone only after native rein and presentation state is ready.
+            dusk::coop::horse_owner::registerHorse(coopHorseSlot, this);
+        }
+#endif
     }
 
     return phase_state;
@@ -970,8 +1048,10 @@ int daHorse_c::setDoubleAnime(f32 i_ratio, f32 i_anmSpeedA, f32 i_anmSpeedB, u16
         var_f28 = 0.0f;
     }
 
-    J3DAnmTransform* bckA = (J3DAnmTransform*)dComIfG_getObjectRes(l_arcName, i_anmIdxA);
-    J3DAnmTransform* bckB = (J3DAnmTransform*)dComIfG_getObjectRes(l_arcName, i_anmIdxB);
+    J3DAnmTransform* bckA = daHorse_getLocalAnimation(
+        this, (J3DAnmTransform*)dComIfG_getObjectRes(l_arcName, i_anmIdxA));
+    J3DAnmTransform* bckB = daHorse_getLocalAnimation(
+        this, (J3DAnmTransform*)dComIfG_getObjectRes(l_arcName, i_anmIdxB));
     m_anmIdx[0] = i_anmIdxA;
     m_anmIdx[1] = i_anmIdxB;
 
@@ -1014,14 +1094,17 @@ int daHorse_c::setSingleAnime(u16 i_anmIdx, f32 i_speed, f32 i_startF, s16 i_end
             JUT_ASSERT(1748, FALSE);
         }
 
-        bck = (J3DAnmTransform*)dComIfG_getObjectIDRes(dStage_roomControl_c::getDemoArcName(), i_anmIdx);
+        bck = daHorse_getLocalAnimation(
+            this, (J3DAnmTransform*)dComIfG_getObjectIDRes(
+                      dStage_roomControl_c::getDemoArcName(), i_anmIdx));
 #if PLATFORM_GCN || PLATFORM_WII
         i_anmIdx |= 0x8000;
 #else
         i_anmIdx |= (u16)0x8000;
 #endif
     } else {
-        bck = (J3DAnmTransform*)dComIfG_getObjectRes(l_arcName, i_anmIdx);
+        bck = daHorse_getLocalAnimation(
+            this, (J3DAnmTransform*)dComIfG_getObjectRes(l_arcName, i_anmIdx));
     }
 
     m_anmIdx[0] = i_anmIdx;
@@ -1059,11 +1142,12 @@ int daHorse_c::setSingleAnime(u16 i_anmIdx, f32 i_speed, f32 i_startF, s16 i_end
 }
 
 void daHorse_c::animePlay() {
+    daAlink_c* player = daHorse_getAssignedPlayer(this);
     if (m_frameCtrl[2].getRate() < 0.1f) {
         resetNeckAnime();
     }
 
-    if (daAlink_getAlinkActorClass()->checkHorseGetItem()) {
+    if (player->checkHorseGetItem()) {
         m_frameCtrl[0].setFrame(0);
     } else {
         m_frameCtrl[0].updateFrame();
@@ -1072,7 +1156,7 @@ void daHorse_c::animePlay() {
     m_anmRatio[0].getAnmTransform()->setFrame(m_frameCtrl[0].getFrame());
 
     if (m_anmRatio[1].getAnmTransform() != NULL) {
-        if (daAlink_getAlinkActorClass()->checkHorseGetItem()) {
+        if (player->checkHorseGetItem()) {
             m_frameCtrl[1].setFrame(0);
         } else {
             m_frameCtrl[1].updateFrame();
@@ -1101,12 +1185,22 @@ void daHorse_c::animePlay() {
 }
 
 int daHorse_c::checkDemoAction() {
+    daAlink_c* player = daHorse_getAssignedPlayer(this);
     if (checkStateFlg0(FLG0_CALL_HORSE)) {
         setStickCallMove();
         offStateFlg0(FLG0_CALL_HORSE);
         onStateFlg0(FLG0_UNK_10000000);
 
-        shape_angle.y = cLib_targetAngleY(&current.pos, &daAlink_getAlinkActorClass()->current.pos);
+#if TARGET_PC
+        const cXyz* callTarget = dusk::coop::horse_owner::getCallTarget(this);
+        if (callTarget == nullptr) {
+            callTarget = &player->current.pos;
+        }
+        // Co-op: the grass whistle's accepted call point owns this delayed native call-run target.
+        shape_angle.y = cLib_targetAngleY(&current.pos, callTarget);
+#else
+        shape_angle.y = cLib_targetAngleY(&current.pos, &player->current.pos);
+#endif
         current.angle.y = shape_angle.y;
         field_0x1728 = 0;
         field_0x16b8 = 0;
@@ -1265,7 +1359,15 @@ void daHorse_c::setStickCallMove() {
     m_padStickValue = 1.0f;
 
     u32 mode = 3;
-    setDemoMoveData(&mode, &daAlink_getAlinkActorClass()->current.pos);
+#if TARGET_PC
+    const cXyz* callTarget = dusk::coop::horse_owner::getCallTarget(this);
+    if (callTarget == nullptr) {
+        callTarget = &daHorse_getAssignedPlayer(this)->current.pos;
+    }
+    setDemoMoveData(&mode, callTarget);
+#else
+    setDemoMoveData(&mode, &daHorse_getAssignedPlayer(this)->current.pos);
+#endif
     m_padStickAngleY = m_demoMoveAngle;
 
     if (m_callMoveTimer != 0) {
@@ -1500,15 +1602,17 @@ void daHorse_c::setDemoData() {
 }
 
 void daHorse_c::acceptPlayerRide() {
-    if (!checkStateFlg0(FLG0_UNK_1) && !daPy_py_c::checkNowWolf()) {
-        int angle = fopAcM_seenPlayerAngleY(this);
-        if (angle > 0x2800 && (!daAlink_getAlinkActorClass()->checkHorseZelda() || angle < 0x5800)) {
+    daAlink_c* player = daHorse_getAssignedPlayer(this);
+    if (!checkStateFlg0(FLG0_UNK_1) && !player->checkWolf()) {
+        int angle = fopAcM_seenActorAngleY(this, player);
+        if (angle > 0x2800 && (!player->checkHorseZelda() || angle < 0x5800)) {
             attention_info.flags |= fopAc_AttnFlag_ETC_e;
         }
     }
 }
 
 void daHorse_c::setStickData() {
+    daAlink_c* player = daHorse_getAssignedPlayer(this);
     s16 stick_angle;
     if (checkStateFlg0(daHorse_FLG0(FLG0_RODEO_MODE | FLG0_UNK_10000000))) {
         field_0x16c2 = 2000;
@@ -1544,13 +1648,21 @@ void daHorse_c::setStickData() {
         }
         setStickRodeoMove();
     } else {
-        if (checkStateFlg0(FLG0_UNK_1) && !daAlink_getAlinkActorClass()->checkHorseGetOffMode()) {
-            if (!daAlink_getAlinkActorClass()->checkHorseHangMode()) {
+        if (checkStateFlg0(FLG0_UNK_1) && !player->checkHorseGetOffMode()) {
+            if (!player->checkHorseHangMode()) {
                 if (!checkStateFlg0(FLG0_PLAYER_BACK_RIDE_LASH)) {
+#if TARGET_PC
+                    const dusk::coop::PlayerInputState input = dusk::coop::readInputForActor(player);
+                    m_padStickValue = input.stickValue;
+                    stick_angle = input.stickAngle3D;
+#else
                     m_padStickValue = mDoCPd_c::getStickValue(PAD_1);
-
                     stick_angle = mDoCPd_c::getStickAngle3D(PAD_1);
-                    m_padStickAngleY = (dCam_getControledAngleY(dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0))) + 0x10000 + stick_angle) - 0x8000;
+#endif
+                    m_padStickAngleY =
+                        (dCam_getControledAngleY(dComIfGp_getCamera(daHorse_getAssignedCameraID(this))) +
+                         0x10000 + stick_angle) -
+                        0x8000;
                     return;
                 }
             }
@@ -1804,7 +1916,7 @@ int daHorse_c::checkHorseNoMove(BOOL forward) {
         var_f27 = noMoveCresBackDis * cM_scos(spA);
     }
 
-    daAlink_c* player = daAlink_getAlinkActorClass();
+    daAlink_c* player = daHorse_getAssignedPlayer(this);
     cXyz start(current.pos.x, current.pos.y + m_acchcir[0].GetWallH(), current.pos.z);
 
     if (daAlink_c::getMoveBGActorName(m_acch.m_gnd, 0) == fpcNm_OBJ_BRG_e) {
@@ -1947,7 +2059,7 @@ int daHorse_c::checkHorseNoMove(BOOL forward) {
 }
 
 BOOL daHorse_c::checkTurnPlayerState() {
-    daAlink_c* player = daAlink_getAlinkActorClass();
+    daAlink_c* player = daHorse_getAssignedPlayer(this);
     return player->checkHorseBackInput() && !player->checkHorseWaitLashAnime() && (!player->checkHorseWalkStartAnm() || player->getBaseAnimeFrame() < 1.0f);
 }
 
@@ -1973,7 +2085,7 @@ int daHorse_c::setSpeedAndAngle() {
         }
     }
 
-    daAlink_c* player = daAlink_getAlinkActorClass();
+    daAlink_c* player = daHorse_getAssignedPlayer(this);
 
     if (player->checkHorseSubjectivity()
 #if PLATFORM_GCN
@@ -2198,7 +2310,7 @@ int daHorse_c::setSpeedAndAngle() {
     
         if (var_f31 > fabsf(speedF)) {
             cLib_chaseF(&speedF, var_f31, var_f29);
-        } else if (checkStateFlg0(FLG0_UNK_4) || (!dComIfGp_event_runCheck() && !daAlink_getAlinkActorClass()->checkHorseRide() && !checkStateFlg0(daHorse_FLG0(FLG0_RODEO_MODE | FLG0_UNK_10000000)) && m_procID == PROC_MOVE_e)) {
+        } else if (checkStateFlg0(FLG0_UNK_4) || (!dComIfGp_event_runCheck() && !player->checkHorseRide() && !checkStateFlg0(daHorse_FLG0(FLG0_RODEO_MODE | FLG0_UNK_10000000)) && m_procID == PROC_MOVE_e)) {
             if (checkStateFlg0(FLG0_UNK_2) && !checkStateFlg0(FLG0_UNK_4)) {
                 return 3;
             }
@@ -2264,12 +2376,12 @@ void daHorse_c::setRoomInfo(int param_0) {
     }
 }
 
-static cXyz l_frontFootOffset(23.5f, -20.0f, 0.0f);
+static DUSK_CONSTEXPR cXyz l_frontFootOffset(23.5f, -20.0f, 0.0f);
 
-static cXyz l_backFootOffset(25.5f, 12.0f, 0.0f);
+static DUSK_CONSTEXPR cXyz l_backFootOffset(25.5f, 12.0f, 0.0f);
 
 void daHorse_c::setBodyPart() {
-    static cXyz localEyePos(25.0f, -15.0f, 0.0f);
+    static DUSK_CONSTEXPR cXyz localEyePos(25.0f, -15.0f, 0.0f);
 
     mDoMtx_multVec(m_model->getAnmMtx(15), &localEyePos, &eyePos);
     mDoMtx_multVecZero(m_model->getAnmMtx(0), &m_bodyEyePos);
@@ -2321,7 +2433,7 @@ void daHorse_c::setMatrix() {
     m_model->setBaseScale(scale);
 #endif
 
-    if (daPy_py_c::checkNowWolf()) {
+    if (daHorse_getAssignedPlayer(this)->checkWolf()) {
         attention_info.position.set(current.pos.x + (140.0f * cM_ssin(shape_angle.y)), 200.0f + current.pos.y, current.pos.z + (140.0f * cM_scos(shape_angle.y)));
     } else {
         attention_info.position.set(current.pos.x, 200.0f + current.pos.y, current.pos.z);
@@ -2329,7 +2441,8 @@ void daHorse_c::setMatrix() {
 }
 
 void daHorse_c::setDashEffect(u32* i_emitterID) {
-    camera_process_class* camera_p = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
+    // Co-op: dash presentation follows the camera assigned to this Epona's rider.
+    camera_process_class* camera_p = dComIfGp_getCamera(daHorse_getAssignedCameraID(this));
     cXyz* eye_p = fopCamM_GetEye_p(camera_p);
 
     if (eye_p->abs(current.pos) > 1200.0f) {
@@ -2427,10 +2540,10 @@ void daHorse_c::setEffect() {
                                    speedF);
     }
 
-    static cXyz runScale(2.0f, 2.0f, 2.0f);
-    static cXyz landScale(1.5f, 1.5f, 1.5f);
-    static cXyz grassRunScale(1.8f, 1.8f, 1.8f);
-    static cXyz waterDirection(0.0f, 1.0f, -0.75f);
+    static DUSK_CONSTEXPR cXyz runScale(2.0f, 2.0f, 2.0f);
+    static DUSK_CONSTEXPR cXyz landScale(1.5f, 1.5f, 1.5f);
+    static DUSK_CONSTEXPR cXyz grassRunScale(1.8f, 1.8f, 1.8f);
+    static DUSK_CONSTEXPR cXyz waterDirection(0.0f, 1.0f, -0.75f);
     
     int j;
     int i;
@@ -2574,9 +2687,11 @@ void daHorse_c::setTailAngle() {
 }
 
 void daHorse_c::setNeckAngle() {
+    // Co-op: an idle runtime Epona looks toward its assigned ALINK rather than P1.
+    daAlink_c* player = daHorse_getAssignedPlayer(this);
     int var_r27 = 0;
     if (eventInfo.checkCommandTalk()) {
-        m_aimNeckAngleY = fopAcM_searchActorAngleY(this, daAlink_getAlinkActorClass()) - shape_angle.y;
+        m_aimNeckAngleY = fopAcM_searchActorAngleY(this, player) - shape_angle.y;
     } else if (field_0x1702 != 0) {
         cLib_addCalcAngleS(&field_0x16f0, field_0x1702 * 3, 3, 0x400, 0x100);
         return;
@@ -2586,10 +2701,10 @@ void daHorse_c::setNeckAngle() {
     } else if (!checkStateFlg0(FLG0_UNK_1) && !checkResetStateFlg0(RFLG0_ENEMY_SEARCH) && m_procID == PROC_WAIT_e && m_anmIdx[0] == ANM_HS_WAIT_01) {
         var_r27 = 1;
 
-        if (current.pos.abs2XZ(daAlink_getAlinkActorClass()->current.pos) < 250000.0f) {
+        if (current.pos.abs2XZ(player->current.pos) < 250000.0f) {
             daPy_py_c::setLookPos(&eyePos);
 
-            s16 var_r26 = fopAcM_searchActorAngleY(this, daAlink_getAlinkActorClass()) - shape_angle.y;
+            s16 var_r26 = fopAcM_searchActorAngleY(this, player) - shape_angle.y;
             if (abs(var_r26) < 0x2000) {
                 m_aimNeckAngleY = var_r26;
             } else {
@@ -2942,10 +3057,10 @@ void daHorse_c::footBgCheck() {
 }
 
 void daHorse_c::setReinPosMoveInit(int param_0) {
-    static cXyz reinLeftStart(63.0f, 17.0f, 11.0f);
-    static cXyz reinRightStart(63.0f, 17.0f, -11.0f);
-    static cXyz localNeckLeft(10.0f, 10.0f, 35.0f);
-    static cXyz localNeckRight(10.0f, 10.0f, -35.0f);
+    static DUSK_CONSTEXPR cXyz reinLeftStart(63.0f, 17.0f, 11.0f);
+    static DUSK_CONSTEXPR cXyz reinRightStart(63.0f, 17.0f, -11.0f);
+    static DUSK_CONSTEXPR cXyz localNeckLeft(10.0f, 10.0f, 35.0f);
+    static DUSK_CONSTEXPR cXyz localNeckRight(10.0f, 10.0f, -35.0f);
 
     static const f32 sideOffset = 10.0f;
     static const f32 onHandSideOffset = 1.0f;
@@ -3034,22 +3149,8 @@ void daHorse_c::copyReinPos() {
         *pos_p = rein->field_0x0[0][i];
     }
 #if TARGET_PC
-    if (field_0x1204 > 0) {
-        const uint64_t simSeq = dusk::frame_interp::sim_tick_seq();
-        if (simSeq != s_horseReinSimRolledSeq) {
-            s_horseReinSimRolledSeq = simSeq;
-            if (s_horseReinSimCurrValid && s_horseReinSimNumCurr > 0) {
-                memcpy(s_horseReinSimPrev, s_horseReinSimCurr, s_horseReinSimNumCurr * sizeof(cXyz));
-                s_horseReinSimNumPrev = s_horseReinSimNumCurr;
-                s_horseReinSimPrevValid = true;
-            }
-        }
-        memcpy(s_horseReinSimCurr, m_reinLine.getPos(0), field_0x1204 * sizeof(cXyz));
-        s_horseReinSimNumCurr = field_0x1204;
-        s_horseReinSimCurrValid = true;
-    } else {
-        s_horseReinSimCurrValid = false;
-    }
+    // Co-op: every Epona actor needs an independent presentation snapshot for its reins.
+    dusk::coop::horse_owner::copyReinSimulationState(this, m_reinLine.getPos(0), field_0x1204);
 #endif
 }
 
@@ -3062,7 +3163,7 @@ void daHorse_c::setReinPosHandSubstance(int param_0) {
 
     setReinPosMoveInit(param_0);
 
-    daAlink_c* player_p = daAlink_getAlinkActorClass();
+    daAlink_c* player_p = daHorse_getAssignedPlayer(this);
     int var_r29 = (-field_0x1712 * 5) / 0x2000;
     if (param_0 != 3) {
         var_r29 *= 2;
@@ -3128,8 +3229,8 @@ void daHorse_c::setReinPosHandSubstance(int param_0) {
 }
 
 void daHorse_c::setReinPosNormalSubstance() {
-    static cXyz saddleLeft(29.0f, -2.0f, 30.0f);
-    static cXyz saddleRight(29.0f, 2.0f, 30.0f);
+    static DUSK_CONSTEXPR cXyz saddleLeft(29.0f, -2.0f, 30.0f);
+    static DUSK_CONSTEXPR cXyz saddleRight(29.0f, 2.0f, 30.0f);
     static const int sideCount = 24;
 
     if (!checkStateFlg0(FLG0_UNK_1) && getZeldaActor() != NULL) {
@@ -3164,23 +3265,26 @@ void daHorse_c::setReinPosNormalSubstance() {
 
 #if TARGET_PC
 void daHorse_c::lerpControlPoints(f32 alpha) {
-    // FRAME INTERP NOTE: Currently only lerping points for Epona's reins. Need a more global solution.
-    if (!dusk::frame_interp::is_enabled() || !s_horseReinSimPrevValid || !s_horseReinSimCurrValid) {
+    const dusk::coop::horse_owner::HorseReinSimulationState* state =
+        dusk::coop::horse_owner::getReinSimulationState(this);
+    if (!dusk::frame_interp::is_enabled() || state == NULL || !state->previousValid ||
+        !state->currentValid)
+    {
         return;
     }
-    const int nCurr = s_horseReinSimNumCurr;
-    const int nPrev = s_horseReinSimNumPrev;
+    const int nCurr = state->currentCount;
+    const int nPrev = state->previousCount;
     if (nCurr <= 0) {
         return;
     }
     int n = nPrev < nCurr ? nPrev : nCurr;
-    if (n <= 0 || n > kHorseReinSimMax) {
+    if (n <= 0 || n > dusk::coop::horse_owner::kHorseReinSimulationMaxPoints) {
         return;
     }
     cXyz* dst = m_reinLine.getPos(0);
     for (int i = 0; i < n; i++) {
-        const cXyz& p0 = s_horseReinSimPrev[i];
-        const cXyz& p1 = s_horseReinSimCurr[i];
+        const cXyz& p0 = state->previous[i];
+        const cXyz& p1 = state->current[i];
         dst[i] = p0 + (p1 - p0) * alpha;
     }
 }
@@ -3188,9 +3292,9 @@ void daHorse_c::lerpControlPoints(f32 alpha) {
 
 void daHorse_c::bgCheck() {
     if (m_procID != PROC_LARGE_DAMAGE_e) {
-        static cXyz localCenterPos(0.0f, 100.0f, 0.0f);
-        static cXyz localFrontPos(0.0f, 100.0f, 220.0f);
-        static cXyz localBackPos(0.0f, 100.0f, -170.0f);
+        static DUSK_CONSTEXPR cXyz localCenterPos(0.0f, 100.0f, 0.0f);
+        static DUSK_CONSTEXPR cXyz localFrontPos(0.0f, 100.0f, 220.0f);
+        static DUSK_CONSTEXPR cXyz localBackPos(0.0f, 100.0f, -170.0f);
 
         cXyz line_start;
         cXyz line_end;
@@ -3271,12 +3375,20 @@ BOOL daHorse_c::checkServiceWaitAnime() {
 }
 
 BOOL daHorse_c::checkTurnInput() {
-    return m_padStickValue > 0.9f && (!dComIfGp_getAttention()->Lockon() || daAlink_getAlinkActorClass()->getAtnActor() != NULL);
+    // Co-op: mounted turn input reads the rider's slot-local attention scanner.
+    daAlink_c* player = daHorse_getAssignedPlayer(this);
+#if TARGET_PC
+    dAttention_c* attention = dusk::coop::player_attention::attentionForPlayer(player);
+#else
+    dAttention_c* attention = dComIfGp_getAttention();
+#endif
+    return m_padStickValue > 0.9f && (!attention->Lockon() || player->getAtnActor() != NULL);
 }
 
 BOOL daHorse_c::checkTgHitTurn() {
+    daAlink_c* player = daHorse_getAssignedPlayer(this);
     if (!dComIfGp_event_runCheck() && !checkStateFlg0(FLG0_UNK_1)) {
-        if (!daAlink_getAlinkActorClass()->checkHorseRideReady() &&
+        if (!player->checkHorseRideReady() &&
             (checkEndResetStateFlg0(ERFLG0_UNK_800) ||
              m_tgco_cyl[0].ChkTgHit() ||
              m_tgco_cyl[1].ChkTgHit() ||
@@ -3316,7 +3428,7 @@ BOOL daHorse_c::checkTurnAfterFastMove(f32 param_0) {
                 return procWaitInit();
             }
 
-            if (daAlink_getAlinkActorClass()->checkHorseTurnMode()) {
+            if (daHorse_getAssignedPlayer(this)->checkHorseTurnMode()) {
                 if (checkTurnInput() && !checkStateFlg0(FLG0_UNK_200)) {
                     return procTurnInit(0);
                 }
@@ -3343,7 +3455,8 @@ void daHorse_c::setNeckAnimeMorf() {
 }
 
 void daHorse_c::setNeckAnime(u16 i_anmIdx, f32 i_speed, f32 i_startF, s16 i_endF) {
-    J3DAnmTransform* bck = (J3DAnmTransform*)dComIfG_getObjectRes(l_arcName, i_anmIdx);
+    J3DAnmTransform* bck = daHorse_getLocalAnimation(
+        this, (J3DAnmTransform*)dComIfG_getObjectRes(l_arcName, i_anmIdx));
     
     s16 endF;
     if (i_endF < 0) {
@@ -3464,7 +3577,7 @@ void daHorse_c::setBoarHit(fopAc_ac_c* param_0, int param_1) {
 
     if (abs(field_0x1702) < 0x100) {
         dComIfGp_getVibration().StartShock(vibmode, 1, cXyz(0.0f, 1.0f, 0.0f));
-        daAlink_getAlinkActorClass()->seStartOnlyReverb(Z2SE_HORSE_BODYHIT);
+        daHorse_getAssignedPlayer(this)->seStartOnlyReverb(Z2SE_HORSE_BODYHIT);
     }
 
     if ((s16)(fopAcM_searchActorAngleY(this, param_0) - shape_angle.y) >= 0) {
@@ -3475,6 +3588,12 @@ void daHorse_c::setBoarHit(fopAc_ac_c* param_0, int param_1) {
 }
 
 void daHorse_c::savePos() {
+#if TARGET_PC
+    // Co-op: runtime Epona clones are session actors; only authored Epona persists restart state.
+    if (dusk::coop::horse_owner::isAdditionalHorse(this)) {
+        return;
+    }
+#endif
     if (this->model != NULL && !checkStateFlg0(FLG0_UNK_8000) && !checkStateFlg0(FLG0_NO_DRAW_WAIT)) {
         dComIfGs_setHorseRestart(dComIfGp_getStartStageName(), current.pos, shape_angle.y, fopAcM_GetRoomNo(this));
     }
@@ -3482,6 +3601,15 @@ void daHorse_c::savePos() {
 
 int daHorse_c::callHorseSubstance(cXyz const* i_pos) {
     static const f32 initDistance2 = SQUARE(2000.0f);
+
+#if TARGET_PC
+    if (i_pos != nullptr) {
+        // Co-op: retain the native call target for the delayed call-run movement phase.
+        dusk::coop::horse_owner::setCallTarget(this, *i_pos);
+    } else {
+        dusk::coop::horse_owner::clearCallTarget(this);
+    }
+#endif
 
     int room_no = dComIfGp_roomControl_getStayNo();
     if (checkStateFlg0(FLG0_RODEO_MODE) ||
@@ -3506,7 +3634,7 @@ int daHorse_c::callHorseSubstance(cXyz const* i_pos) {
     }
 
     if (m_path != NULL && (checkStateFlg0(FLG0_NO_DRAW_WAIT) || dist_xz2 > initDistance2)) {
-        daAlink_c* player = daAlink_getAlinkActorClass();
+        daAlink_c* player = daHorse_getAssignedPlayer(this);
         #if TARGET_PC
         Vec farthest_pos;
         Vec path_pnt_pos;
@@ -3550,6 +3678,13 @@ int daHorse_c::callHorseSubstance(cXyz const* i_pos) {
     onStateFlg0(FLG0_CALL_HORSE);
     changeOriginalDemo();
     changeDemoMode(12, 0);
+#if TARGET_PC
+    if (dusk::coop::horse_owner::isCanonicalHorse(this)) {
+        // Co-op: a shared campaign-Epona summon releases parked clones toward the same accepted call point.
+        dusk::coop::horse_owner::callParkedAdditionalHorsesForCanonicalSummon(
+            i_pos != nullptr ? *i_pos : current.pos);
+    }
+#endif
     return rt;
 }
 
@@ -3585,7 +3720,7 @@ void daHorse_c::setHorsePosAndAngleSubstance(cXyz const* param_0, s16 param_1) {
 }
 
 BOOL daHorse_c::checkPlayerHeavy() {
-    return !dComIfGp_event_runCheck() && checkStateFlg0(FLG0_UNK_1) && !checkStateFlg0(daHorse_FLG0(FLG0_UNK_200000 | FLG0_UNK_100000)) && daAlink_getAlinkActorClass()->checkBootsOrArmorHeavy();
+    return !dComIfGp_event_runCheck() && checkStateFlg0(FLG0_UNK_1) && !checkStateFlg0(daHorse_FLG0(FLG0_UNK_200000 | FLG0_UNK_100000)) && daHorse_getAssignedPlayer(this)->checkBootsOrArmorHeavy();
 }
 
 void daHorse_c::setTgCoGrp(u32 i_tgGrp, u32 i_coGrp) {
@@ -3658,13 +3793,13 @@ int daHorse_c::procWait() {
         return procMoveInit();
     }
 
-    daAlink_c* player = daAlink_getAlinkActorClass();
+    daAlink_c* player = daHorse_getAssignedPlayer(this);
     if (checkTgHitTurn()) {
         return 1;
     }
 
-    f32 enemy_search_range = m_hio->m.enemy_search_range;
-    if ((!checkInputOnR() || !checkStateFlg0(FLG0_UNK_1)) && fopAcIt_Judge((fopAcIt_JudgeFunc)daHorse_searchEnemy, &enemy_search_range) != NULL) {
+    daHorseEnemySearchData enemySearch = {this, m_hio->m.enemy_search_range};
+    if ((!checkInputOnR() || !checkStateFlg0(FLG0_UNK_1)) && fopAcIt_Judge((fopAcIt_JudgeFunc)daHorse_searchEnemy, &enemySearch) != NULL) {
         onResetStateFlg0(RFLG0_ENEMY_SEARCH);
 
         if (field_0x170c == 0 && !checkStateFlg0(daHorse_FLG0(FLG0_UNK_200000 | FLG0_UNK_100000)) && !dComIfGp_event_runCheck() && !player->checkHorseRideReady() && !player->checkHorseLieAnime() && !checkStateFlg0(FLG0_PLAYER_BACK_RIDE_LASH) && !checkStateFlg0(FLG0_UNK_1)) {
@@ -3750,7 +3885,7 @@ int daHorse_c::procWait() {
     }
 
     if (!checkStateFlg0(FLG0_UNK_1)) {
-        if (daPy_py_c::checkNowWolf()) {
+        if (player->checkWolf()) {
             attention_info.flags |= fopAc_AttnFlag_SPEAK_e;
             eventInfo.onCondition(1);
         } else if (m_procID == PROC_WAIT_e) {
@@ -3784,7 +3919,7 @@ int daHorse_c::procMove() {
         offStateFlg0(FLG0_UNK_10000000);
     }
 
-    if (checkStateFlg0(FLG0_UNK_800) && !daAlink_getAlinkActorClass()->checkHorseSubjectivity()) {
+    if (checkStateFlg0(FLG0_UNK_800) && !daHorse_getAssignedPlayer(this)->checkHorseSubjectivity()) {
         offStateFlg0(FLG0_UNK_800);
         if (var_r30 == 0) {
             speedF = field_0x1798;
@@ -3834,7 +3969,21 @@ int daHorse_c::procMove() {
         } else {
             procWaitInit();
         }
-    } else if (checkStateFlg0(FLG0_UNK_10000000) && field_0x171a != 0 && (m_cc_stts.GetCCMoveP()->abs() > 1.0f || checkStateFlg0(FLG0_UNK_4) || m_acch.ChkWallHit() || m_callMoveTimer == 0 || daAlink_getAlinkActorClass()->current.pos.abs2XZ(current.pos) < 640000.0f)) {
+    } else if (checkStateFlg0(FLG0_UNK_10000000) && field_0x171a != 0 &&
+               (m_cc_stts.GetCCMoveP()->abs() > 1.0f ||
+                checkStateFlg0(FLG0_UNK_4) || m_acch.ChkWallHit() || m_callMoveTimer == 0 ||
+#if TARGET_PC
+                // Co-op: grass summons stop near the retained call point, not each horse owner.
+                daHorse_callTargetDistanceSq(this) < 640000.0f))
+#else
+                daHorse_getAssignedPlayer(this)->current.pos.abs2XZ(current.pos) < 640000.0f))
+#endif
+    {
+#if TARGET_PC
+        if (daHorse_callTargetDistanceSq(this) < 640000.0f) {
+            dusk::coop::horse_owner::clearCallTarget(this);
+        }
+#endif
         procStopInit();
         offStateFlg0(FLG0_UNK_10000000);
     } else {
@@ -4431,15 +4580,20 @@ void daHorse_c::searchSceneChangeArea(fopAc_ac_c* i_scnChg) {
 }
 
 static void* daHorse_searchSceneChangeArea(fopAc_ac_c* i_actor, void* i_data) {
-    UNUSED(i_data);
-    dComIfGp_getHorseActor()->searchSceneChangeArea(i_actor);
+    // Co-op: each Epona actor fills its own scene-exit buffer.
+    ((daHorse_c*)i_data)->searchSceneChangeArea(i_actor);
     return NULL;
 }
 
 int daHorse_c::execute() {
     m_scnChg_num = 0;
-    fopAcIt_Executor((fopAcIt_ExecutorFunc)daHorse_searchSceneChangeArea, NULL);
+    fopAcIt_Executor((fopAcIt_ExecutorFunc)daHorse_searchSceneChangeArea, this);
     m_zeldaActorKeep.setActor();
+
+#if TARGET_PC
+    // Co-op: parked runtime Eponas may be waiting for a staggered native grass summon.
+    dusk::coop::horse_owner::updateDeferredSummonForHorse(this);
+#endif
 
     if (checkStateFlg0(FLG0_NO_DRAW_WAIT)) {
         if (checkStateFlg0(FLG0_CALL_HORSE)) {
@@ -4449,7 +4603,8 @@ int daHorse_c::execute() {
         } 
     }
 
-    daAlink_c* player_p = daAlink_getAlinkActorClass();
+    // Co-op: clone execution follows its assigned player while authored event state remains shared.
+    daAlink_c* player_p = daHorse_getAssignedPlayer(this);
 
 #if PLATFORM_SHIELD || PLATFORM_WII
     l_autoUpHeight = m_hio->m.climb_step;
@@ -4530,7 +4685,7 @@ int daHorse_c::execute() {
         current.pos.x += f31 * m_padStickValue * cM_ssin(m_padStickAngleY);
         current.pos.z += f31 * m_padStickValue * cM_scos(m_padStickAngleY);
         setMatrix();
-        m_model->calc();
+        calcModel();
         setBodyPart();
     } else {
         animePlay();
@@ -4614,7 +4769,7 @@ int daHorse_c::execute() {
         footBgCheck();
         setTailAngle();
 
-        m_model->calc();
+        calcModel();
         setBodyPart();
 
         if (m_procID == PROC_TOOL_DEMO_e) {
@@ -4689,7 +4844,14 @@ int daHorse_c::execute() {
         m_modelData->getMaterialNodePointer(5)->getShape()->show();
     }
 
+#if TARGET_PC
+    // Co-op: the canonical horse retains the vanilla global spur meter until HUD ownership expands.
+    if (dusk::coop::horse_owner::isCanonicalHorse(this)) {
+        dMeter2Info_setHorseLifeCount(m_lashCnt);
+    }
+#else
     dMeter2Info_setHorseLifeCount(m_lashCnt);
+#endif
     return 1;
 }
 
@@ -4717,7 +4879,7 @@ int daHorse_c::draw() {
     cXyz shadow_pos(current.pos.x, 100.0f + current.pos.y, current.pos.z);
     m_shadowID = dComIfGd_setShadow(m_shadowID, 0, m_model, &shadow_pos, 1000.0f, 0.0f, current.pos.y, m_acch.GetGroundH(), m_acch.m_gnd, &tevStr, 0, 1.0f, dDlst_shadowControl_c::getSimpleTex());
     
-    if (!checkResetStateFlg0(RFLG0_UNK_100) && (!checkStateFlg0(FLG0_UNK_1) || !daAlink_getAlinkActorClass()->checkHorseSubjectivity())) {
+    if (!checkResetStateFlg0(RFLG0_UNK_100) && (!checkStateFlg0(FLG0_UNK_1) || !daHorse_getAssignedPlayer(this)->checkHorseSubjectivity())) {
         static GXColor reinLineColor = {0x00, 0x00, 0x00, 0xFF};
         m_reinLine.update(field_0x1204, 1.5f, reinLineColor, 0, &tevStr);
         dComIfGd_set3DlineMat(&m_reinLine);
@@ -4727,6 +4889,14 @@ int daHorse_c::draw() {
 }
 
 static int daHorse_Draw(daHorse_c* i_this) {
+#if TARGET_PC
+    if (dusk::coop::event_presentation::shouldHideSlot(
+            dusk::coop::horse_owner::getSlotForHorse(i_this)))
+    {
+        // Co-op: hide an extra slot's runtime Epona with its rider during singular presentation.
+        return 1;
+    }
+#endif
     return i_this->draw();
 }
 
@@ -4739,6 +4909,9 @@ daHorse_c::~daHorse_c() {
     m_sound.deleteObject();
     dComIfG_resDelete(&m_phase, l_arcName);
 
+#if TARGET_PC
+    dusk::coop::horse_owner::unregisterHorse(dusk::coop::horse_owner::getSlotForHorse(this), this);
+#endif
     if (dComIfGp_getHorseActor() == this) {
         dComIfGp_setHorseActor(NULL);
     }
@@ -4750,7 +4923,7 @@ static int daHorse_Delete(daHorse_c* i_this) {
     return 1;
 }
 
-static actor_method_class l_daHorse_Method = {
+static DUSK_CONST actor_method_class l_daHorse_Method = {
     (process_method_func)daHorse_Create,
     (process_method_func)daHorse_Delete,
     (process_method_func)daHorse_Execute,
@@ -4758,7 +4931,7 @@ static actor_method_class l_daHorse_Method = {
     (process_method_func)daHorse_Draw,
 };
 
-actor_process_profile_definition g_profile_HORSE = {
+DUSK_PROFILE actor_process_profile_definition DUSK_CONST g_profile_HORSE = {
     /* Layer ID     */ fpcLy_CURRENT_e,
     /* List ID      */ 4,
     /* List Prio    */ fpcPi_CURRENT_e,

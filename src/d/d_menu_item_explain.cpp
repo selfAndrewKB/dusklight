@@ -21,6 +21,7 @@
 #include "d/d_meter_HIO.h"
 #include "d/d_msg_string.h"
 #include "m_Do/m_Do_controller_pad.h"
+#include "m_Do/m_Do_ext.h"
 #include "m_Do/m_Do_graphic.h"
 #include "d/d_msg_scrn_3select.h"
 #include "d/d_msg_scrn_arrow.h"
@@ -56,6 +57,11 @@ dMenu_ItemExplain_c::dMenu_ItemExplain_c(JKRExpHeap* i_heap, JKRArchive* i_archi
     };
     
     mpHeap = i_heap;
+#if TARGET_PC
+    // Co-op: the singular item wheel can open while player-local meter overlays occupy the
+    // persistent meter heap. Keep this explanation subtree on the menu heap passed by its owner.
+    JKRHeap* previous_heap = mDoExt_setCurrentHeap(mpHeap);
+#endif
     mpArchive = dComIfGp_getDemoMsgArchive();
     mpStick = i_stick;
     mpHeap->getTotalFreeSize();
@@ -172,6 +178,9 @@ dMenu_ItemExplain_c::dMenu_ItemExplain_c(JKRExpHeap* i_heap, JKRArchive* i_archi
     } else {
         mpSelect_c = NULL;
     }
+#if TARGET_PC
+    mDoExt_setCurrentHeap(previous_heap);
+#endif
 }
 
 dMenu_ItemExplain_c::~dMenu_ItemExplain_c() {
@@ -508,12 +517,12 @@ void dMenu_ItemExplain_c::move_select_init() {
              "\x1B"
              "CR[%d]",
              (int)(0.5f * (length - stringLength1)));
-    strcat(local_64, local_88);
+    SAFE_STRCAT(local_64, local_88);
     snprintf(cStack78, 20,
              "\x1B"
              "CR[%d]",
              (int)(0.5f * (length - stringLength2)));
-    strcat(cStack78, local_80);
+    SAFE_STRCAT(cStack78, local_80);
     mpSelect_c->setString("", local_64, cStack78);
     mpSelect_c->setRubyString("", "", "");
     mpSelect_c->selAnimeInit(2, field_0xe2 + 1, 0, length, 0);

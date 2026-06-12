@@ -14,6 +14,10 @@
 #include <cmath>
 #include "Z2AudioLib/Z2Instances.h"
 
+#if TARGET_PC
+#include "dusk/coop/player_attention.h"
+#endif
+
 struct daE_YMB_HIO_c {
 public:
     daE_YMB_HIO_c();
@@ -1442,11 +1446,18 @@ void daE_YMB_c::executeSwim() {
             if (mMode == 5) {
                 if (field_0x6fc == 0) {
                     bool bVar1 = false;
+#if TARGET_PC
+                    // Co-op: Shadow Bulblin/Bug lock reactions should accept any player's lock-on.
+                    if (dusk::coop::player_attention::isActorLockedByAnyPlayer(this)) {
+                        bVar1 = true;
+                    }
+#else
                     if (dComIfGp_getAttention()->LockonTruth()) {
                         if (dComIfGp_getAttention()->LockonTarget(0) == this) {
                             bVar1 = true;
                         }
                     }
+#endif
 
                     if (bVar1 || abs(cam_ply_ang_diff) > 0x5800) {
                         mMode = 6;
@@ -2914,11 +2925,18 @@ int daE_YMB_c::getDownLockPoint() {
             }
         }
 
+        // Co-op: lock-on priority should come from any slot-local player attention owner.
+#if TARGET_PC
+        if (dusk::coop::player_attention::isActorLockedByAnyPlayer(this)) {
+            var_r26 = field_0x725;
+        }
+#else
         if (dComIfGp_getAttention()->LockonTruth()) {
             if (dComIfGp_getAttention()->LockonTarget(0) == this) {
                 var_r26 = field_0x725;
             }
         }
+#endif
 
         field_0x725 = var_r26;
         uVar1 = var_r26;
@@ -3239,7 +3257,7 @@ static int daE_YMB_Create(daE_YMB_c* i_this) {
 
 AUDIO_INSTANCES;
 
-static actor_method_class l_daE_YMB_Method = {
+static DUSK_CONST actor_method_class l_daE_YMB_Method = {
     (process_method_func)daE_YMB_Create,
     (process_method_func)daE_YMB_Delete,
     (process_method_func)daE_YMB_Execute,
@@ -3247,7 +3265,7 @@ static actor_method_class l_daE_YMB_Method = {
     (process_method_func)daE_YMB_Draw,
 };
 
-actor_process_profile_definition g_profile_E_YMB = {
+DUSK_PROFILE actor_process_profile_definition DUSK_CONST g_profile_E_YMB = {
     /* Layer ID     */ fpcLy_CURRENT_e,
     /* List ID      */ 7,
     /* List Prio    */ fpcPi_CURRENT_e,

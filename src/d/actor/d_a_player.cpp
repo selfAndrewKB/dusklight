@@ -14,6 +14,10 @@
 #include "d/actor/d_a_boomerang.h"
 #include "d/actor/d_a_midna.h"
 #include "d/actor/d_a_spinner.h"
+#if TARGET_PC
+#include "dusk/coop/camera.h"
+#include "dusk/coop/ui_owner.h"
+#endif
 
 bool daPy_frameCtrl_c::checkAnmEnd() {
     if (getEndFlg() != 0 && getNowSetFlg() == 0) {
@@ -391,8 +395,52 @@ static const u8* l_sightDL_get() {
 #include "assets/l_sightDL__d_a_player.h"
 #endif
 
+#if TARGET_PC
+struct SightPacketOwner {
+    daPy_sightPacket_c* packet;
+    dusk::coop::PlayerSlot slot;
+};
+
+static SightPacketOwner s_sightPacketOwners[dusk::coop::kPlayerSlotCount];
+
+static void recordSightPacketOwner(daPy_sightPacket_c* i_packet, dusk::coop::PlayerSlot i_slot) {
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        if (s_sightPacketOwners[i].packet == i_packet || s_sightPacketOwners[i].packet == NULL) {
+            s_sightPacketOwners[i].packet = i_packet;
+            s_sightPacketOwners[i].slot = i_slot;
+            return;
+        }
+    }
+
+    s_sightPacketOwners[0].packet = i_packet;
+    s_sightPacketOwners[0].slot = i_slot;
+}
+
+static dusk::coop::PlayerSlot findSightPacketOwner(daPy_sightPacket_c* i_packet) {
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        if (s_sightPacketOwners[i].packet == i_packet) {
+            return s_sightPacketOwners[i].slot;
+        }
+    }
+
+    return dusk::coop::PlayerSlot::Primary;
+}
+#endif
+
 void daPy_sightPacket_c::draw() {
+    ZoneScoped;
+#if !TARGET_PC
     TGXTexObj texObj;
+#endif
+#if TARGET_PC
+    dusk::coop::ui_owner::ViewportState viewport_state;
+    bool restore_viewport = false;
+    if (dusk::coop::camera::isSplitScreenEnabled()) {
+        // Co-op: sight packets are queued into a shared 2D list, so restore their owner viewport.
+        restore_viewport = dusk::coop::ui_owner::beginViewport(findSightPacketOwner(this),
+                                                                &viewport_state);
+    }
+#endif
 
     j3dSys.reinitGX();
     GXSetNumIndStages(0);
@@ -407,15 +455,34 @@ void daPy_sightPacket_c::draw() {
 
     GXSetTevColor(GX_TEVREG0, reg0);
     GXSetTevColor(GX_TEVREG1, reg1);
+#if TARGET_PC
+    if (mpCachedImg != mpImg) {
+        mTexObj.reset();
+        GXInitTexObj(&mTexObj, mpData, mpImg->width, mpImg->height,
+            static_cast<GXTexFmt>(mpImg->format), static_cast<GXTexWrapMode>(mpImg->wrapS),
+            static_cast<GXTexWrapMode>(mpImg->wrapT),
+            mpImg->mipmapCount > 1 ? GX_ENABLE : GX_DISABLE);
+        GXInitTexObjLOD(
+            &mTexObj, GX_LINEAR, GX_LINEAR, 0.0, 0.0, 0.0, GX_FALSE, GX_FALSE, GX_ANISO_1);
+        mpCachedImg = mpImg;
+    }
+    GXLoadTexObj(&mTexObj, GX_TEXMAP0);
+#else
     GXInitTexObj(&texObj, mpData, mpImg->width, mpImg->height, (GXTexFmt)mpImg->format,
                  (GXTexWrapMode)mpImg->wrapS, (GXTexWrapMode)mpImg->wrapT, mpImg->mipmapCount > 1 ? GX_ENABLE : GX_DISABLE);
     GXInitTexObjLOD(&texObj, GX_LINEAR, GX_LINEAR, 0.0, 0.0, 0.0, GX_FALSE, GX_FALSE, GX_ANISO_1);
     GXLoadTexObj(&texObj, GX_TEXMAP0);
+#endif
     GXLoadPosMtxImm(mProjMtx, GX_PNMTX0);
     GXSetCurrentMtx(0);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
     GXCallDisplayList(l_sightDL, 0x80);
     J3DShape::resetVcdVatCache();
+#if TARGET_PC
+    if (restore_viewport) {
+        dusk::coop::ui_owner::endViewport(viewport_state);
+    }
+#endif
 }
 
 void daPy_sightPacket_c::setSight() {
@@ -426,6 +493,23 @@ void daPy_sightPacket_c::setSight() {
     mDoMtx_copy(mDoMtx_stack_c::get(), mProjMtx);
     dComIfGd_set2DXlu(this);
 }
+
+#if TARGET_PC
+void daPy_sightPacket_c::setSightForPlayer(dusk::coop::PlayerSlot i_slot) {
+    Vec proj;
+    if (!dusk::coop::ui_owner::projectWorldPointLocal(i_slot, mPos, &proj)) {
+        return;
+    }
+
+    // Co-op: Link draw submission is shared, but the live reticle is camera-owned.
+    // Project through the owner's view, then replay the packet in that owner's viewport.
+    recordSightPacketOwner(this, i_slot);
+    mDoMtx_stack_c::transS(proj.x, proj.y, proj.z);
+    mDoMtx_stack_c::scaleM(32.0f, 32.0f, 32.0f);
+    mDoMtx_copy(mDoMtx_stack_c::get(), mProjMtx);
+    dComIfGd_set2DXlu(this);
+}
+#endif
 
 void daPy_sightPacket_c::setSightImage(ResTIMG* i_img) {
     mpImg = i_img;

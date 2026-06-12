@@ -529,7 +529,7 @@ int daAlink_c::commonCutAction() {
         resetCombo(TRUE);
     }
 
-    if (dComIfGp_getDoStatus() == BUTTON_STATUS_PUT_AWAY) {
+    if (getDoStatus() == BUTTON_STATUS_PUT_AWAY) {
         setDoStatus(BUTTON_STATUS_NONE);
     }
 
@@ -1164,6 +1164,10 @@ int daAlink_c::procCutFinishInit(int i_type) {
     const daAlinkHIO_cutFinish_c1* cutData;
     const daAlink_cutParamTbl* cutParams = &cutParamTable[i_type];
     BOOL is_proc_frontRoll = mProcID == PROC_FRONT_ROLL;
+
+#if TARGET_PC
+    mIsRollstab = (is_proc_frontRoll != FALSE) && (i_type == CUT_FINISH_PARAM_STAB);
+#endif
 
     commonProcInit(PROC_CUT_FINISH);
     setCutType(cutParams->m_cutType);

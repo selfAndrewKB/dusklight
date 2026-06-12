@@ -12,6 +12,7 @@
 #include "f_op/f_op_camera_mng.h"
 
 #include "dusk/frame_interpolation.h"
+#include "dusk/coop/render_visibility.h"
 
 const u16 l_M_Hijiki00TEX__width = 31;
 const u16 l_M_Hijiki00TEX__height = 31;
@@ -518,9 +519,13 @@ dGrass_packet_c::dGrass_packet_c() {
 }
 
 void dGrass_packet_c::draw() {
+    ZoneScoped;
     dScnKy_env_light_c* kankyo = dKy_getEnvlight();
     cXyz spB4;
     cXyz spA8;
+#if TARGET_PC
+    bool split_screen_visibility = dusk::coop::render_visibility::shouldBypassDrawCulling();
+#endif
 
     j3dSys.reinitGX();
     GXSetNumIndStages(0);
@@ -759,6 +764,11 @@ void dGrass_packet_c::draw() {
                     if (dusk::frame_interp::lookup_replacement(reinterpret_cast<const void*>(&var_r29->m_modelMtx), grass_mtx)) {
                         cMtx_concat(j3dSys.getViewMtx(), grass_mtx, grass_mtx);
                         GXLoadPosMtxImm(grass_mtx, 0);
+                    } else if (split_screen_visibility) {
+                        // Co-op: split-screen stores grass detail as world-space matrices so each
+                        // viewport can apply its own camera instead of inheriting P1's baked view.
+                        cMtx_concat(j3dSys.getViewMtx(), var_r29->m_modelMtx, grass_mtx);
+                        GXLoadPosMtxImm(grass_mtx, 0);
                     } else
 #endif
                     {
@@ -914,6 +924,11 @@ static f32 checkGroundY(cXyz& param_0) {
 
 void dGrass_packet_c::update() {
     static s16 mAngleZ[1500];
+#if TARGET_PC
+    bool split_screen_visibility = dusk::coop::render_visibility::shouldBypassDrawCulling();
+#else
+    bool split_screen_visibility = false;
+#endif
 
     dGrass_anm_c* anm_p = getAnm();
     for (int i = 0; i < 112; i++) {
@@ -942,7 +957,8 @@ void dGrass_packet_c::update() {
             }
 
             sp1C.set(data_p->m_pos.x, data_p->m_pos.y + 260.0f, data_p->m_pos.z);
-            if (mDoLib_clipper::clip(j3dSys.getViewMtx(), sp1C, 260.0f)) {
+            if (!split_screen_visibility &&
+                mDoLib_clipper::clip(j3dSys.getViewMtx(), sp1C, 260.0f)) {
                 cLib_onBit<u8>(data_p->field_0x01, 2);
             } else {
                 cLib_offBit<u8>(data_p->field_0x01, 2);
@@ -1005,7 +1021,12 @@ void dGrass_packet_c::update() {
                         }
                     }
 
-                    cMtx_concat(j3dSys.getViewMtx(), mDoMtx_stack_c::get(), data_p->m_modelMtx);
+                    if (split_screen_visibility) {
+                        cMtx_copy(mDoMtx_stack_c::get(), data_p->m_modelMtx);
+                    } else {
+                        cMtx_concat(j3dSys.getViewMtx(), mDoMtx_stack_c::get(),
+                                    data_p->m_modelMtx);
+                    }
                 } else {
                     mDoMtx_stack_c::transS(data_p->m_pos.x, data_p->m_pos.y, data_p->m_pos.z);
                     mDoMtx_stack_c::YrotM(i * 3535);
@@ -1016,7 +1037,12 @@ void dGrass_packet_c::update() {
 
                     f32 scale = ((((s16)data_p->m_pos.x * 3535) & 0xFFF) / 4096.0f) * 0.3f + 0.7f;
                     mDoMtx_stack_c::scaleM(scale, scale, scale);
-                    cMtx_concat(j3dSys.getViewMtx(), mDoMtx_stack_c::get(), data_p->m_modelMtx);
+                    if (split_screen_visibility) {
+                        cMtx_copy(mDoMtx_stack_c::get(), data_p->m_modelMtx);
+                    } else {
+                        cMtx_concat(j3dSys.getViewMtx(), mDoMtx_stack_c::get(),
+                                    data_p->m_modelMtx);
+                    }
                 }
 #ifdef TARGET_PC
                 dusk::frame_interp::record_final_mtx(mDoMtx_stack_c::get(), data_p->m_modelMtx);

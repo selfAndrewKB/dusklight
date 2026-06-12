@@ -206,7 +206,17 @@ int daAlink_c::procGrassWhistleWait() {
             } else {
                 int temp_r4;
                 if ((mProcVar2.field_0x300c == 1 || mProcVar2.field_0x300c == 3) && horse_p != NULL) {
+#if TARGET_PC
+                    // Co-op: record which player accepted the grass summon before clone fan-out.
+                    dusk::coop::horse_owner::setNextSummonActivator(
+                        dusk::coop::getSlotForActor(this));
+#endif
                     temp_r4 = horse_p->callHorse(&current.pos);
+#if TARGET_PC
+                    // Co-op: avoid leaking the activator marker if native callHorse rejects fan-out.
+                    dusk::coop::horse_owner::setNextSummonActivator(
+                        dusk::coop::PlayerSlot::Invalid);
+#endif
                 } else {
                     temp_r4 = 0;
                 }

@@ -11,6 +11,10 @@
 #include "d/actor/d_a_player.h"
 #include "d/d_meter2_info.h"
 #include "SSystem/SComponent/c_math.h"
+#if TARGET_PC
+#include "dusk/coop/event_owner.h"
+#include "dusk/coop/interaction_owner.h"
+#endif
 #include <cstdio>
 #include <cstring>
 
@@ -30,32 +34,41 @@ u8 knob_param_c::getExitNo(fopAc_ac_c* i_this) {
     return fopAcM_GetParamBit(i_this, 25, 6);
 }
 
-static char* dummyStringFunc() {
+static DUSK_CONST char* dummyStringFunc() {
     return "door-knob_";
 }
 
-char* daKnob20_c::getAlwaysArcName() {
+static daPy_py_c* doorEventPlayer(daKnob20_c* door) {
+#if TARGET_PC
+    // Co-op: accepted door demos should move the player that requested the event, not P1.
+    return dusk::coop::event_owner::ownerPlayerForActor(door);
+#else
+    return daPy_getPlayerActorClass();
+#endif
+}
+
+DUSK_CONST char* daKnob20_c::getAlwaysArcName() {
     return "static";
 }
 
-char* daKnob20_c::getEvArcName() {
+DUSK_CONST char* daKnob20_c::getEvArcName() {
     return "DoorK10";
 }
 
-char* daKnob20_c::getDzb() {
+DUSK_CONST char* daKnob20_c::getDzb() {
     return "door-knob.dzb";
 }
 
-char* daKnob20_c::getDummyBmd() {
+DUSK_CONST char* daKnob20_c::getDummyBmd() {
     return "door-knobDummy.bmd";
 }
 
-static char* l_bmd_base_name = "door-knob_";
+static DUSK_CONST char* l_bmd_base_name = "door-knob_";
 
-char* daKnob20_c::getBmd() {
+DUSK_CONST char* daKnob20_c::getBmd() {
     static char l_bmdName[32];
 
-    sprintf(l_bmdName, "%s%02d.bmd", l_bmd_base_name, knob_param_c::getDoorModel(this));
+    SAFE_SPRINTF(l_bmdName, "%s%02d.bmd", l_bmd_base_name, knob_param_c::getDoorModel(this));
     return l_bmdName;
 }
 
@@ -194,7 +207,7 @@ void daKnob20_c::setActionFromFlow() {
 }
 
 void daKnob20_c::setEventId() {
-    static char* ev_name_table[7] = {
+    static DUSK_CONSTEXPR char DUSK_CONST* ev_name_table[7] = {
         "DEFAULT_KNOB_DOOR_F_OPEN",
         "DEFAULT_KNOB_DOOR_B_OPEN",
         "DEFAULT_KNOB_TALK",
@@ -212,6 +225,18 @@ void daKnob20_c::setEventId() {
 }
 
 int daKnob20_c::checkArea(f32 param_1, f32 param_2, f32 param_3) {
+#if TARGET_PC
+    const dusk::coop::interaction_owner::PromptOwnerResult owner =
+        dusk::coop::interaction_owner::selectOrientedBoxPrompt(
+            current.pos, current.angle.y, field_0x60f, param_1, param_2, param_3);
+    if (owner.found) {
+        // Co-op: door prompt eligibility is actor-global; seed the shared side from the
+        // nearest active player who actually satisfies the vanilla interaction area.
+        field_0x60f = owner.side;
+        return 1;
+    }
+    return 0;
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
     cXyz playerDistance = player->current.pos - current.pos;
     mDoMtx_stack_c::YrotS(-current.angle.y);
@@ -235,6 +260,7 @@ int daKnob20_c::checkArea(f32 param_1, f32 param_2, f32 param_3) {
     } else {
         return 1;
     }
+#endif
 }
 
 void daKnob20_c::setEventPrm() {
@@ -248,6 +274,19 @@ void daKnob20_c::setEventPrm() {
             return;
         }
     }
+#if TARGET_PC
+    const dusk::coop::interaction_owner::PromptOwnerResult owner =
+        dusk::coop::interaction_owner::selectOrientedBoxPrompt(
+            current.pos, current.angle.y, field_0x60f, 80.0f, 110.0f, 250.0f);
+    if (!owner.found) {
+        offFlag(4);
+        return;
+    }
+    // Co-op: pick the prompt side before event ids are selected, otherwise P2 can
+    // satisfy the area check but inherit P1's previous door side.
+    field_0x60f = owner.side;
+    daPy_py_c* promptPlayer = static_cast<daPy_py_c*>(owner.actor);
+#endif
     if (field_0x60f == 0) {
         field_0x5b9 = 0;
     } else {
@@ -266,6 +305,13 @@ void daKnob20_c::setEventPrm() {
             field_0x5b9 = 5;
         }
     }
+#if TARGET_PC
+    if (!promptPlayer->checkWolf()) {
+        eventInfo.setEventId(field_0x5a4[field_0x5b9]);
+        eventInfo.setMapToolId(field_0x5b2[field_0x5b9]);
+        eventInfo.onCondition(4);
+    }
+#else
     if (!daPy_py_c::checkNowWolf()) {
         if (!checkArea(80.0f, 110.0f, 250.0f)) {
             offFlag(4);
@@ -275,6 +321,7 @@ void daKnob20_c::setEventPrm() {
             eventInfo.onCondition(4);
         }
     }
+#endif
 }
 
 int daKnob20_c::releaseBG() {
@@ -296,7 +343,7 @@ int daKnob20_c::frontCheck() {
 }
 
 int daKnob20_c::getDemoAction() {
-    static char* action_table[16] = {
+    static DUSK_CONSTEXPR char DUSK_CONST* action_table[16] = {
         "WAIT",
         "SETSTART",
         "SETANGLE",
@@ -429,7 +476,7 @@ int daKnob20_c::demoProc() {
 }
 
 void daKnob20_c::setStart(f32 param_1, f32 param_2) {
-    daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+    daPy_py_c* player = doorEventPlayer(this);
     cXyz pos(current.pos);
     s16 angle = shape_angle.y + 0x7fff;
     pos.x += (param_2 * cM_ssin(angle)) - (param_1 * cM_scos(angle));
@@ -438,11 +485,11 @@ void daKnob20_c::setStart(f32 param_1, f32 param_2) {
 }
 
 void daKnob20_c::setAngle() {
-  static_cast<daPy_py_c*>(dComIfGp_getPlayer(0))->changeDemoMoveAngle(shape_angle.y + 0x7fff);
+    doorEventPlayer(this)->changeDemoMoveAngle(shape_angle.y + 0x7fff);
 }
 
 int daKnob20_c::adjustmentProc() {
-    daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+    daPy_py_c* player = doorEventPlayer(this);
     cXyz local_1c;
     cXyz local_28;
     int sVar1 = shape_angle.y + 0x7fff;
@@ -463,7 +510,7 @@ int daKnob20_c::adjustmentProc() {
 }
 
 int daKnob20_c::openInit(int param_1) {
-    static char* bck_table[4] = {
+    static DUSK_CONSTEXPR char DUSK_CONST* bck_table[4] = {
         "FDoorA.bck",
         "FDoorB.bck",
         "FDoorA.bck",
@@ -490,7 +537,7 @@ int daKnob20_c::openProc(int param_1) {
         return 1;
     }
     if ((param_1 == 4 || param_1 == 5) && field_0x57c.checkFrame(15.0f)) {
-        daPy_py_c* player = daPy_getPlayerActorClass();
+        daPy_py_c* player = doorEventPlayer(this);
         player->onSceneChangeArea(knob_param_c::getExitNo(this), 0xff, NULL);
     }
     return 0;
@@ -501,7 +548,7 @@ int daKnob20_c::openEnd(int param_1) {
     int rt = dComIfG_Bgsp().Regist(field_0x5a0, this);
     JUT_ASSERT(1017, !rt);
     cXyz local_70(cM_ssin(home.angle.y), 0.0f, cM_scos(home.angle.y));
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
+    fopAc_ac_c* player = doorEventPlayer(this);
     cXyz cStack_7c = player->current.pos - current.pos;
     f32 dVar11 = cStack_7c.inprodXZ(local_70);
     f32 fVar1 = dVar11 < 0.0f ? 180.0f : -180.0f;
@@ -527,7 +574,7 @@ void daKnob20_c::initOpenDemo() {
 }
 
 void daKnob20_c::startDemoProc() {
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
+    fopAc_ac_c* player = doorEventPlayer(this);
     field_0x5bc = dComIfGp_evmng_getMyStaffId("SHUTTER_DOOR", 0, 0);
     shape_angle.y = current.angle.y;
     JUT_ASSERT(1071, player);
@@ -694,13 +741,13 @@ static int daKnob20_Create(fopAc_ac_c* i_this) {
     return static_cast<daKnob20_c*>(i_this)->create();
 }
 
-static actor_method_class l_daKnob20_Method = {
+static DUSK_CONST actor_method_class l_daKnob20_Method = {
     (process_method_func)daKnob20_Create,  (process_method_func)daKnob20_Delete,
     (process_method_func)daKnob20_Execute, (process_method_func)NULL,
     (process_method_func)daKnob20_Draw,
 };
 
-actor_process_profile_definition g_profile_KNOB20 = {
+DUSK_PROFILE actor_process_profile_definition DUSK_CONST g_profile_KNOB20 = {
     /* Layer ID     */ fpcLy_CURRENT_e,
     /* List ID      */ 7,
     /* List Prio    */ fpcPi_CURRENT_e,

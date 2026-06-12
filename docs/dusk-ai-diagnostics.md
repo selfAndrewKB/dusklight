@@ -196,7 +196,7 @@ The recorder should enforce output budgets centrally as a safety fuse, not as th
 
 The recorder is intentionally small but should grow through provider/profile additions, not one-off logs. The next useful expansion is a set of reusable provider families:
 
-- `attention.state`: global attention lock state, current lock-on/action/check targets, and enough actor metadata to tell which player slot is observing the global attention object.
+- `attention.state`: global and slot-local attention lock state, current lock-on/action/check targets, and enough actor metadata to tell which player slot owns each attention object.
 - `player.status`: selected `dComIfGp` player status bits, R/Z/A/Do/UI button status, camera attention status, and secondary ALINK mirror hints. This is the next implemented provider for separating clean P2 input from shared player/attention state before any behavior fix.
 - `actor.lifecycle`: create/delete/register/unregister events with future stable actor UIDs, profile names, rooms, arguments, and parent/process-tree relationships.
 - `actor.processes`: low-rate or manual process-tree summaries derived from the same data used by `ImGuiProcessOverlay`.
@@ -223,10 +223,12 @@ This keeps the recorder extensible enough for future co-op systems without turni
 - `latest.json` is the rich current-state surface. It may include exact positions, stick values, animation frames, render buffer sizes, attention list weights/distances, and other context that would be too noisy as event keys.
 - `events.jsonl` is the semantic timeline. Providers should project their latest data into a smaller event key so standing still, window-focus buffer churn, animation frame advancement, or tiny stick/position drift does not emit new events by itself.
 - `input.pad` event keys should use semantic gameplay input rather than raw trigger edges or the full raw hold bitfield. Exact raw values belong in payload/latest, but controller-specific high bits, one-frame trigger churn, and noisy held item bits should not make JSONL grow during ordinary movement.
-- `attention.state` and `player.status` are complementary. `attention.state` describes the shared `dAttention_c` object; `player.status` describes selected shared `dComIfGp` player/button/camera status that ALINK uses around shield, lock-on, actions, and UI prompts.
+- `attention.state` and `player.status` are complementary. `attention.state` describes the shared P1 `dAttention_c` object plus co-op slot-local attention owners; `player.status` describes selected shared `dComIfGp` player/button/camera status that ALINK uses around shield, lock-on, actions, and UI prompts.
 - `caught_stun.owner` records retained stun ownership for effects such as Gibdo scream. It should emit semantic begin/end/owner-change/affected-set events only; stun timers, cry timers, and input drift belong in `latest.json` and event context, not in the event key.
 - Current evidence says the P2 shield/attention mirror is not P2 input leakage: P2 input remains clean while shared attention/status facts change. Use these providers to identify which state needs per-player decoupling instead of forcing secondary ALINK to ignore attention as a blind workaround.
-- The secondary ALINK harness now has an explicit `Ignore shared attention lock` probe. Captures should compare `attention.state.lockon` against `alink.secondary.attention_lock`: if global lock stays true while secondary attention lock stays false, the probe is doing its job and remaining mirroring belongs to another shared status path.
+- Historical secondary ALINK captures used an explicit `Ignore shared attention lock` probe to prove
+  that P2 was consuming P1 global attention. Current builds should compare `attention.state.lockon`
+  against `alink.secondary.attention_lock` with `player_attention` active instead.
 - The user confirmed the probe stops P2 from mirroring P1's shield/target pose. Treat this as a confirmed singleton-decoupling lesson: `dAttention_c` may remain the global P1/camera/HUD attention object for now, but secondary ALINK must not interpret `dAttention_c::Lockon()` as its own per-player gameplay lock state.
 - The user confirmed P2 controller input works: P2 movement, rolling, and a basic combat swing worked from controller 2. The next failures were item/action ownership, with fishing hook visible state appearing on P1 and boomerang catch/availability routing back to P1.
 - `alink.secondary` records ownership context for those failures: equipped item, selected item slot, item actor keep pointer/id/name, ride actor keep pointer/id/name, thrown boomerang actor keep, ALINK item button/trigger masks, and use-button flags. These fields should stay in payload/latest and only drive JSONL events when ownership facts actually change.
@@ -249,6 +251,7 @@ Reserve these top-level namespaces:
 - `debug.*`: original debug viewer text/shape annotations.
 - `coop.*`: co-op registry, profile flags, slot/peer mapping.
 - `alink.*`: ALINK-specific action, animation, model-data ownership, and probe state.
+- `hud.*`: meter presentation ownership, resolved item state, and shared HUD replay state.
 - `osreport.*`: selected structured OSReport/assertion events if the recorder becomes a sink.
 
 This prevents flat-name drift such as co-op probe flags and attention state competing in the same namespace.
@@ -309,11 +312,15 @@ The smallest useful implementation starts with:
 - `render.stats`: existing Aurora frame/backend stats.
 - `render.windows`: split-screen layout, active render-window count, viewport/scissor rectangles, and camera id per window.
 - `camera.state`: camera 0/1 assignment, readiness, player/window ids, camera mode/type, FOV/aspect, latest eye/center vectors, and native map-tool sources for camera type selection.
+- `camera.area_load`: bounded native startup checkpoints for camera initialization, camera readiness,
+  primary-ALINK session restoration, and camera 0's first twelve native post-load runs. Rich
+  snapshots retain stage, actor, turn-restart camera, camera vector, and split-screen facts; JSONL
+  change detection is driven only by explicit checkpoint revision.
 - `player.slots`: sidecar co-op slots, actor UID/pointer, profile, room, position, angle, speed.
 - `input.pad`: raw pad state and current co-op input snapshot for player slots 0 and 1.
 - `coop.probes`: current secondary ALINK probe flags.
-- `alink.secondary`: the secondary ALINK state already being investigated: proc, animation frame/rate, relevant input/action bits, and model-data ownership summary.
-- `attention.state`: global attention owner, flags, lock truth, targets, counts, and lock/action/check lists with actor metadata.
+- `alink.secondary`: the secondary ALINK state already being investigated: proc, animation frame/rate, relevant input/action bits, model-data ownership summary, and wolf-lock facts such as lock count, retained target, dome status, and lock-attack camera status.
+- `attention.state`: global attention owner plus co-op slot-local attention owners, flags, lock truth, targets, counts, and lock/action/check lists with actor metadata.
 - `selected_target.state`: selected/player-state decisions after identity is known, such as target speed, facing, position, cut activity, and horse state. Continuous facts are latest/context only and must not drive JSONL events.
 - `defender.owner`: enemy-attack contact decisions after a collider touches a player, such as defender slot, guard/block state, shield-hit flags, and hit position. Contact events are semantic; held collisions should not emit every frame.
   Bokoblin currently reports individual attack sphere labels such as `atk-sphere0 P2 hit`; the investigation notes live in `docs/coop-defender-owner-contact-investigation.md`.
@@ -321,6 +328,14 @@ The smallest useful implementation starts with:
 - `bokoblin.attack`: Bokoblin-local attack-state probe for the intermittent committed-attack loop. It records attack state, animation frame/play speed, target slot, attack-sphere contact facts, guarded-hit outcome, pre-active-window hit timing, and `loop_suspect` events without changing behavior.
 - `gibdo.state`: Gibdo-local wake/chase/attack probe for the P2-first inert-state investigation. It records action/move mode, current BCK, animation progress, selected slot, close-range gates, line-of-sight result, delay counter, scream owner state, and `loop_suspect` events without changing behavior.
 - `young_gohma.state`: Young Gohma-local gate probe for the post-attack idle/drop investigation. It records action/subaction, animation frame/play speed, selected slot, distance, angle diff, range/cone/LOS gate results, final `pl_check` result, attack-collider state, and `loop_suspect` events without changing behavior.
+- `hud.presentation`: P1/P2 item resolver state plus the shared meter tree before P2 replay, after P2 apply, and after the restore pass. Pane translation and scale remain rich `latest.json` context; JSONL emission is driven only by ownership, item/count, visibility, and digit-state changes.
+- `event.presentation`: singular fullscreen presentation state, source depths, retained presenter
+  slot/window, split-screen capability versus active viewport layout, non-presenter hiding policy,
+  hidden slots, and the latest begin/end/reset transition. Schema v2 covers howl, item-ring,
+  Start-menu, field-map, dungeon-map, Agitha-insect, Midna-service, and dialogue sources. JSONL
+  emission is driven only by those semantic transitions.
+- `message.owner`: active interactive dialogue owner, retained pad, listener/speaker actors,
+  fullscreen-presentation flag, and latest begin/end/reset transition.
 - `diagnostics.stats`: recorder health in `latest.json`, including per-provider event counts, byte counts, throttles, payload oversize counts, current budget-window counts, and configured provider budgets.
 
 Leave process-tree, heap, OSReport sink, and debug-viewer providers for follow-up unless the first implementation needs them to answer the current ALINK question.
@@ -346,7 +361,7 @@ First profile candidate:
   ],
   "budgets": {
     "scene.current": {"max_events_per_minute": 20, "max_payload_bytes": 4096},
-    "attention.state": {"max_events_per_minute": 60, "max_payload_bytes": 12288},
+    "attention.state": {"max_events_per_minute": 60, "max_payload_bytes": 32768},
     "alink.secondary": {"max_events_per_minute": 120, "max_payload_bytes": 8192}
   },
   "flush_triggers": [
@@ -381,10 +396,11 @@ Implemented:
 - `Ctrl+F12` is the fast co-op capture setup: enable the diagnostics profile and native split-screen prototype, reset secondary ALINK probes to default, spawn P2 if possible, and show a Dusk toast. Use the manual UI controls for recovery, alternate probe combinations, or flushing.
 - Actor Spawner also exposes `Show enemy target overlay`, with `Ctrl+Shift+F12` as the hotkey. This draws live `enemy_targeting` decisions in-game for fast inspection, but it is not a durable artifact. Use `latest.json` and `events.jsonl` when preserving evidence for later review.
 - The existing ALINK action-mirror helper now also feeds `alink.secondary` structured state whenever it emits the human-readable `secondary action-mirror` log. Its `"phase"` field is informational; identical state is not re-emitted just because the helper saw a new before/after phase.
-- `attention.state` records the shared `dAttention_c` object directly: owner actor, pad number, flags, lock truth, lock/action/check counts and offsets, primary targets, and active lock/action/check list entries with actor metadata. It samples every five frames and intentionally omits empty list slots plus noisy list weights/distances in this profile. This exists because the current shield/target mirror evidence points at shared attention state, not P2 raw input leakage.
+- `attention.state` records the shared `dAttention_c` object directly and includes a `slots` array for co-op slot-local attention owners: owner actor, pad number, flags, lock truth, lock/action/check counts and offsets, button/release timers, primary targets, and active lock/action/check list entries with actor metadata. It samples every five frames and intentionally omits empty list slots. This exists because P2 target/guard evidence points at attention ownership state, not raw input leakage.
 - `camera.state` records camera 0/1 assignment, player ids, window ids, attention status, pointers, initialization readiness, owner/global room numbers, aspect/FOV, eye/center, camera distance, native `dCamera_c` type id/name, mode/state/style, trim, gear, window dimensions, and map-tool inputs for room/stage/default/tag camera selection. It samples every frame during the active profile so half-initialized camera processes and P2 camera-behavior differences are visible, but its event key intentionally uses assignment/readiness/mode/style facts, not exact camera vectors, distance, style timers, or window dimensions.
 - `camera.state` events include `event_context.player_slots` so camera type/style/tag transitions can be read together with current P1/P2 position, room, angle, and speed. These context values do not participate in the event key and therefore cannot make movement itself spam `events.jsonl`.
 - `render.windows` records active render-window count, split-screen layout, viewport/scissor rectangles, and camera id per window. It samples every frame during the active profile so bootstrap failures are visible, but emits JSONL only when layout/window facts change.
+- `horse.owner` records slot-assigned Epona state, retained rider horse, reins, localized animation wrappers, lash presentation facts, and summon diagnostics. For horse-grass tests, inspect `last_summon_revision`, `last_summon_activator`, `last_summon_pos`, each slot's `last_summon_decision`, `call_wait`, `call_deferred`, `call_delay_seconds`, `call_target`, `call_target_distance_xz`, `last_summon_distance_xz`, and `owner_distance_xz`. Summon decisions distinguish deferred player registration, deferred spawn, parked native call, already-present native call, mounted skip, and invalid/no-player cases. Exact positions and distances stay in `latest.json`; JSONL events key off semantic decisions and flags.
 - The Actor Spawner split-screen controls expose the current secondary camera readiness/request state so a capture can distinguish "P2 did not spawn" from "camera 1 has not finished init" from "render window 1 did not draw."
 
 Still deferred:

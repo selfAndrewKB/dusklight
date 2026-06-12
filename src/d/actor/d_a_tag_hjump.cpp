@@ -11,6 +11,10 @@
 #include "d/d_com_inf_game.h"
 #include "d/actor/d_a_horse.h"
 
+#if TARGET_PC
+#include "dusk/coop/horse_owner.h"
+#endif
+
 class daTagHjump_HIO_c : public mDoHIO_entry_c {
 public:
     daTagHjump_HIO_c();
@@ -137,29 +141,15 @@ static int daTagHjump_Delete(daTagHjump_c* i_this) {
     return 1;
 }
 
-int daTagHjump_c::execute() {
-#if DEBUG
-    if (mType != 0) {
-        scale.y = l_HIO.height;
-        scale.z = l_HIO.depth;
-    }
-#endif
-    daHorse_c* horse_p = dComIfGp_getHorseActor();
-
-    if (horse_p != NULL &&
-        (mType != TYPE_TRIGGER_e ||
-         ((mOnFlagID == 0xFFF ||
-           dComIfGs_isEventBit(dSv_event_flag_c::saveBitLabels[mOnFlagID])) &&
-          (mOffFlagID == 0xFFF ||
-           !dComIfGs_isEventBit(dSv_event_flag_c::saveBitLabels[mOffFlagID])))))
-    {
-        s16 angle_diff = horse_p->shape_angle.y - shape_angle.y;
+static void checkHorseJump(daTagHjump_c* i_this, daHorse_c* horse_p) {
+    if (horse_p != NULL) {
+        s16 angle_diff = horse_p->shape_angle.y - i_this->shape_angle.y;
         int abs_angle = abs(angle_diff);
         f32 min_jump_speed;
 
-        if (field_0x5ad == 0 || field_0x5ad == 2) {
+        if (i_this->field_0x5ad == 0 || i_this->field_0x5ad == 2) {
             min_jump_speed = horse_p->getLashMaxSpeedF() * 0.8f;
-        } else if (field_0x5ad == 1 || field_0x5ad == 3) {
+        } else if (i_this->field_0x5ad == 1 || i_this->field_0x5ad == 3) {
             min_jump_speed = horse_p->getNormalMaxSpeedF() * 0.8f;
         } else {
             min_jump_speed = horse_p->getNormalMaxSpeedF() +
@@ -167,35 +157,62 @@ int daTagHjump_c::execute() {
         }
 
         if (min_jump_speed < horse_p->speedF &&
-            (abs_angle < field_0x5ae || abs_angle > 0x8000 - field_0x5ae))
+            (abs_angle < i_this->field_0x5ae || abs_angle > 0x8000 - i_this->field_0x5ae))
         {
             cXyz rel_pos;
-            fpoAcM_relativePos(this, &horse_p->current.pos, &rel_pos);
+            fpoAcM_relativePos(i_this, &horse_p->current.pos, &rel_pos);
 
             f32 temp_f3 = fabsf(rel_pos.z);
-            if (rel_pos.y >= 0.0f && rel_pos.y <= scale.y && fabsf(rel_pos.x) <= scale.x) {
-                if (temp_f3 >= (scale.z - field_0x5b8) && temp_f3 <= (scale.z + field_0x5b8) &&
-                    ((rel_pos.z > 0.0f && abs_angle > 0x8000 - field_0x5ae) ||
-                     (rel_pos.z < 0.0f && abs_angle < field_0x5ae)))
+            if (rel_pos.y >= 0.0f && rel_pos.y <= i_this->scale.y &&
+                fabsf(rel_pos.x) <= i_this->scale.x)
+            {
+                if (temp_f3 >= (i_this->scale.z - i_this->field_0x5b8) &&
+                    temp_f3 <= (i_this->scale.z + i_this->field_0x5b8) &&
+                    ((rel_pos.z > 0.0f && abs_angle > 0x8000 - i_this->field_0x5ae) ||
+                     (rel_pos.z < 0.0f && abs_angle < i_this->field_0x5ae)))
                 {
                     f32 temp_f3_2 = fabsf(rel_pos.z / cM_scos(angle_diff));
                     f32 var_f4;
 
-                    if (temp_f3_2 < field_0x5b8) {
-                        var_f4 = field_0x5b8;
+                    if (temp_f3_2 < i_this->field_0x5b8) {
+                        var_f4 = i_this->field_0x5b8;
                     } else {
                         var_f4 = temp_f3_2;
                     }
 
                     rel_pos.x += (temp_f3_2 * cM_ssin(angle_diff)) + (var_f4 * cM_ssin(angle_diff));
-                    if (fabsf(rel_pos.x) <= scale.x ||
-                        (mType == TYPE_TRIGGER_e && field_0x5ad == 4))
+                    if (fabsf(rel_pos.x) <= i_this->scale.x ||
+                        (i_this->mType == daTagHjump_c::TYPE_TRIGGER_e && i_this->field_0x5ad == 4))
                     {
-                        horse_p->onTagJump(temp_f3_2, field_0x5b4, var_f4);
+                        horse_p->onTagJump(temp_f3_2, i_this->field_0x5b4, var_f4);
                     }
                 }
             }
         }
+    }
+}
+
+int daTagHjump_c::execute() {
+#if DEBUG
+    if (mType != 0) {
+        scale.y = l_HIO.height;
+        scale.z = l_HIO.depth;
+    }
+#endif
+
+    if (mType != TYPE_TRIGGER_e ||
+        ((mOnFlagID == 0xFFF ||
+          dComIfGs_isEventBit(dSv_event_flag_c::saveBitLabels[mOnFlagID])) &&
+         (mOffFlagID == 0xFFF ||
+          !dComIfGs_isEventBit(dSv_event_flag_c::saveBitLabels[mOffFlagID]))))
+    {
+#if TARGET_PC
+        // Co-op: fence triggers are an any-active-horse world rule, not a campaign-Epona rule.
+        dusk::coop::horse_owner::forEachRegisteredHorse(
+            [this](dusk::coop::PlayerSlot, daHorse_c* horse) { checkHorseJump(this, horse); });
+#else
+        checkHorseJump(this, dComIfGp_getHorseActor());
+#endif
     }
 
     return 1;
@@ -222,13 +239,13 @@ static int daTagHjump_Draw(daTagHjump_c* i_this) {
     return i_this->MoveBGDraw();
 }
 
-static actor_method_class l_daTagHjump_Method = {
+static DUSK_CONST actor_method_class l_daTagHjump_Method = {
     (process_method_func)daTagHjump_Create,  (process_method_func)daTagHjump_Delete,
     (process_method_func)daTagHjump_Execute, (process_method_func)NULL,
     (process_method_func)daTagHjump_Draw,
 };
 
-actor_process_profile_definition g_profile_Tag_Hjump = {
+DUSK_PROFILE actor_process_profile_definition DUSK_CONST g_profile_Tag_Hjump = {
     /* Layer ID     */ fpcLy_CURRENT_e,
     /* List ID      */ 3,
     /* List Prio    */ fpcPi_CURRENT_e,

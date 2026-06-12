@@ -1,9 +1,13 @@
 #ifndef D_METER_D_METER_BUTTON_H
 #define D_METER_D_METER_BUTTON_H
 
+#include "global.h"
 #include "JSystem/J2DGraph/J2DScreen.h"
 #include "JSystem/J2DGraph/J2DTextBox.h"
 #include "d/d_drawlist.h"
+#if TARGET_PC
+#include "dusk/coop/player_slots.h"
+#endif
 
 class CPaneMgr;
 class dMsgString_c;
@@ -129,6 +133,10 @@ public:
     void setAlphaIconAnimeMax();
     bool isClose();
     void setString(char*, u8, u8, u8);
+#if TARGET_PC
+    // Co-op: secondary prompt packets evaluate button flags for their owning HUD slot.
+    void setCoopHudSlot(dusk::coop::PlayerSlot slot) { mCoopHudSlot = slot; }
+#endif
     void hideAll();
     f32 getCenterPosCalc(u8, char*, int);
     void trans_button(int, f32);
@@ -194,7 +202,7 @@ public:
     /* 0x0FC */ CPaneMgr* field_0x0fc[4];
     /* 0x10C */ JKRHeap* mpHeap;
     /* 0x110 */ void* mpFishingTex;
-    /* 0x114 */ char mButtonText[2][15];
+    /* 0x114 */ char mButtonText[2][DUSK_IF_ELSE(32, 15)];
     /* 0x132 */ u8 field_0x132[0x134 - 0x132];
     /* 0x134 */ f32 field_0x134;
     /* 0x138 */ f32 field_0x138;
@@ -347,6 +355,7 @@ public:
 #ifdef TARGET_PC
     bool mWasListen[2];
     bool mWasRepeat[2];
+    dusk::coop::PlayerSlot mCoopHudSlot;
 #endif
 };
 

@@ -48,6 +48,7 @@ The first Bokoblin proof originally called `player_query` directly as a proof-of
 | Bombs | `src/d/actor/d_a_nbomb.cpp` | 15 fallback sites after first patch | preserved creating ALINK owner for player-made bomb counter decrement | Fixed first counter-lifetime cluster; P2 bomb limit resets after explosion, P2 pickup remains separate object-interaction work |
 | Spinner | `src/d/actor/d_a_spinner.cpp`, `src/d/actor/d_a_tag_sppath.cpp` | 1 fallback after first patch | `mRideAcKeep` via ride actor identity; spinner rail tags use active rider position | Fixed locally; P2 spawn/despawn and rail/slot entry validated |
 | Iron Boots | `src/d/actor/d_a_alink_hvyboots.inc`, `src/Z2AudioLib/Z2LinkMgr.cpp` | ALINK-local code plus global audio state | equipment state on ALINK; feet/leg shape visibility is shared; sound starter has owning `Z2CreatureLink` | Fixed locally; cross-player leg visibility and heavy boot sounds validated |
+| Epona | `src/d/actor/d_a_horse.cpp`, `src/d/actor/d_a_alink_horse.inc`, `src/d/d_camera.cpp` | many canonical and rider-local reads | `horse_owner` slot assignment plus retained `mRideAcKeep` once mounted | First clone-lifecycle checkpoint implemented in `docs/coop-player-horse-ownership-plan.md`; authored campaign Epona remains canonical while additional slots receive runtime clones, with mounted ALINK and camera routing still active work |
 
 ## Procedure
 

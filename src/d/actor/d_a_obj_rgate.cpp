@@ -12,6 +12,11 @@
 #include "d/actor/d_a_horse.h"
 #include "d/actor/d_a_obj_eff.h"
 
+#if TARGET_PC
+#include "d/actor/d_a_alink.h"
+#include "dusk/coop/horse_owner.h"
+#endif
+
 #define GATE_L_JNT 1
 #define GATE_R_JNT 2
 
@@ -42,6 +47,37 @@ static void* search_coach(void* i_actor, void* i_data) {
 
     return NULL;
 }
+
+#if TARGET_PC
+static daHorse_c* findMountedHorseInArea(MtxP gate_mtx, const cXyz& bound_a, const cXyz& bound_b) {
+    daHorse_c* result = NULL;
+    dusk::coop::horse_owner::forEachRegisteredHorse(
+        [&](dusk::coop::PlayerSlot, daHorse_c* horse) {
+            daAlink_c* player = dusk::coop::horse_owner::getPlayerForHorse(horse);
+            if (result != NULL || player == NULL || !player->checkHorseRide()) {
+                return;
+            }
+
+            cXyz offset(0.0f, 0.0f, 250.0f);
+            cXyz pos;
+            Mtx m;
+            mDoMtx_stack_c::transS(horse->current.pos);
+            mDoMtx_stack_c::YrotM(horse->shape_angle.y);
+            mDoMtx_stack_c::multVec(&offset, &pos);
+
+            mDoMtx_inverse(gate_mtx, m);
+            mDoMtx_stack_c::copy(m);
+            mDoMtx_stack_c::multVec(&pos, &pos);
+
+            if (bound_a.x <= pos.x && pos.x <= bound_b.x && bound_a.z <= pos.z &&
+                pos.z <= bound_b.z)
+            {
+                result = horse;
+            }
+        });
+    return result;
+}
+#endif
 
 static int nodeCallBack(J3DJoint* i_joint, int param_1) {
     if (param_1 == 0) {
@@ -210,10 +246,10 @@ void daObjRgate_c::setBaseMtx() {
     }
 }
 
-static char* l_arcName = "M_RGate00";
+static DUSK_CONSTEXPR char DUSK_CONST* l_arcName = "M_RGate00";
 
 int daObjRgate_c::Create() {
-    static char* l_evName = "RIDER_GATE_OPEN00";
+    static DUSK_CONSTEXPR char DUSK_CONST* l_evName = "RIDER_GATE_OPEN00";
 
     u8 sw_no = getSwNo();
     if (sw_no != 0xFF && !fopAcM_isSwitch(this, sw_no) &&
@@ -342,6 +378,12 @@ int daObjRgate_c::checkAreaL(cXyz const* unused1, cXyz const* unused2) {
         }
     }
 
+#if TARGET_PC
+    // Co-op: rider gates react to whichever mounted registered Epona enters this panel's area.
+    if (findMountedHorseInArea(field_0xc30, bound_a, bound_b) != NULL) {
+        return AREA_CHECK_HORSE;
+    }
+#else
     if (daPy_getPlayerActorClass()->checkHorseRide()) {
         offset.set(0.0f, 0.0f, 250.0f);
 
@@ -363,6 +405,7 @@ int daObjRgate_c::checkAreaL(cXyz const* unused1, cXyz const* unused2) {
             }
         }
     }
+#endif
 
     bound_a.set(0.0f, 0.0f, -100.0f);
     bound_b.set(350.0f, 0.0f, 100.0f);
@@ -418,6 +461,12 @@ int daObjRgate_c::checkAreaR(cXyz const* unused1, cXyz const* unused2) {
         }
     }
 
+#if TARGET_PC
+    // Co-op: rider gates react to whichever mounted registered Epona enters this panel's area.
+    if (findMountedHorseInArea(field_0xc00, bound_a, bound_b) != NULL) {
+        return AREA_CHECK_HORSE;
+    }
+#else
     if (daPy_getPlayerActorClass()->checkHorseRide()) {
         offset.set(0.0f, 0.0f, 250.0f);
 
@@ -439,6 +488,7 @@ int daObjRgate_c::checkAreaR(cXyz const* unused1, cXyz const* unused2) {
             }
         }
     }
+#endif
 
     bound_a.set(0.0f, 0.0f, -100.0f);
     bound_b.set(350.0f, 0.0f, 100.0f);
@@ -581,30 +631,43 @@ void daObjRgate_c::action_typeA() {
             }
         }
 
-        daHorse_c* horse_p = dComIfGp_getHorseActor();
-        if (horse_p != NULL && horse_p->speedF != 0.0f) {
-            if (chk_l == AREA_CHECK_HORSE) {
-                switch (checkDirL(horse_p)) {
-                case FALSE:
-                    mGateLMove = 800;
-                    break;
-                case TRUE:
-                    mGateLMove = -800;
-                    break;
-                }
-
-                field_0xbb0 = 2500.0f;
+        daHorse_c* horse_l = NULL;
+        daHorse_c* horse_r = NULL;
+#if TARGET_PC
+        if (chk_l == AREA_CHECK_HORSE) {
+            cXyz bound_a(0.0f, 0.0f, -100.0f);
+            cXyz bound_b(400.0f, 0.0f, 300.0f);
+            horse_l = findMountedHorseInArea(field_0xc30, bound_a, bound_b);
+        }
+        if (chk_r == AREA_CHECK_HORSE) {
+            cXyz bound_a(0.0f, 0.0f, -300.0f);
+            cXyz bound_b(400.0f, 0.0f, 100.0f);
+            horse_r = findMountedHorseInArea(field_0xc00, bound_a, bound_b);
+        }
+#else
+        horse_l = horse_r = dComIfGp_getHorseActor();
+#endif
+        if (horse_l != NULL && horse_l->speedF != 0.0f && chk_l == AREA_CHECK_HORSE) {
+            switch (checkDirL(horse_l)) {
+            case FALSE:
+                mGateLMove = 800;
+                break;
+            case TRUE:
+                mGateLMove = -800;
+                break;
             }
 
-            if (chk_r == AREA_CHECK_HORSE) {
-                switch (checkDirR(horse_p)) {
-                case FALSE:
-                    mGateRMove = -800;
-                    break;
-                case TRUE:
-                    mGateRMove = 800;
-                    break;
-                }
+            field_0xbb0 = 2500.0f;
+        }
+
+        if (horse_r != NULL && horse_r->speedF != 0.0f && chk_r == AREA_CHECK_HORSE) {
+            switch (checkDirR(horse_r)) {
+            case FALSE:
+                mGateRMove = -800;
+                break;
+            case TRUE:
+                mGateRMove = 800;
+                break;
             }
         }
 
@@ -803,7 +866,7 @@ void daObjRgate_c::demoProc() {
 }
 
 int daObjRgate_c::getDemoAction() {
-    static char* action_table[] = {"WAIT", "ADJUSTMENT", "UNLOCK", "OPEN"};
+    static DUSK_CONSTEXPR char DUSK_CONST* action_table[] = {"WAIT", "ADJUSTMENT", "UNLOCK", "OPEN"};
 
     return dComIfGp_evmng_getMyActIdx(mStaffID, action_table, ARRAY_SIZEU(action_table), 0, 0);
 }
@@ -872,13 +935,13 @@ static int daObjRgate_MoveBGDraw(daObjRgate_c* i_this) {
     return i_this->MoveBGDraw();
 }
 
-static actor_method_class daObjRgate_METHODS = {
+static DUSK_CONST actor_method_class daObjRgate_METHODS = {
     (process_method_func)daObjRgate_create1st,     (process_method_func)daObjRgate_MoveBGDelete,
     (process_method_func)daObjRgate_MoveBGExecute, (process_method_func)NULL,
     (process_method_func)daObjRgate_MoveBGDraw,
 };
 
-actor_process_profile_definition g_profile_Obj_RiderGate = {
+DUSK_PROFILE actor_process_profile_definition DUSK_CONST g_profile_Obj_RiderGate = {
     /* Layer ID     */ fpcLy_CURRENT_e,
     /* List ID      */ 3,
     /* List Prio    */ fpcPi_CURRENT_e,

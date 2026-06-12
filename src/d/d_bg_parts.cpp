@@ -3,10 +3,13 @@
 #include "d/d_bg_parts.h"
 #include "d/d_s_play.h"
 #include "d/d_camera.h"
+#include "dusk/coop/render_visibility.h"
 #include "f_op/f_op_camera_mng.h"
 #include "JSystem/JKernel/JKRExpHeap.h"
 #include "JSystem/JKernel/JKRSolidHeap.h"
 #include <cstring>
+
+#include "dusk/string.hpp"
 
 void dBgp_c::material_c::draw() {
     material_c* material = this;
@@ -255,7 +258,7 @@ void dBgp_c::share_c::reset() {
 
 const char* dBgp_c::share_c::getArcName() {
     static char arcName[8];
-    sprintf(arcName, "@mt%04x", mId);
+    SAFE_SPRINTF(arcName, "@mt%04x", mId);
     return arcName;
 }
 
@@ -430,7 +433,7 @@ dBgp_c::packet_c::packet_c() {
 void dBgp_c::create(s8 i_roomNo, void* i_data) {
     mPointer = i_data;
     mPacket.setRoomNo(i_roomNo);
-    strcpy(mArcName, dComIfG_getRoomArcName(i_roomNo));
+    SAFE_STRCPY(mArcName, dComIfG_getRoomArcName(i_roomNo));
 
     if (mPointer != NULL) {
         JKRExpHeap* block = dStage_roomControl_c::getMemoryBlock(i_roomNo);
@@ -457,7 +460,7 @@ void dBgp_c::create(s8 i_roomNo, void* i_data) {
         unit_group_class* unitGroup = mapUnit->groups;
         for (int i = 0; i < mapUnit->num; i++) {
             char resName[16];
-            sprintf(resName, "bp%04d.dzb", i);
+            SAFE_SPRINTF(resName, "bp%04d.dzb", i);
 
             cBgD_t* dzb = (cBgD_t*)dComIfG_getStageRes(mArcName, resName);
             if (dzb != NULL) {
@@ -534,7 +537,7 @@ int dBgp_c::remove() {
 
 const char* dBgp_c::getArcName(u16 i_id, u16 i_arg) {
     static char arcName[8];
-    sprintf(arcName, "@%03x%03x", i_id, i_arg);
+    SAFE_SPRINTF(arcName, "@%03x%03x", i_id, i_arg);
     return arcName;
 }
 
@@ -681,6 +684,9 @@ void dBgp_c::draw(fopAc_ac_c* i_actor) {
     camera_process_class* sp30 = dComIfGp_getCamera(0);
     dCamera_c* camera = &sp30->mCamera;
     JUT_ASSERT(1287, camera != NULL)
+    // Co-op: background-part visibility is keyed to camera 0. Native split-screen needs these
+    // parts kept drawable so P2 does not see world pieces pop from P1's camera direction.
+    bool bypass_draw_culling = dusk::coop::render_visibility::shouldBypassDrawCulling();
 
     static u16 l_dispBitTable[] = {
         0x4000,
@@ -694,7 +700,7 @@ void dBgp_c::draw(fopAc_ac_c* i_actor) {
     };
 
     u16 spE = 0;
-    if (camera->HideBGPartsOk()) {
+    if (!bypass_draw_culling && camera->HideBGPartsOk()) {
         u16 spC = dCam_getAngleY(sp30) + 0x1000;
         spE = l_dispBitTable[spC >> 13];
     }
@@ -721,7 +727,8 @@ void dBgp_c::draw(fopAc_ac_c* i_actor) {
                             Mtx m;
                             cMtx_concat(j3dSys.getViewMtx(), model->getBaseTRMtx(), m);
 
-                            if (!mDoLib_clipper::clip(m, joint->getMax(), joint->getMin())) {
+                            if (bypass_draw_culling ||
+                                !mDoLib_clipper::clip(m, joint->getMax(), joint->getMin())) {
                                 entryModel(model);
                             }
                         }

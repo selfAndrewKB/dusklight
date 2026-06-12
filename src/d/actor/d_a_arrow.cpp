@@ -19,6 +19,7 @@
 #include "d/actor/d_a_hozelda.h"
 #if TARGET_PC
 #include "dusk/achievements.h"
+#include "dusk/coop/player_camera_status.h"
 #include "dusk/coop/player_slots.h"
 #endif
 
@@ -59,6 +60,18 @@ static daAlink_c* daArrow_getOwner(daArrow_c* i_arrow) {
 
     return daAlink_getAlinkActorClass();
 }
+
+#if TARGET_PC
+static int daArrow_getOwnerCameraId(daArrow_c* i_arrow) {
+    dusk::coop::PlayerSlot slot = dusk::coop::getSlotForActor(daArrow_getOwner(i_arrow));
+    if (slot == dusk::coop::PlayerSlot::Invalid) {
+        slot = dusk::coop::PlayerSlot::Primary;
+    }
+
+    int camera_id = dComIfGp_getPlayerCameraID(static_cast<int>(slot));
+    return camera_id >= 0 ? camera_id : 0;
+}
+#endif
 
 int daArrow_c::createHeap() {
     J3DModelData* model_data;
@@ -311,7 +324,14 @@ void daArrow_c::arrowShooting() {
     if (mArrowType == 4) {
         current.angle.x = -link->getBodyAngleX();
         current.angle.y = link->shape_angle.y + link->getBodyAngleY();
-    } else if (dComIfGp_checkPlayerStatus0(0, 0x200000) || fopAcM_GetParam(this) == 2)  {
+    } else if (
+#if TARGET_PC
+        // Co-op: scoped arrow launch uses the owning player's Hawkeye status, not P1's.
+        dusk::coop::player_camera_status::checkStatus0ForPlayer(link, 0x200000)
+#else
+        dComIfGp_checkPlayerStatus0(0, 0x200000)
+#endif
+        || fopAcM_GetParam(this) == 2)  {
         cXyz* pos = link->checkBowCameraArrowPosP(&shape_angle.x, &shape_angle.y);
         if (pos != NULL) {
             current.pos = *pos;
@@ -577,7 +597,13 @@ int daArrow_c::procWait() {
         mSoundObjArrow.startLevelSound(Z2SE_OBJ_BOMB_IGNITION, 0, mReverb);
     }
 
-    if(dComIfGp_checkCameraAttentionStatus(dComIfGp_getPlayerCameraID(0), 2)) {
+#if TARGET_PC
+    // Co-op: scoped release draw suppression belongs to the firing player's camera row.
+    int camera_id = daArrow_getOwnerCameraId(this);
+#else
+    int camera_id = dComIfGp_getPlayerCameraID(0);
+#endif
+    if(dComIfGp_checkCameraAttentionStatus(camera_id, 2)) {
         field_0x942 = 3;
     } else {
         field_0x942 = 0;
@@ -1120,6 +1146,15 @@ int daArrow_c::draw() {
     J3DGXColorS10 color = tmpColor;
 
     daAlink_c* link = daArrow_getOwner(this);
+#if TARGET_PC
+    if (fopAcM_GetParam(this) == 0 && link->mItemAcKeep.getActor() == this &&
+        dusk::coop::player_camera_status::checkStatus0ForPlayer(link, 0x200000))
+    {
+        // Co-op: a nocked Hawkeye arrow belongs to the scoped owner's first-person view and
+        // should stay hidden until it is released.
+        return TRUE;
+    }
+#endif
     if (fopAcM_GetParam(this) == 0 && field_0x940 != 0) {
         setKeepMatrix();
         field_0x940 = 0;
@@ -1259,7 +1294,7 @@ AUDIO_INSTANCES;
 template<>
 JAUSectionHeap* JASGlobalInstance<JAUSectionHeap>::sInstance;
 
-static actor_method_class l_daArrowMethodTable = {
+static DUSK_CONST actor_method_class l_daArrowMethodTable = {
     (process_method_func)daArrow_create,
     (process_method_func)daArrow_delete,
     (process_method_func)daArrow_execute,
@@ -1267,7 +1302,7 @@ static actor_method_class l_daArrowMethodTable = {
     (process_method_func)daArrow_draw,
 };
 
-actor_process_profile_definition g_profile_ARROW = {
+DUSK_PROFILE actor_process_profile_definition DUSK_CONST g_profile_ARROW = {
     /* Layer ID     */ fpcLy_CURRENT_e,
     /* List ID      */ 9,
     /* List Prio    */ fpcPi_CURRENT_e,

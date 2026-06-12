@@ -633,7 +633,7 @@ int daAlink_c::procCanoeWait() {
                     return 1;
                 }
 
-                if (doTrigger() && dComIfGp_getDoStatus() == BUTTON_STATUS_GET_OFF) {
+                if (doTrigger() && getDoStatus() == BUTTON_STATUS_GET_OFF) {
                     if (mEquipItem == 0x10B) {
                         return procCanoePaddlePutInit(1);
                     }
@@ -1425,7 +1425,12 @@ int daAlink_c::procCanoeBoomerangSubjectInit() {
 
     setSyncCanoePos();
     initBoomerangUpperAnimeSpeed(1);
+#if TARGET_PC
+    // Co-op: canoe boomerang subject mode drives only the owner slot's camera.
+    dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x80000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x80000);
+#endif
     return 1;
 }
 
@@ -1465,7 +1470,12 @@ int daAlink_c::procCanoeBoomerangMoveInit() {
 
     setSyncCanoePos();
     initBoomerangUpperAnimeSpeed(0);
+#if TARGET_PC
+    // Co-op: canoe boomerang move aim drives only the owner slot's camera.
+    dusk::coop::player_camera_status::setStatus0ForPlayer(this, 0x80000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x80000);
+#endif
     return 1;
 }
 
@@ -1719,7 +1729,7 @@ int daAlink_c::procFishingFoodInit() {
         keepItemData();
         deleteEquipItem(FALSE, FALSE);
         mSelectItemId = checkItemSetButton(0x108);
-        mEquipItem = dComIfGp_getSelectItem(mSelectItemId);
+        mEquipItem = getSelectItem(mSelectItemId);
         setItemActor();
     }
 
@@ -1740,17 +1750,18 @@ int daAlink_c::procFishingFood() {
             setSingleAnime(ANM_BOTTLE_OPEN, -1.0f, 0.0f, mUnderFrameCtrl[0].getEnd(), -1.0f);
             mProcVar2.field_0x300c = 1;
 
-            u16 item = dComIfGp_getSelectItem(mProcVar3.field_0x300e);
-            if (item == dItemNo_WORM_e || dComIfGp_getSelectItemNum(mProcVar3.field_0x300e) == 1) {
-                dComIfGs_setEquipBottleItemEmpty(mProcVar3.field_0x300e);
+            u16 item = getSelectItem(mProcVar3.field_0x300e);
+            if (item == dItemNo_WORM_e || getSelectItemNum(mProcVar3.field_0x300e) == 1) {
+                // Co-op: fishing bait mutates the owner's selected bottle slot.
+                emptyBottle(mProcVar3.field_0x300e);
             } else {
-                dComIfGp_addSelectItemNum(mProcVar3.field_0x300e, -1);
+                addSelectItemNum(mProcVar3.field_0x300e, -1);
             }
 
             if (mItemMode != dItemNo_NONE_e) {
-                dComIfGs_setEquipBottleItemIn(mProcVar3.field_0x300e, mItemMode);
+                setBottleItem(mProcVar3.field_0x300e, mItemMode);
                 if (mItemMode == dItemNo_BEE_CHILD_e) {
-                    dComIfGp_setSelectItemNum(mProcVar3.field_0x300e, 1);
+                    setSelectItemNum(mProcVar3.field_0x300e, 1);
                 }
             }
 

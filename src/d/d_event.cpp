@@ -11,7 +11,12 @@
 #include "d/actor/d_a_tag_mstop.h"
 #include "d/d_event_debug.h"
 #include "SSystem/SComponent/c_counter.h"
+#if TARGET_PC
+#include "dusk/coop/midna_owner.h"
+#endif
 #include <cstring>
+
+#include "dusk/string.hpp"
 
 namespace {
 static u8 event_debug_evnt() {
@@ -35,6 +40,48 @@ static void clear_tmpflag_for_message() {
     dComIfGs_offTmpBit(dSv_event_tmp_flag_c::tempBitLabels[54]);
     dComIfGs_offTmpBit(dSv_event_tmp_flag_c::tempBitLabels[55]);
 }
+
+#if TARGET_PC
+static daMidna_c* getTalkEventMidna(fopAc_ac_c* requestActor, fopAc_ac_c* targetActor) {
+    if (targetActor != NULL && fopAcM_GetName(targetActor) == fpcNm_MIDNA_e) {
+        return static_cast<daMidna_c*>(targetActor);
+    }
+
+    if (dusk::coop::midna_owner::isServiceActive()) {
+        return dusk::coop::midna_owner::getMidna(dusk::coop::midna_owner::currentSlot());
+    }
+
+    if (requestActor != NULL && fopAcM_GetName(requestActor) == fpcNm_ALINK_e) {
+        return dusk::coop::midna_owner::getMidnaForPlayer(static_cast<daAlink_c*>(requestActor));
+    }
+
+    return daPy_py_c::getMidnaActor();
+}
+
+static bool checkTalkEventMidnaHidden(fopAc_ac_c* requestActor, fopAc_ac_c* targetActor) {
+    daMidna_c* midna = getTalkEventMidna(requestActor, targetActor);
+    return midna == NULL || midna->checkNoDraw();
+}
+
+static bool checkTalkEventPlayerWolf(fopAc_ac_c* requestActor, fopAc_ac_c* targetActor) {
+    if (targetActor != NULL && fopAcM_GetName(targetActor) == fpcNm_MIDNA_e) {
+        daAlink_c* player = dusk::coop::midna_owner::getPlayerForMidna(static_cast<daMidna_c*>(targetActor));
+        if (player != NULL) {
+            return player->checkWolf();
+        }
+    }
+
+    if (dusk::coop::midna_owner::isServiceActive()) {
+        return dusk::coop::midna_owner::currentPlayerIsWolf();
+    }
+
+    if (requestActor != NULL && fopAcM_GetName(requestActor) == fpcNm_ALINK_e) {
+        return static_cast<daAlink_c*>(requestActor)->checkWolf();
+    }
+
+    return daPy_py_c::checkNowWolf();
+}
+#endif
 };  // namespace
 
 dEvt_control_c::dEvt_control_c() {
@@ -229,16 +276,26 @@ int dEvt_control_c::commonCheck(dEvt_order_c* order, u16 condition, u16 command)
 }
 
 int dEvt_control_c::talkCheck(dEvt_order_c* order) {
-    char* eventname = "DEFAULT_TALK";
+    DUSK_CONST char* eventname = "DEFAULT_TALK";
     fopAc_ac_c* actor = order->mpTargetActor;
     if ((fopAcM_GetName(actor) == fpcNm_Tag_Mhint_e && ((daTagMhint_c*)actor)->checkNoAttention()) ||
         (fopAcM_GetName(actor) == fpcNm_Tag_Mstop_e && ((daTagMstop_c*)actor)->checkNoAttention()) ||
         fopAcM_GetName(actor) == fpcNm_MIDNA_e)
     {
+#if TARGET_PC
+        // Co-op: Midna/M-hint event selection follows the Link that owns this
+        // conversation, not P1's global form or canonical Midna visibility.
+        if (!checkTalkEventPlayerWolf(order->mpRequestActor, actor) ||
+            checkTalkEventMidnaHidden(order->mpRequestActor, actor))
+        {
+            eventname = "MHINT_TALK";
+        }
+#else
         daMidna_c* midna = (daMidna_c*)daPy_py_c::getMidnaActor();
         if (!daPy_py_c::checkNowWolf() || midna->checkNoDraw()) {
             eventname = "MHINT_TALK";
         }
+#endif
     }
 
     if (commonCheck(order, dEvtCnd_CANTALK_e, dEvtCmd_INTALK_e)) {
@@ -756,8 +813,8 @@ int dEv_defaultSkipZev(void* actor, int parameter) {
     char* skipName;
     switch (parameter) {
     case 0:
-        strcpy(eventName, data->data.event_name);
-        strcat(eventName, "$0");
+        SAFE_STRCPY(eventName, data->data.event_name);
+        SAFE_STRCAT(eventName, "$0");
         eventID = dComIfGp_getEventManager().getEventIdx(eventName, 0xFF, -1);
         OS_REPORT("%06d: event:   [%d] %s!\n", g_Counter.mCounter0, eventID, eventName);
         break;
@@ -804,8 +861,8 @@ int dEv_defaultSkipStb(void* actor, int parameter) {
     char* skipName;
     switch (parameter) {
     case 0:
-        strcpy(eventName, data->data.event_name);
-        strcat(eventName, "$0");
+        SAFE_STRCPY(eventName, data->data.event_name);
+        SAFE_STRCAT(eventName, "$0");
         eventID = dComIfGp_getEventManager().getEventIdx(eventName, 0xFF, -1);
         OS_REPORT("%06d: event:   [%d] %s!\n", g_Counter.mCounter0, eventID, eventName);
         break;
@@ -849,9 +906,9 @@ void dEvt_control_c::setSkipProc(void* skipActor, dEvt_SkipCb skipCb, int skipPa
     mSkipParameter = skipParameter;
 }
 
-void dEvt_control_c::setSkipZev(void* skipActor, char* eventName) {
+void dEvt_control_c::setSkipZev(void* skipActor, DUSK_CONST char* eventName) {
     setSkipProc(skipActor, dEv_defaultSkipZev, 1);
-    strcpy(mSkipEventName, eventName);
+    SAFE_STRCPY(mSkipEventName, eventName);
 }
 
 void dEvt_control_c::onSkipFade() {
@@ -1305,7 +1362,7 @@ dEvt_info_c::dEvt_info_c() {
     mIndex = 0;
 }
 
-void dEvt_info_c::setEventName(char* name) {
+void dEvt_info_c::setEventName(DUSK_CONST char* name) {
     if (name == NULL) {
         mEventId = -1;
     } else {

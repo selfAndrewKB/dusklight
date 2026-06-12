@@ -4,6 +4,9 @@
 #include "d/actor/d_a_player.h"
 #include "d/d_com_inf_game.h"
 #include "f_op/f_op_actor_mng.h"
+#if TARGET_PC
+#include "dusk/coop/player_query.h"
+#endif
 
 int daTagMmsg_c::create() {
     fopAcM_ct(this, daTagMmsg_c);
@@ -71,14 +74,30 @@ int daTagMmsg_c::execute() {
         return 1;
     }
 
-    daPy_py_c* player = daPy_getLinkPlayerActorClass();
-    if ((current.pos.y <= player->current.pos.y) && (field_0x578 >= player->current.pos.y) &&
-        (fopAcM_searchPlayerDistanceXZ2(this) < field_0x574) &&
-        (field_0x570 == 0x3FF ||
+    if ((field_0x570 == 0x3FF ||
          dComIfGs_isEventBit(dSv_event_flag_c::saveBitLabels[field_0x570])) &&
         (field_0x568 == 0xFF || fopAcM_isSwitch(this, field_0x568)))
     {
-        player->setMidnaMsgNum(this, shape_angle.z);
+#if TARGET_PC
+        // Co-op: Midna message tags are prompt context producers, so each active Link
+        // records the tag when they stand in its volume.
+        dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+            daPy_py_c* player = static_cast<daPy_py_c*>(actor);
+            if ((current.pos.y <= player->current.pos.y) &&
+                (field_0x578 >= player->current.pos.y) &&
+                ((player->current.pos - current.pos).abs2XZ() < field_0x574))
+            {
+                player->setMidnaMsgNum(this, shape_angle.z);
+            }
+        });
+#else
+        daPy_py_c* player = daPy_getLinkPlayerActorClass();
+        if ((current.pos.y <= player->current.pos.y) && (field_0x578 >= player->current.pos.y) &&
+            (fopAcM_searchPlayerDistanceXZ2(this) < field_0x574))
+        {
+            player->setMidnaMsgNum(this, shape_angle.z);
+        }
+#endif
     }
 
     return 1;
@@ -92,13 +111,13 @@ static int daTagMmsg_Draw(daTagMmsg_c* i_this) {
     return 1;
 }
 
-static actor_method_class l_daTagMmsg_Method = {
+static DUSK_CONST actor_method_class l_daTagMmsg_Method = {
     (process_method_func)daTagMmsg_Create,  (process_method_func)daTagMmsg_Delete,
     (process_method_func)daTagMmsg_Execute, (process_method_func)NULL,
     (process_method_func)daTagMmsg_Draw,
 };
 
-actor_process_profile_definition g_profile_Tag_Mmsg = {
+DUSK_PROFILE actor_process_profile_definition DUSK_CONST g_profile_Tag_Mmsg = {
     /* Layer ID     */ fpcLy_CURRENT_e,
     /* List ID      */ 7,
     /* List Prio    */ fpcPi_CURRENT_e,

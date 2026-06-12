@@ -66,6 +66,10 @@ Expected edits:
 - `extern/aurora` is present in this clone because it was cloned with submodules.
 - A Visual Studio MSVC debug build succeeded. Runtime logs showed primary Link registration firing several times and unregister firing during normal game execution. The registry logging now distinguishes refresh, replacement, matched unregister, and ignored unregister mismatch so lifecycle behavior can be read directly from logs.
 - Follow-up runtime logs showed slot 0 registering once, refreshing the same actor several times, then unregistering the same actor. A later Link actor repeated the same register/refresh pattern. No replacement or ignored-unregister messages appeared, so the sidecar registry is tracking the vanilla Link lifecycle cleanly.
+- Additional-player slots now retain requested-session intent separately from scene-local actor pointers.
+  Area loads unregister the old actors normally; after the next primary ALINK completes creation,
+  requested additional slots respawn from that new actor. Split-screen camera intent follows the
+  same reconstruction boundary, and runtime-only P2 item assignments survive the actor replacement.
 - The slot-registry patch is committed locally on branch `co-op` as `75496d4daa Add co-op player slot registry`. Remote push is intentionally deferred.
 
 ## Validation

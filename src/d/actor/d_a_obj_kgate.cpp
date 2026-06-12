@@ -12,6 +12,10 @@
 #include "d/actor/d_a_horse.h"
 #include "d/actor/d_a_obj_eff.h"
 
+#if TARGET_PC
+#include "dusk/coop/horse_owner.h"
+#endif
+
 enum {
     ACT_WAIT_EVENT,
     ACT_EVENT,
@@ -40,6 +44,36 @@ static void* search_coach(void* i_actor, void* i_data) {
     return NULL;
 }
 
+#if TARGET_PC
+static daHorse_c* findHorseInArea(MtxP gate_mtx, const cXyz& bound_a, const cXyz& bound_b) {
+    daHorse_c* result = NULL;
+    dusk::coop::horse_owner::forEachRegisteredHorse(
+        [&](dusk::coop::PlayerSlot, daHorse_c* horse) {
+            if (result != NULL) {
+                return;
+            }
+
+            cXyz offset(0.0f, 0.0f, 250.0f);
+            cXyz pos;
+            Mtx m;
+            mDoMtx_stack_c::transS(horse->current.pos);
+            mDoMtx_stack_c::YrotM(horse->shape_angle.y);
+            mDoMtx_stack_c::multVec(&offset, &pos);
+
+            mDoMtx_inverse(gate_mtx, m);
+            mDoMtx_stack_c::copy(m);
+            mDoMtx_stack_c::multVec(&pos, &pos);
+
+            if (bound_a.x <= pos.x && pos.x <= bound_b.x && bound_a.z <= pos.z &&
+                pos.z <= bound_b.z)
+            {
+                result = horse;
+            }
+        });
+    return result;
+}
+#endif
+
 static int const l_gateBmdIdx[] = {5, 4, 5};
 
 static int const l_gateKeyIdx[] = {7, -1, 7};
@@ -52,7 +86,7 @@ static u32 const l_gate_heap[] = {0x1940, 0x1940, 0x1940};
 
 static u32 const l_key_heap[] = {0x1000, 0x1000, 0x1000};
 
-static cull_box const l_cull_box = {
+static DUSK_CONSTEXPR cull_box const l_cull_box = {
     {-300.0f, 0.0f, -350.0f},
     {300.0f, 450.0f, 350.0f},
 };
@@ -205,14 +239,14 @@ void daObjKGate_c::setBaseMtx() {
     }
 }
 
-static char* l_arcName[] = {
+static DUSK_CONST char* l_arcName[] = {
     "D_Kgate00",
     "D_Kgate01",
     "M_RGate00",
 };
 
 int daObjKGate_c::Create() {
-    static char* l_evName[] = {"KOKI_GATE_OPEN00", NULL, "RIDER_GATE_OPEN00"};
+    static DUSK_CONST char* l_evName[] = {"KOKI_GATE_OPEN00", NULL, "RIDER_GATE_OPEN00"};
 
     u8 sw_no = getSwNo();
 
@@ -379,7 +413,13 @@ int daObjKGate_c::checkAreaL(cXyz const* param_0, cXyz const* param_1) {
 
         offset.set(0.0f, 0.0f, 250.0f);
 
-        daHorse_c* horse_p = dComIfGp_getHorseActor();
+        daHorse_c* horse_p;
+#if TARGET_PC
+        // Co-op: rider gates react to the registered Epona entering this panel's native area.
+        horse_p = findHorseInArea(mpGateModel->getBaseTRMtx(), bound_a, bound_b);
+#else
+        horse_p = dComIfGp_getHorseActor();
+#endif
         if (horse_p != NULL) {
             mDoMtx_stack_c::transS(horse_p->current.pos);
             mDoMtx_stack_c::YrotM(horse_p->shape_angle.y);
@@ -463,7 +503,13 @@ int daObjKGate_c::checkAreaR(cXyz const* param_0, cXyz const* param_1) {
 
         offset.set(0.0f, 0.0f, 250.0f);
 
-        daHorse_c* horse_p = dComIfGp_getHorseActor();
+        daHorse_c* horse_p;
+#if TARGET_PC
+        // Co-op: rider gates react to the registered Epona entering this panel's native area.
+        horse_p = findHorseInArea(mpGateModel2->getBaseTRMtx(), bound_a, bound_b);
+#else
+        horse_p = dComIfGp_getHorseActor();
+#endif
         if (horse_p != NULL) {
             mDoMtx_stack_c::transS(horse_p->current.pos);
             mDoMtx_stack_c::YrotM(horse_p->shape_angle.y);
@@ -629,30 +675,43 @@ void daObjKGate_c::action_typeA() {
             }
         }
 
-        daHorse_c* horse_p = dComIfGp_getHorseActor();
-        if (horse_p != NULL && horse_p->speedF != 0.0f) {
-            if (chk_l == AREA_CHECK_HORSE) {
-                switch (checkDirL(horse_p)) {
-                case FALSE:
-                    mGateLMove = 800;
-                    break;
-                case TRUE:
-                    mGateLMove = -800;
-                    break;
-                }
-
-                field_0xbb4 = 2500.0f;
+        daHorse_c* horse_l = NULL;
+        daHorse_c* horse_r = NULL;
+#if TARGET_PC
+        if (chk_l == AREA_CHECK_HORSE) {
+            cXyz bound_a(0.0f, 0.0f, -100.0f);
+            cXyz bound_b(400.0f, 0.0f, 300.0f);
+            horse_l = findHorseInArea(mpGateModel->getBaseTRMtx(), bound_a, bound_b);
+        }
+        if (chk_r == AREA_CHECK_HORSE) {
+            cXyz bound_a(0.0f, 0.0f, -300.0f);
+            cXyz bound_b(400.0f, 0.0f, 100.0f);
+            horse_r = findHorseInArea(mpGateModel2->getBaseTRMtx(), bound_a, bound_b);
+        }
+#else
+        horse_l = horse_r = dComIfGp_getHorseActor();
+#endif
+        if (horse_l != NULL && horse_l->speedF != 0.0f && chk_l == AREA_CHECK_HORSE) {
+            switch (checkDirL(horse_l)) {
+            case FALSE:
+                mGateLMove = 800;
+                break;
+            case TRUE:
+                mGateLMove = -800;
+                break;
             }
 
-            if (chk_r == AREA_CHECK_HORSE) {
-                switch (checkDirR(horse_p)) {
-                case FALSE:
-                    mGateRMove = -800;
-                    break;
-                case TRUE:
-                    mGateRMove = 800;
-                    break;
-                }
+            field_0xbb4 = 2500.0f;
+        }
+
+        if (horse_r != NULL && horse_r->speedF != 0.0f && chk_r == AREA_CHECK_HORSE) {
+            switch (checkDirR(horse_r)) {
+            case FALSE:
+                mGateRMove = -800;
+                break;
+            case TRUE:
+                mGateRMove = 800;
+                break;
             }
         }
 
@@ -910,7 +969,7 @@ void daObjKGate_c::demoProc() {
 }
 
 int daObjKGate_c::getDemoAction() {
-    static char* action_table[] = {"WAIT", "ADJUSTMENT", "UNLOCK", "OPEN"};
+    static DUSK_CONST char* action_table[] = {"WAIT", "ADJUSTMENT", "UNLOCK", "OPEN"};
 
     return dComIfGp_evmng_getMyActIdx(mStaffID, action_table, ARRAY_SIZEU(action_table), 0, 0);
 }
@@ -981,13 +1040,13 @@ static int daObjKGate_MoveBGDraw(daObjKGate_c* i_this) {
     return i_this->MoveBGDraw();
 }
 
-static actor_method_class daObjKGate_METHODS = {
+static DUSK_CONST actor_method_class daObjKGate_METHODS = {
     (process_method_func)daObjKGate_create1st,     (process_method_func)daObjKGate_MoveBGDelete,
     (process_method_func)daObjKGate_MoveBGExecute, (process_method_func)NULL,
     (process_method_func)daObjKGate_MoveBGDraw,
 };
 
-actor_process_profile_definition g_profile_Obj_KkrGate = {
+DUSK_PROFILE actor_process_profile_definition DUSK_CONST g_profile_Obj_KkrGate = {
     /* Layer ID     */ fpcLy_CURRENT_e,
     /* List ID      */ 3,
     /* List Prio    */ fpcPi_CURRENT_e,

@@ -17,6 +17,9 @@
 #include <cstring>
 
 #include "dusk/settings.h"
+#if TARGET_PC
+#include "dusk/coop/player_attention.h"
+#endif
 
 class daE_YM_HIO_c: public JORReflexible {
 public:
@@ -378,8 +381,14 @@ bool daE_YM_c::checkSurpriseLock() {
     }
 
     if (mAction != ACT_ATTACK) {
+#if TARGET_PC
+        // Co-op: Shadow Insect surprise logic should honor lock-on from any player slot.
+        if (dusk::coop::player_attention::isActorLockedByAnyPlayer(this)) {
+            if (mType == 0) {
+#else
         if (dComIfGp_getAttention()->LockonTruth()) {
             if (dComIfGp_getAttention()->LockonTarget(0) == this && mType == 0) {
+#endif
                 cXyz my_vec_0 = current.pos - mPrevPos;
                 cXyz my_vec_1 = player->current.pos - mPrevPos;
                 if (mType == 4) {
@@ -1605,7 +1614,12 @@ void daE_YM_c::executeAttack() {
             field_0x6a5 = 0;
             break;
         case 1:
+            // Co-op: losing lock-on here means no player attention owner is still locked to this actor.
+#if TARGET_PC
+            if (field_0x6d4 && !dusk::coop::player_attention::isActorLockedByAnyPlayer(this)) {
+#else
             if (field_0x6d4 && (dComIfGp_getAttention()->LockonTruth() == 0 || dComIfGp_getAttention()->LockonTarget(0) != this)) {
+#endif
                 if (checkSurpriseNear()) {
                     return;
                 }
@@ -3727,7 +3741,7 @@ static int daE_YM_Create(daE_YM_c* i_this) {
     return i_this->create();
 }
 
-static actor_method_class l_daE_YM_Method = {
+static DUSK_CONST actor_method_class l_daE_YM_Method = {
     (process_method_func)daE_YM_Create,
     (process_method_func)daE_YM_Delete,
     (process_method_func)daE_YM_Execute,
@@ -3735,7 +3749,7 @@ static actor_method_class l_daE_YM_Method = {
     (process_method_func)daE_YM_Draw,
 };
 
-actor_process_profile_definition g_profile_E_YM = {
+DUSK_PROFILE actor_process_profile_definition DUSK_CONST g_profile_E_YM = {
     /* Layer ID     */ fpcLy_CURRENT_e,
     /* List ID      */ 7,
     /* List Prio    */ fpcPi_CURRENT_e,

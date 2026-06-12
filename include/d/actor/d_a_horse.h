@@ -320,6 +320,14 @@ public:
         mDoMtx_stack_c::transS(current.pos);
         mDoMtx_stack_c::ZXYrotM(shape_angle);
         m_model->setBaseTRMtx(mDoMtx_stack_c::get());
+        calcModel();
+    }
+
+    void calcModel() {
+#if TARGET_PC
+        // Co-op: shared horse model data must evaluate with this Epona actor's matrix calculator.
+        m_modelData->getJointNodePointer(0)->setMtxCalc(m_mtxcalc);
+#endif
         m_model->calc();
     }
 
@@ -342,6 +350,16 @@ public:
     u32 getShadowID() const { return m_shadowID; }
 
     BOOL checkInputOnR() const { return m_padStickValue > 0.05f; }
+
+#if TARGET_PC
+    // Co-op: expose read-only horse state for the bounded horse.owner diagnostics provider.
+    u8 getProcID() const { return m_procID; }
+    s16 getLashCount() const { return m_lashCnt; }
+    int getReinPointCount() const { return field_0x1204; }
+    const cXyz* getReinPoints() { return m_reinLine.getPos(0); }
+    const mDoExt_3DlineMat_c* getReinLineMaterial() const { return &m_reinLine; }
+    bool isRidden() const { return checkStateFlg0(FLG0_UNK_1); }
+#endif
 
     void onBagMaterial() {
         m_modelData->getMaterialNodePointer(5)->getShape()->show();

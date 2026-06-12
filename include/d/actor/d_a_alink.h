@@ -11,6 +11,10 @@
 #include "d/d_msg_flow.h"
 #include "d/d_particle_copoly.h"
 #include "d/d_save.h"
+#include "dusk/coop/player_button_status.h"
+#if TARGET_PC
+#include "dusk/coop/player_item_selection.h"
+#endif
 #include "f_op/f_op_actor_mng.h"
 #include "f_op/f_op_camera_mng.h"
 
@@ -88,6 +92,10 @@ public:
     /* 0x02C */ cXyz field_0x2c;
     /* 0x038 */ cXyz field_0x38[60];
     /* 0x308 */ cXyz field_0x308[60];
+#if TARGET_PC
+    TGXTexObj mBlurTexObj;
+    ResTIMG* mpCachedBlurTex = nullptr;
+#endif
 };  // Size = 0x5D8
 
 class dAlink_bottleWaterPcallBack_c : public JPAParticleCallBack {
@@ -1838,9 +1846,14 @@ public:
     BOOL checkWolfEnemyThrowAnime() const {
         return checkUpperAnime(0x2BD) || checkUpperAnime(0x2BE);
     }
-    void setMidnaTalkStatus(u8 status) { dComIfGp_setZStatus(status, 0); }
+    void setMidnaTalkStatus(u8 status) {
+        // Co-op: Midna/Z prompts are player-local gameplay state before the HUD grows a P2 meter.
+        dusk::coop::player_button_status::setStatusForPlayer(
+            this, dusk::coop::player_button_status::ButtonStatusKind::Z, status, 0);
+    }
     void set3DStatus(u8 status, u8 direction) {
-        dComIfGp_set3DStatus(status, direction, 0);
+        // Co-op: 3D action prompt status belongs to the acting Link, not P1's global meter state.
+        dusk::coop::player_button_status::set3DStatusForPlayer(this, status, direction, 0);
     }
     void checkCutTurnCharge();
     void checkLightSwordMtrl();
@@ -3858,8 +3871,26 @@ public:
 
     BOOL checkStartFall() { return getStartMode() == 3; }
 
-    u8 getBStatus() { return dComIfGp_getAStatus(); }
-    void setRStatus(u8 i_status, u8 i_flag) { dComIfGp_setRStatus(i_status, i_flag); }
+    u8 getBStatus() const {
+        // Co-op: ALINK gameplay reads use the acting player's prompt owner, not P1's meter copy.
+        return dusk::coop::player_button_status::getStatusForPlayer(
+            this, dusk::coop::player_button_status::ButtonStatusKind::A);
+    }
+    u8 getDoStatus() const {
+        // Co-op: ALINK gameplay reads use the acting player's prompt owner, not P1's meter copy.
+        return dusk::coop::player_button_status::getStatusForPlayer(
+            this, dusk::coop::player_button_status::ButtonStatusKind::Do);
+    }
+    u8 getRStatus() const {
+        // Co-op: ALINK gameplay reads use the acting player's prompt owner, not P1's meter copy.
+        return dusk::coop::player_button_status::getStatusForPlayer(
+            this, dusk::coop::player_button_status::ButtonStatusKind::R);
+    }
+    void setRStatus(u8 i_status, u8 i_flag) {
+        // Co-op: retain the original overload shape while routing ALINK writes through the owner slot.
+        dusk::coop::player_button_status::setStatusForPlayer(
+            this, dusk::coop::player_button_status::ButtonStatusKind::R, i_status, i_flag);
+    }
 
     BOOL checkWindSpeedMoveXZ() const { return mWindSpeed.abs2XZ() > 1.0f; }
 
@@ -3905,7 +3936,57 @@ public:
 
     inline void startRestartRoomFromOut(int, u32, int);
 
-    u16 getReadyItem() { return dComIfGp_getSelectItem(mSelectItemId); }
+    u16 getReadyItem() {
+#if TARGET_PC
+        // Co-op: equipped-item lookup belongs to this ALINK slot while inventory stays shared.
+        return dusk::coop::player_item_selection::getItemForPlayer(this, mSelectItemId);
+#else
+        return dComIfGp_getSelectItem(mSelectItemId);
+#endif
+    }
+    u8 getSelectItem(int button) const {
+#if TARGET_PC
+        return dusk::coop::player_item_selection::getItemForPlayer(this, button);
+#else
+        return dComIfGp_getSelectItem(button);
+#endif
+    }
+    s16 getSelectItemNum(int button) const {
+#if TARGET_PC
+        return dusk::coop::player_item_selection::getItemNumForPlayer(this, button);
+#else
+        return dComIfGp_getSelectItemNum(button);
+#endif
+    }
+    void setSelectItemNum(int button, s16 value) const {
+#if TARGET_PC
+        dusk::coop::player_item_selection::setItemNumForPlayer(this, button, value);
+#else
+        dComIfGp_setSelectItemNum(button, value);
+#endif
+    }
+    void addSelectItemNum(int button, s16 delta) const {
+#if TARGET_PC
+        dusk::coop::player_item_selection::addItemNumForPlayer(this, button, delta);
+#else
+        dComIfGp_addSelectItemNum(button, delta);
+#endif
+    }
+    // Co-op: bottle writes resolve this ALINK's selected bottle slot before mutating shared inventory.
+    void setBottleItem(int button, u8 item) const {
+#if TARGET_PC
+        dusk::coop::player_item_selection::setBottleItemForPlayer(this, button, item);
+#else
+        dComIfGs_setEquipBottleItemIn(button, item);
+#endif
+    }
+    void emptyBottle(int button) const {
+#if TARGET_PC
+        dusk::coop::player_item_selection::emptyBottleForPlayer(this, button);
+#else
+        dComIfGs_setEquipBottleItemEmpty(button);
+#endif
+    }
 
     static u32 getOtherHeapSize() { return 0xF0A60; }
 
@@ -4545,13 +4626,13 @@ public:
     /* 0x03840 */ cXyz* mIronBallChainPos;
     /* 0x03844 */ csXyz* mIronBallChainAngle;
     /* 0x03848 */ cXyz* field_0x3848;
-    /* 0x0384C */ cXyz* field_0x384c;
+    /* 0x0384C */ cXyz DUSK_CONST* field_0x384c;
     /* 0x03850 */ daAlink_procFunc mpProcFunc;
 
 #if TARGET_PC
     void handleWolfHowl();
     void handleQuickTransform();
-    bool checkGyroAimContext();
+    bool checkAimContext();
 
     void onIronBallChainInterpCallback();
 
@@ -4564,6 +4645,19 @@ public:
     cXyz mIBChainInterpCurrHandRoot;
     bool mIBChainInterpPrevValid;
     bool mIBChainInterpCurrValid;
+
+    cXyz mHsChainInterpPrevTop;
+    cXyz mHsChainInterpCurrTop;
+    cXyz mHsChainInterpPrevRoot;
+    cXyz mHsChainInterpCurrRoot;
+    cXyz mHsChainInterpPrevSubRoot;
+    cXyz mHsChainInterpCurrSubRoot;
+    cXyz mHsChainInterpPrevSubTop;
+    cXyz mHsChainInterpCurrSubTop;
+    bool mHsChainInterpPrevValid;
+    bool mHsChainInterpCurrValid;
+
+    bool mIsRollstab = false;
 #endif
 };  // Size: 0x385C
 

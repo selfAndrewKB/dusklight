@@ -7,6 +7,10 @@
 
 #define BOOMERANG_LOCK_MAX 5
 
+#if TARGET_PC
+#include "dusk/coop/player_slots.h"
+#endif
+
 class daBoomerang_sight_c : public dDlst_base_c {
 public:
     int createHeap();
@@ -15,6 +19,10 @@ public:
     void initFrame(int);
     void copyNumData(int);
     void setSight(cXyz const*, int);
+#if TARGET_PC
+    // Co-op: split-screen marker projection follows the throwing player's UI viewport.
+    void setSightForPlayer(cXyz const*, int, dusk::coop::PlayerSlot);
+#endif
 
     virtual void draw();
     virtual ~daBoomerang_sight_c() {}

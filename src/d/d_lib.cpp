@@ -88,19 +88,35 @@ void STControl::Yinit() {
 }
 
 f32 STControl::getValueStick() {
+#if TARGET_PC
+    return mDoCPd_c::getStickValue(mPad);
+#else
     return mDoCPd_c::getStickValue(PAD_1);
+#endif
 }
 
 s16 STControl::getAngleStick() {
+#if TARGET_PC
+    return mDoCPd_c::getStickAngle(mPad);
+#else
     return mDoCPd_c::getStickAngle(PAD_1);
+#endif
 }
 
 f32 CSTControl::getValueStick() {
+#if TARGET_PC
+    return mDoCPd_c::getSubStickValue(mPad);
+#else
     return mDoCPd_c::getSubStickValue(PAD_1);
+#endif
 }
 
 s16 CSTControl::getAngleStick() {
+#if TARGET_PC
+    return mDoCPd_c::getSubStickAngle(mPad);
+#else
     return mDoCPd_c::getSubStickAngle(PAD_1);
+#endif
 }
 
 u8 STControl::checkTrigger() {
@@ -168,16 +184,16 @@ u8 STControl::checkTrigger() {
         Yinit();
 #endif
 #if TARGET_PC
-        if (mDoCPd_c::getHoldLeft(PAD_1)) {
+        if (mDoCPd_c::getHoldLeft(mPad)) {
             mDirectionTrig |= TRIG_LEFT;
         }
-        if (mDoCPd_c::getHoldRight(PAD_1)) {
+        if (mDoCPd_c::getHoldRight(mPad)) {
             mDirectionTrig |= TRIG_RIGHT;
         }
-        if (mDoCPd_c::getHoldUp(PAD_1)) {
+        if (mDoCPd_c::getHoldUp(mPad)) {
             mDirectionTrig |= TRIG_UP;
         }
-        if (mDoCPd_c::getHoldDown(PAD_1)) {
+        if (mDoCPd_c::getHoldDown(mPad)) {
             mDirectionTrig |= TRIG_DOWN;
         }
     }

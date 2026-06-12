@@ -3,6 +3,7 @@
 #include "d/d_meter2.h"
 #include "d/d_meter2_draw.h"
 #include "d/d_meter2_info.h"
+#include "dusk/coop/midna_owner.h"
 
 void daAlink_c::handleWolfHowl() {
     if (checkWolf()) {
@@ -44,12 +45,13 @@ void daAlink_c::handleWolfHowl() {
         bool canHowl = false;
 
         if (mLinkAcch.ChkGroundHit() && !checkModeFlg(MODE_PLAYER_FLY) && !checkMagneBootsOn()) {
-            if (checkMidnaRide()) {
+            // Co-op: Dusk's howl shortcut must use the acting ALINK's Midna service/status.
+            if (dusk::coop::midna_owner::canUseService(this)) {
                 if ((checkWolf() &&
-                     (checkModeFlg(MODE_UNK_1000) || dComIfGp_checkPlayerStatus0(0, 0x10))) ||
+                     (checkModeFlg(MODE_UNK_1000) || dusk::coop::midna_owner::checkTalkStatus(this))) ||
                     (!checkWolf() &&
-                     (checkEventRun() || getMidnaActor()->checkMetamorphoseEnable()) &&
-                     (checkModeFlg(4) || dComIfGp_checkPlayerStatus0(0, 0x10))))
+                     (checkEventRun() || dusk::coop::midna_owner::canTransformNow(this)) &&
+                     (checkModeFlg(4) || dusk::coop::midna_owner::checkTalkStatus(this))))
                 {
                     canHowl = true;
                 }
@@ -113,8 +115,8 @@ void daAlink_c::handleQuickTransform() {
         return;
     }
 
-    // Use the game's default checks for if the player can currently transform
-    if (!m_midnaActor->checkMetamorphoseEnableBase()) {
+    // Co-op: transform eligibility is owner-local; physical Midna remains P1/global.
+    if (!dusk::coop::midna_owner::canTransformNow(this)) {
         Z2GetAudioMgr()->seStart(Z2SE_SYS_ERROR, NULL, 0, 0, 1.0f, 1.0f, -1.0f, -1.0f, 0);
         return;
     }
@@ -122,12 +124,13 @@ void daAlink_c::handleQuickTransform() {
     bool canTransform = false;
 
     if (mLinkAcch.ChkGroundHit() && !checkModeFlg(MODE_PLAYER_FLY) && !checkMagneBootsOn()) {
-        if (checkMidnaRide()) {
+        // Co-op: quick transform must use the acting ALINK's Midna service/status.
+        if (dusk::coop::midna_owner::canUseService(this)) {
             if ((checkWolf() &&
-                 (checkModeFlg(MODE_UNK_1000) || dComIfGp_checkPlayerStatus0(0, 0x10))) ||
+                 (checkModeFlg(MODE_UNK_1000) || dusk::coop::midna_owner::checkTalkStatus(this))) ||
                 (!checkWolf() &&
-                 (checkEventRun() || getMidnaActor()->checkMetamorphoseEnable()) &&
-                 (checkModeFlg(4) || dComIfGp_checkPlayerStatus0(0, 0x10))))
+                 (checkEventRun() || dusk::coop::midna_owner::canTransformNow(this)) &&
+                 (checkModeFlg(4) || dusk::coop::midna_owner::checkTalkStatus(this))))
             {
                 canTransform = true;
             }
@@ -144,7 +147,7 @@ void daAlink_c::handleQuickTransform() {
     procCoMetamorphoseInit();
 }
 
-bool daAlink_c::checkGyroAimContext() {
+bool daAlink_c::checkAimContext() {
     switch (mProcID) {
     case PROC_SUBJECTIVITY:
     case PROC_SWIM_SUBJECTIVITY:
