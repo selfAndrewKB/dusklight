@@ -12,7 +12,11 @@
 #include "f_op/f_op_camera_mng.h"
 
 #if TARGET_PC
+#include "dusk/coop/camera.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/item_awareness.h"
 #include "dusk/coop/player_attention.h"
+#include "dusk/coop/selected_target_state.h"
 #endif
 
 class daE_GE_HIO_c : public JORReflexible {
@@ -52,6 +56,105 @@ enum daE_GE_Action {
 static u8 hio_set;
 
 static daE_GE_HIO_c l_HIO;
+
+#if TARGET_PC
+// Co-op: Guay keeps one combat target for wake, caw, orbit, and dive decisions. Labels are
+// diagnostics only and do not create separate retention owners.
+static bool coOpSelectTargetState(daE_GE_c* i_this, const char* label, bool committed,
+                                  dusk::coop::EnemyTargetMode mode,
+                                  dusk::coop::selected_target_state::SelectedTargetState* state,
+                                  f32* distance_xz, s16* angle_y) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance_xz != NULL) {
+        *distance_xz = target.distanceXZ;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    return true;
+}
+
+static bool coOpSelectedTargetPosition(daE_GE_c* i_this, const char* label, bool committed,
+                                       dusk::coop::EnemyTargetMode mode, cXyz* position,
+                                       f32* distance_xz = NULL, s16* angle_y = NULL,
+                                       dusk::coop::selected_target_state::SelectedTargetState* state = NULL) {
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    if (!coOpSelectTargetState(i_this, label, committed, mode, &targetState, distance_xz,
+                               angle_y))
+    {
+        return false;
+    }
+
+    MtxP joint_mtx = targetState.player != NULL ? targetState.player->getModelJointMtx(0) : NULL;
+    if (joint_mtx != NULL) {
+        mDoMtx_stack_c::copy(joint_mtx);
+        mDoMtx_stack_c::multVecZero(position);
+    } else {
+        position->set(targetState.pos);
+        position->y += 100.0f;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    return true;
+}
+
+static f32 coOpTargetHomeDistanceXZ(daE_GE_c* i_this, const char* label,
+                                    dusk::coop::EnemyTargetMode mode) {
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    if (!coOpSelectTargetState(i_this, label, false, mode, &targetState, NULL, NULL)) {
+        daPy_py_c* player = daPy_getPlayerActorClass();
+        return player != NULL ? player->current.pos.absXZ(i_this->home.pos) : 99999.0f;
+    }
+    return targetState.pos.absXZ(i_this->home.pos);
+}
+
+// Co-op: camera-relative dive staging should use the selected target slot's presentation camera
+// when split-screen has one; otherwise target facing is a better fallback than borrowing P1.
+static s16 coOpPresentationAngleY(
+    const dusk::coop::selected_target_state::SelectedTargetState& state) {
+    if (state.slot == dusk::coop::PlayerSlot::Slot1 &&
+        dusk::coop::camera::isSplitScreenEnabled() &&
+        dusk::coop::camera::isSecondaryCameraReady())
+    {
+        camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(1));
+        if (camera != NULL) {
+            return fopCamM_GetAngleY(camera);
+        }
+    }
+
+    if (state.slot == dusk::coop::PlayerSlot::Primary) {
+        camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
+        if (camera != NULL) {
+            return fopCamM_GetAngleY(camera);
+        }
+    }
+
+    return state.available ? state.shapeAngleY : 0;
+}
+#endif
 
 daE_GE_HIO_c::daE_GE_HIO_c() {
     id = -1;
@@ -106,8 +209,19 @@ bool daE_GE_c::checkBeforeBg(int param_0, f32 param_1) {
         cXyz vec(param_1, 0.0f, 300.0f);
         cLib_offsetPos(&end, &current.pos, shape_angle.y, &vec);
     } else {
+#if TARGET_PC
+        // Co-op: attack path obstruction checks should trace toward the selected target slot,
+        // not P1's joint, once Guay is already committed to a player.
+        if (!coOpSelectedTargetPosition(this, "e_ge.bg_player", true,
+                                        dusk::coop::EnemyTargetMode::StickyCombat, &end))
+        {
+            mDoMtx_stack_c::copy(daPy_getLinkPlayerActorClass()->getModelJointMtx(0));
+            mDoMtx_stack_c::multVecZero(&end);
+        }
+#else
         mDoMtx_stack_c::copy(daPy_getLinkPlayerActorClass()->getModelJointMtx(0));
         mDoMtx_stack_c::multVecZero(&end);
+#endif
     }
 
     dBgS_LinChk linChk;
@@ -345,17 +459,30 @@ void daE_GE_c::executeWait() {
         speed.y = 0.0f;
         /* fallthrough */
 
-    case 1:
+    case 1: {
+#if TARGET_PC
+        f32 targetDistance = 99999.0f;
+        const bool playerRecognized =
+            coOpSelectTargetState(this, "e_ge.wait", false,
+                                  dusk::coop::EnemyTargetMode::ImmediateAcquire, NULL,
+                                  &targetDistance, NULL) &&
+            targetDistance < l_HIO.player_recognition_distance;
+#endif
         if (field_0xb8e[0] == 0) {
             mMode = 3;
+#if TARGET_PC
+        } else if (field_0xb8e[1] == 0 && playerRecognized)
+#else
         } else if (field_0xb8e[1] == 0 &&
                    fopAcM_searchPlayerDistanceXZ(this) < l_HIO.player_recognition_distance)
+#endif
         {
             bckSet(5, 3.0f, 0, 1.0f);
             mMode = 2;
             fpcM_Search(s_ge_caw, this);
         }
         break;
+    }
 
     case 2:
         if (mpMorfSO->checkFrame(6.0f)) {
@@ -383,8 +510,17 @@ void daE_GE_c::executeWait() {
 }
 
 void daE_GE_c::executeFly() {
-    daPy_py_c* player = daPy_getPlayerActorClass();
     cXyz position;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    f32 targetDistance = 99999.0f;
+    const bool targetFound =
+        coOpSelectTargetState(this, "e_ge.fly", false,
+                              dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState,
+                              &targetDistance, NULL);
+#else
+    daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
 
     f32 turning_speed = l_HIO.turning_speed;
     if (mMoveType == 2) {
@@ -442,8 +578,13 @@ void daE_GE_c::executeFly() {
         calcCircleFly(&home.pos, &position, field_0xb8c, turning_speed, 6, 1.0f);
 
         if (field_0xb8e[1] == 0) {
+#if TARGET_PC
+            if (targetFound && targetState.pos.absXZ(home.pos) < 2000.0f &&
+                targetDistance < l_HIO.player_recognition_distance)
+#else
             if (player->current.pos.absXZ(home.pos) < 2000.0f &&
                 fopAcM_searchPlayerDistanceXZ(this) < l_HIO.player_recognition_distance)
+#endif
             {
                 bckSet(4, 3.0f, 0, 1.0f);
                 mMode = 2;
@@ -473,7 +614,16 @@ void daE_GE_c::executeFly() {
 
 bool daE_GE_c::checkAttackPossible(s16 i_angle, bool param_1) {
     if (field_0xb8e[0] == 0 && (i_angle > (s16)l_HIO.attack_start_angle || param_1)) {
-        if (fopAcM_searchPlayerDistanceXZ(this) < l_HIO.minimum_attack_radius) {
+#if TARGET_PC
+        f32 targetDistance = 99999.0f;
+        coOpSelectTargetState(this, "e_ge.attack_gate", false,
+                              dusk::coop::EnemyTargetMode::StickyCombat, NULL,
+                              &targetDistance, NULL);
+        if (targetDistance < l_HIO.minimum_attack_radius)
+#else
+        if (fopAcM_searchPlayerDistanceXZ(this) < l_HIO.minimum_attack_radius)
+#endif
+        {
             return false;
         }
         target_count = 0;
@@ -486,6 +636,27 @@ bool daE_GE_c::checkAttackPossible(s16 i_angle, bool param_1) {
 }
 
 void daE_GE_c::executeAttack() {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    cXyz position;
+    s16 targetAngleY = 0;
+    if (!coOpSelectedTargetPosition(this, "e_ge.attack", mMode == 2 || mMode == 3,
+                                    dusk::coop::EnemyTargetMode::StickyCombat, &position,
+                                    NULL, &targetAngleY, &targetState))
+    {
+        daPy_py_c* player = daPy_getPlayerActorClass();
+        if (player == NULL) {
+            setActionMode(ACTION_BACK);
+            return;
+        }
+        mDoMtx_stack_c::copy(daPy_getLinkPlayerActorClass()->getModelJointMtx(0));
+        mDoMtx_stack_c::multVecZero(&position);
+        targetAngleY = fopAcM_searchPlayerAngleY(this);
+        targetState = dusk::coop::selected_target_state::stateForSlot(
+            dusk::coop::PlayerSlot::Primary, player);
+    }
+    const s16 distAngleS = cLib_distanceAngleS(coOpPresentationAngleY(targetState), targetAngleY);
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
     cXyz position;
     mDoMtx_stack_c::copy(daPy_getLinkPlayerActorClass()->getModelJointMtx(0));
@@ -494,6 +665,7 @@ void daE_GE_c::executeAttack() {
     camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
     s16 distAngleS =
         cLib_distanceAngleS(fopCamM_GetAngleY(camera), fopAcM_searchPlayerAngleY(this));
+#endif
 
     cXyz flyVec;
 
@@ -923,7 +1095,14 @@ void daE_GE_c::executeSurprise() {
             if (searchNextAttacker()) {
                 break;
             }
-            if (daPy_getPlayerActorClass()->current.pos.absXZ(home.pos) > 1000.0f) {
+            if (
+#if TARGET_PC
+                coOpTargetHomeDistanceXZ(this, "e_ge.surprise",
+                                         dusk::coop::EnemyTargetMode::ImmediateAcquire) > 1000.0f
+#else
+                daPy_getPlayerActorClass()->current.pos.absXZ(home.pos) > 1000.0f
+#endif
+            ) {
                 if (mPrevActionMode == ACTION_CAW) {
                     mActionMode = ACTION_CAW;
                 }
@@ -957,9 +1136,21 @@ void daE_GE_c::setCaw() {
 void daE_GE_c::executeCaw() {
     fpcM_Search(s_arrow_sub, this);
 
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    if (!coOpSelectTargetState(this, "e_ge.caw", false,
+                               dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState, NULL,
+                               NULL))
+    {
+        setActionMode(ACTION_WAIT);
+        return;
+    }
+    cXyz diff = targetState.pos - home.pos;
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
     // Also not sure if this is in debug since debug doesn't show a ctor
     cXyz diff = player->current.pos - home.pos;
+#endif
 
     if (diff.absXZ() > 2000.0f) {
         setActionMode(ACTION_WAIT);
@@ -996,15 +1187,28 @@ void daE_GE_c::executeCaw() {
 }
 
 void daE_GE_c::executeWind() {
-    if (daPy_py_c::getThrowBoomerangActor() == NULL && mMode != 2) {
+#if TARGET_PC
+    // Co-op: wind reaction follows the active boomerang's owner-local item actor, not P1's
+    // global boomerang keep.
+    dusk::coop::item_awareness::ItemAwarenessResult boomerangResult =
+        dusk::coop::item_awareness::findActiveBoomerang(this, "e_ge.wind_boomerang");
+    fopAc_ac_c* boomerang = boomerangResult.itemActor;
+#else
+    fopAc_ac_c* boomerang = daPy_py_c::getThrowBoomerangActor();
+#endif
+    if (boomerang == NULL && mMode != 2) {
         mMode = 2;
         field_0xb8e[0] = (s16)(cM_rndFX(30.0f) + 60.0f);
     }
 
     switch (mMode) {
     case 0: {
+        if (boomerang == NULL) {
+            mMode = 2;
+            break;
+        }
         field_0xb9e = 0;
-        cXyz boomerangPos(daPy_py_c::getThrowBoomerangActor()->current.pos);
+        cXyz boomerangPos(boomerang->current.pos);
         field_0xb58 = current.pos.absXZ(boomerangPos);
         field_0xb5c = current.pos.y - boomerangPos.y;
         speedF = speed.y = 0.0f;
@@ -1016,11 +1220,15 @@ void daE_GE_c::executeWind() {
         /* fallthrough */
 
     case 1: {
+        if (boomerang == NULL) {
+            mMode = 2;
+            break;
+        }
         if (mpMorfSO->checkFrame(0.0f)) {
             mSound.startCreatureVoice(Z2SE_EN_GE_V_FURA, -1);
         }
 
-        cXyz boomerangPos2(daPy_py_c::getThrowBoomerangActor()->current.pos);
+        cXyz boomerangPos2(boomerang->current.pos);
         ANGLE_ADD(field_0xb8c, 0x800);
         current.pos.x = boomerangPos2.x + field_0xb58 * cM_ssin(field_0xb8c);
         current.pos.z = boomerangPos2.z + field_0xb58 * cM_scos(field_0xb8c);
@@ -1055,6 +1263,9 @@ void daE_GE_c::executeWind() {
 }
 
 void daE_GE_c::executeShield() {
+#if TARGET_PC
+    s16 targetAngleY = 0;
+#endif
     switch (mMode) {
     case 0:
         field_0xb9e = 0;
@@ -1063,7 +1274,19 @@ void daE_GE_c::executeShield() {
         mMode = 1;
         bckSet(9, 3.0f, 2, 1.0f);
         field_0xb8e[0] = 60;
+#if TARGET_PC
+        // Co-op: shield recoil should face away from the selected combat target; fall back to
+        // vanilla P1 only when no local co-op target snapshot is available.
+        if (!coOpSelectTargetState(this, "e_ge.shield", false,
+                                   dusk::coop::EnemyTargetMode::StickyCombat, NULL, NULL,
+                                   &targetAngleY))
+        {
+            targetAngleY = fopAcM_searchPlayerAngleY(this);
+        }
+        current.angle.y = targetAngleY + 0x8000;
+#else
         current.angle.y = fopAcM_searchPlayerAngleY(this) + 0x8000;
+#endif
         /* fallthrough */
     case 1:
         if (mpMorfSO->checkFrame(0.0f)) {
@@ -1246,6 +1469,9 @@ static int daE_GE_IsDelete(daE_GE_c* i_this) {
 }
 
 int daE_GE_c::_delete() {
+#if TARGET_PC
+    dusk::coop::clearAllEnemyTargets(this);
+#endif
     dComIfG_resDelete(&mPhaseReq, "E_GE");
 
     if (mHIOInit) {

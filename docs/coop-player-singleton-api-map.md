@@ -92,19 +92,20 @@ proved that these can be active-player scans without changing combat target owne
 item-awareness with P1 globals by habit, but also do not force it through sticky combat targeting if
 the vanilla behavior is an immediate reaction to an item/tool state.
 
-`item_awareness` is the first Dusk-owned helper for that family. Keese wind now scans active
+`item_awareness` is the first Dusk-owned helper for that family. Keese and Guay wind now scan active
 owner-local boomerang actor keeps so a P2 boomerang can drive the same wind/follow behavior without
-becoming the Keese's retained combat target.
+becoming the enemy's retained combat target.
 
-Keese, Shadow Keese, and Bubble define the batchable compact-flyer pattern: use
+Keese, Shadow Keese, Bubble, and Guay define the batchable compact-flyer pattern: use
 `enemy_targeting` for combat identity, `selected_target_state` for vertical
 position/height/orbit/dive facts, `damage_owner` for owner-sensitive hit reactions or the hit that
 starts a wolf bite, `wolf_catch_owner` for retained mouth/throw/release lifetime when the enemy has
 that state, and `item_awareness` for immediate tool reactions such as boomerang wind when the enemy
 has that state. Similar compact flyers can move through quick batches when they expose the same API
-families and no rider, camera presentation, authored spawn, boss/setpiece, or new ownership surface.
-Do not collapse those families into one broader "flying enemy" helper unless more validated enemies
-prove the same narrower shape.
+families and no rider, authored spawn, boss/setpiece, or new ownership surface. Guay adds one
+presentation wrinkle: if a dive/staging gate compares target angle to camera angle, use the selected
+slot's presentation camera when available instead of P1's camera. Do not collapse those families
+into one broader "flying enemy" helper unless more validated enemies prove the same narrower shape.
 
 Static/ranged enemies follow the same identity split but need stricter callsite policy: wake/LOS
 may acquire immediately, while breath, bullet, or spawned-child attack continuation should read the
