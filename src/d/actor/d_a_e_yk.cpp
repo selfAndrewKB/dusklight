@@ -13,6 +13,13 @@
 #include "d/actor/d_a_player.h"
 #include "d/d_s_play.h"
 #include "SSystem/SComponent/c_math.h"
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/item_awareness.h"
+#include "dusk/coop/selected_target_state.h"
+#include "dusk/coop/wolf_catch_owner.h"
+#endif
 #include "f_op/f_op_actor_enemy.h"
 
 /**
@@ -109,6 +116,86 @@ static void anm_init(e_yk_class* i_this, int i_resIdx, f32 i_morf, u8 i_attr, f3
     i_this->mpMorfSO->setAnm((J3DAnmTransform*)dComIfG_getObjectRes("E_YK",i_resIdx), i_attr, i_morf, i_rate, 0.0f,-1.0f);
     i_this->mResIdx = i_resIdx;
 }
+
+#if TARGET_PC
+static const char* coOpActionLabel(e_yk_class* i_this) {
+    switch (i_this->mAction) {
+    case ACT_ROOF:
+        return "e_yk.roof";
+    case ACT_FIGHT_FLY:
+        return "e_yk.fight_fly";
+    case ACT_FIGHT:
+        return "e_yk.fight";
+    case ACT_ATTACK:
+        return "e_yk.attack";
+    case ACT_RETURN:
+        return "e_yk.return";
+    case ACT_FLY:
+        return "e_yk.fly";
+    case ACT_PATH_FLY:
+        return "e_yk.path_fly";
+    case ACT_CHANCE:
+        return "e_yk.chance";
+    case ACT_WOLFBITE:
+        return "e_yk.wolfbite";
+    case ACT_WIND:
+        return "e_yk.wind";
+    default:
+        return "e_yk.combat";
+    }
+}
+
+static dusk::coop::EnemyTargetMode coOpTargetModeForAction(e_yk_class* i_this) {
+    switch (i_this->mAction) {
+    case ACT_ROOF:
+    case ACT_RETURN:
+    case ACT_FLY:
+    case ACT_PATH_FLY:
+        return dusk::coop::EnemyTargetMode::ImmediateAcquire;
+    default:
+        return dusk::coop::EnemyTargetMode::StickyCombat;
+    }
+}
+
+// Co-op: Shadow Keese is a Keese-family flyer, so all combat movement/facing shares one
+// retained Combat target while labels remain diagnostics-only breadcrumbs for each callsite.
+static bool coOpSelectTargetState(
+    e_yk_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance_xz,
+    s16* angle_y) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    i_this->mAngleFromPlayer = target.angleY;
+    i_this->mDistanceXZFromPlayer = target.distanceXZ;
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance_xz != NULL) {
+        *distance_xz = target.distanceXZ;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    return true;
+}
+#endif
 
 /**
  * @brief Renders the Shadow Keese model with environmental lighting
@@ -227,11 +314,33 @@ static int pl_check(e_yk_class* i_this, f32 i_distance, s16 i_angle) {
         return 1;
     }
 
-    if (dComIfGp_getPlayer(0)->current.pos.y < i_this->current.pos.y && i_this->mDistanceXZFromPlayer < i_distance) {
-        s16 angle_delta = i_this->shape_angle.y - i_this->mAngleFromPlayer;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    f32 playerDistanceXZ = 0.0f;
+    s16 playerAngleY = 0;
+    // Co-op: awareness and re-engage checks still use Shadow Keese's native vertical/LoS
+    // gate, but they evaluate the selected active player instead of P1's singleton.
+    if (!coOpSelectTargetState(i_this, coOpActionLabel(i_this), i_this->mAction == ACT_ATTACK,
+                               coOpTargetModeForAction(i_this), &targetState, &playerDistanceXZ,
+                               &playerAngleY))
+    {
+        return 0;
+    }
+
+    fopAc_ac_c* player = targetState.actor;
+    const cXyz& playerPos = targetState.pos;
+#else
+    fopAc_ac_c* player = dComIfGp_getPlayer(0);
+    f32 playerDistanceXZ = i_this->mDistanceXZFromPlayer;
+    s16 playerAngleY = i_this->mAngleFromPlayer;
+    const cXyz& playerPos = player->current.pos;
+#endif
+
+    if (playerPos.y < i_this->current.pos.y && playerDistanceXZ < i_distance) {
+        s16 angle_delta = i_this->shape_angle.y - playerAngleY;
 
         if (i_angle == 1 || angle_delta < i_angle && angle_delta > (s16)-i_angle){
-            if (!other_bg_check(i_this,dComIfGp_getPlayer(0))) {
+            if (!other_bg_check(i_this,player)) {
                 return 1;
             } 
         }
@@ -259,7 +368,9 @@ static int pl_check(e_yk_class* i_this, f32 i_distance, s16 i_angle) {
  * - Manages collision flags and status
  */
 static void damage_check(e_yk_class* i_this) {
+#if !TARGET_PC
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
 
     if (i_this->mInvulnerabilityTimer == 0) {
         // Store current AtApid and TgApid then set them to 0
@@ -278,6 +389,15 @@ static void damage_check(e_yk_class* i_this) {
             } else {
                 // Run through the default Attack collider checks first
                 cc_at_check(i_this,&i_this->mAtColliderInfo);
+#if TARGET_PC
+                const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+                    dusk::coop::damage_owner::resolveDamageOwner(
+                        i_this, i_this->mAtColliderInfo.mpCollider);
+                daPy_py_c* wolfCatchPlayer =
+                    dusk::coop::damage_owner::resolveDamageOwnerPlayer(damageOwner);
+#else
+                daPy_py_c* wolfCatchPlayer = static_cast<daPy_py_c*>(player);
+#endif
                 
                 // If keese was hit by Clawshot or Slingshot, subtract 1 from health
                 if (i_this->mAtColliderInfo.mpCollider->ChkAtType(AT_TYPE_HOOKSHOT) || i_this->mAtColliderInfo.mpCollider->ChkAtType(AT_TYPE_SLINGSHOT)) {
@@ -296,7 +416,16 @@ static void damage_check(e_yk_class* i_this) {
                 } else {
                     // If keese was hit by wolf bite, set some fields, set pause timer to 0, 
                     // play keese wolf bit sound
-                    if (i_this->mAtColliderInfo.mpCollider->ChkAtType(AT_TYPE_WOLF_ATTACK) && (static_cast<daPy_py_c*>(player)->onWolfEnemyBiteAll(i_this,daPy_py_c::FLG2_UNK_8) != 0)) {
+                    if (i_this->mAtColliderInfo.mpCollider->ChkAtType(AT_TYPE_WOLF_ATTACK)
+                        && wolfCatchPlayer != NULL
+                        && wolfCatchPlayer->onWolfEnemyBiteAll(i_this,daPy_py_c::FLG2_UNK_8) != 0)
+                    {
+#if TARGET_PC
+                        // Co-op: wolf bite is retained physical ownership from the player who
+                        // hit this Shadow Keese, not the current target or a nearest-player guess.
+                        dusk::coop::wolf_catch_owner::beginWolfCatchFromDamageOwner(
+                            "e_yk.wolfbite", i_this, damageOwner);
+#endif
                         i_this->mAction = ACT_WOLFBITE;
                         i_this->mActionPhase = 0;
                         i_this->mInvulnerabilityTimer = 200;
@@ -521,7 +650,14 @@ static void e_yk_roof(e_yk_class* i_this) {
  * - Phase 1: Maintains flight and plays random vocalizations
  */
 static void e_yk_fight_fly(e_yk_class* i_this) {
+#if TARGET_PC
+    // Co-op: approach flight uses the retained combat target's position, including height.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectTargetState(i_this, "e_yk.fight_fly", false,
+                          dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL, NULL);
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
 
     switch (i_this->mActionPhase) {
     case 0:
@@ -536,7 +672,13 @@ static void e_yk_fight_fly(e_yk_class* i_this) {
     }
 
     cLib_addCalc2(&i_this->speedF,l_HIO.mFlySpeed, 1.0f, 0.3f * l_HIO.mFlySpeed);
+#if TARGET_PC
+    if (targetState.available) {
+        i_this->mPathPntPos = targetState.pos;
+    }
+#else
     i_this->mPathPntPos = player->current.pos;
+#endif
     fly_move(i_this);
 
     if (!pl_check(i_this,50.0f + i_this->mPlayerTrigger,1)) {
@@ -582,8 +724,16 @@ static void e_yk_fight_fly(e_yk_class* i_this) {
  * Random factors are used to create unpredictable but controlled movement patterns.
  */
 static void e_yk_fight(e_yk_class* i_this) {
+#if TARGET_PC
+    // Co-op: combat hover offsets orbit the retained combat target instead of P1.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectTargetState(i_this, "e_yk.fight", false,
+                          dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL, NULL);
+    s16 player_shape_angle_y = targetState.available ? targetState.shapeAngleY : i_this->mAngleFromPlayer;
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
     s16 player_shape_angle_y = player->shape_angle.y;
+#endif
 
     switch (i_this->mActionPhase) {
     case 0:
@@ -602,7 +752,13 @@ static void e_yk_fight(e_yk_class* i_this) {
             pos.z = cM_rndF(150.0f) + 150.0f;
 
             MtxPosition(&pos,&i_this->mPathPntPos);
+#if TARGET_PC
+            if (targetState.available) {
+                i_this->mPathPntPos += targetState.pos;
+            }
+#else
             i_this->mPathPntPos += player->current.pos;
+#endif
 
             pos = i_this->mPathPntPos - i_this->current.pos;
             mDoMtx_YrotS((MtxP)calc_mtx,cM_atan2s(pos.x,pos.z));
@@ -673,7 +829,14 @@ static void e_yk_fight(e_yk_class* i_this) {
  * Uses HIO-configured charge speed and interpolated movement.
  */
 static void e_yk_attack(e_yk_class* i_this) {
+#if TARGET_PC
+    // Co-op: committed dive startup stays tied to the chosen combat target through the attack.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectTargetState(i_this, "e_yk.attack", true,
+                          dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL, NULL);
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     
     f32 value = 0.0f;
     i_this->mMoveInterpolation = 0.0f;
@@ -685,7 +848,13 @@ static void e_yk_attack(e_yk_class* i_this) {
         i_this->mActionTimers[1]  = 0x14;
         break;
     case 1:
+#if TARGET_PC
+        if (targetState.available) {
+            i_this->mPathPntPos = targetState.pos;
+        }
+#else
         i_this->mPathPntPos = player->current.pos;
+#endif
         i_this->mPathPntPos.y += 120.0f;
         i_this->mMoveInterpolation = 2.0f;
 
@@ -1002,17 +1171,29 @@ static void e_yk_chance(e_yk_class* i_this) {
  * Maintains constant forward speed when bouncing on ground.
  */
 static void e_yk_wolfbite(e_yk_class* i_this) {
+#if TARGET_PC
+    // Co-op: once bitten, throw/release state belongs to the retained wolf owner, not P1.
+    dusk::coop::wolf_catch_owner::WolfCatchOwnerState catchOwner =
+        dusk::coop::wolf_catch_owner::updateWolfCatch("e_yk.wolfbite", i_this);
+    daPy_py_c* player = catchOwner.localPlayer != NULL
+                            ? catchOwner.localPlayer
+                            : static_cast<daPy_py_c*>(dComIfGp_getPlayer(0));
+#else
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
     switch(i_this->mActionPhase) {
     case 0:
         anm_init(i_this,7,0.0f,2,1.0f);
         i_this->mActionPhase = 1;
         break;
     case 1:
-        if (!player->checkWolfEnemyCatchOwn(i_this)) {
-            if (player->checkWolfEnemyLeftThrow()) {
+        if (player == NULL || !player->checkWolfEnemyCatchOwn(i_this)) {
+#if TARGET_PC
+            dusk::coop::wolf_catch_owner::clearWolfCatch("e_yk.wolfbite", i_this);
+#endif
+            if (player != NULL && player->checkWolfEnemyLeftThrow()) {
                 i_this->current.angle.y = player->shape_angle.y + 0x4000;
-            } else {
+            } else if (player != NULL) {
                 i_this->current.angle.y = player->shape_angle.y - 0x4000;
             }
 
@@ -1082,7 +1263,14 @@ static void e_yk_wolfbite(e_yk_class* i_this) {
  * Continuously applies rotation around Y axis while in wind state.
  */
 static void e_yk_wind(e_yk_class* i_this) {
-    e_yk_class* yk = (e_yk_class*)fpcM_Search(shot_b_sub,i_this);
+#if TARGET_PC
+    // Co-op: boomerang wind follows whichever active player's boomerang owns the wind actor.
+    dusk::coop::item_awareness::ItemAwarenessResult boomerangAwareness =
+        dusk::coop::item_awareness::findActiveBoomerang(i_this, "e_yk.wind_boomerang");
+    fopAc_ac_c* boomerang = boomerangAwareness.itemActor;
+#else
+    fopAc_ac_c* boomerang = (fopAc_ac_c*)fpcM_Search(shot_b_sub,i_this);
+#endif
     i_this->speedF = 0.0f;
   
     switch(i_this->mActionPhase) {
@@ -1094,13 +1282,13 @@ static void e_yk_wind(e_yk_class* i_this) {
         i_this->mBoomrangPosOffset.y = cM_rndFX(50.0f);
         i_this->mBoomrangPosOffset.z = cM_rndFX(50.0f);
     case 1:
-        if (!yk) {
+        if (!boomerang) {
             i_this->mActionPhase = 2;
             i_this->mActionTimers[0] = 0x3c;
             break;
             
         } else {
-            i_this->current.pos = yk->current.pos + i_this->mBoomrangPosOffset;
+            i_this->current.pos = boomerang->current.pos + i_this->mBoomrangPosOffset;
             i_this->mCreature.startCreatureVoiceLevel(Z2SE_EN_YK_V_SPIN,-1);
             break;
         }
@@ -1148,8 +1336,14 @@ static void action(e_yk_class* i_this) {
     cXyz pos;
     cXyz pos2;
 
+#if TARGET_PC
+    // Co-op: cache selected combat target metrics before state code reads the vanilla fields.
+    coOpSelectTargetState(i_this, "e_yk.action", i_this->mAction == ACT_ATTACK,
+                          coOpTargetModeForAction(i_this), NULL, NULL, NULL);
+#else
     i_this->mAngleFromPlayer = fopAcM_searchPlayerAngleY(i_this);
     i_this->mDistanceXZFromPlayer = fopAcM_searchPlayerDistanceXZ(i_this);
+#endif
 
     damage_check(i_this);
 
@@ -1261,7 +1455,14 @@ static int daE_YK_Execute(e_yk_class* i_this) {
     if (cDmrNowMidnaTalk()) {
         return 1;
     } else {
+#if TARGET_PC
+        dusk::coop::selected_target_state::SelectedTargetState targetState;
+        // Co-op: battle attention visibility follows the selected target's vertical relation.
+        coOpSelectTargetState(i_this, "e_yk.attention", i_this->mAction == ACT_ATTACK,
+                              coOpTargetModeForAction(i_this), &targetState, NULL, NULL);
+#else
         fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
         i_this->mFrameCounter++;
 
         for (int i = 0; i < 4; i++) {
@@ -1283,12 +1484,26 @@ static int daE_YK_Execute(e_yk_class* i_this) {
             fopAcM_OffStatus(_this,0);
             _this->attention_info.flags = 0;
 
-            // need to define inline here
+#if TARGET_PC
+            // Co-op: while bitten, attach to the retained wolf owner's mouth matrix.
+            dusk::coop::wolf_catch_owner::WolfCatchOwnerState catchOwner =
+                dusk::coop::wolf_catch_owner::updateWolfCatch("e_yk.wolfbite.matrix", i_this);
+            daPy_py_c* wolfPlayer = catchOwner.localPlayer != NULL
+                                        ? catchOwner.localPlayer
+                                        : daPy_getLinkPlayerActorClass();
+            MTXCopy(wolfPlayer->getWolfMouthMatrix(),mDoMtx_stack_c::get());
+#else
             MTXCopy(daPy_getLinkPlayerActorClass()->getWolfMouthMatrix(),mDoMtx_stack_c::get());
+#endif
             model->setBaseTRMtx(mDoMtx_stack_c::get());
             mDoMtx_stack_c::multVecZero(&_this->current.pos);
         } else {
+#if TARGET_PC
+            if (_this->health > 0 && i_this->mDeathFlag == 0 && targetState.available
+                && targetState.pos.y < _this->current.pos.y) {
+#else
             if (_this->health > 0 && i_this->mDeathFlag == 0 && player->current.pos.y < _this->current.pos.y) {
+#endif
                 _this->attention_info.flags = fopAc_AttnFlag_BATTLE_e;
             } else {
                 fopAcM_OffStatus(i_this,0);
@@ -1384,6 +1599,11 @@ static int daE_YK_IsDelete(e_yk_class* param_0) {
  * - Stops animation if heap exists
  */
 static int daE_YK_Delete(e_yk_class* i_this) {
+#if TARGET_PC
+    // Co-op: targeting and wolf-catch owner sidecars are actor-lifetime state.
+    dusk::coop::clearAllEnemyTargets(i_this);
+    dusk::coop::wolf_catch_owner::clearWolfCatch("e_yk.delete", i_this);
+#endif
     dComIfG_resDelete(&i_this->mPhase,"E_YK");
 
     if (i_this->mIsFirstSpawn != 0) {

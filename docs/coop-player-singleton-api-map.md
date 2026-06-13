@@ -96,11 +96,15 @@ the vanilla behavior is an immediate reaction to an item/tool state.
 owner-local boomerang actor keeps so a P2 boomerang can drive the same wind/follow behavior without
 becoming the Keese's retained combat target.
 
-Keese also defines the batchable flying-small-enemy pattern: use `enemy_targeting` for combat
-identity, `selected_target_state` for vertical position/height/orbit/dive facts, `damage_owner` for
-the hit that starts a wolf bite, `wolf_catch_owner` for the retained mouth/throw/release lifetime,
-and `item_awareness` for immediate tool reactions such as boomerang wind. Do not collapse those into
-one broader "flying enemy" helper unless multiple validated enemies prove the same narrower shape.
+Keese, Shadow Keese, and Bubble define the batchable compact-flyer pattern: use
+`enemy_targeting` for combat identity, `selected_target_state` for vertical
+position/height/orbit/dive facts, `damage_owner` for owner-sensitive hit reactions or the hit that
+starts a wolf bite, `wolf_catch_owner` for retained mouth/throw/release lifetime when the enemy has
+that state, and `item_awareness` for immediate tool reactions such as boomerang wind when the enemy
+has that state. Similar compact flyers can move through quick batches when they expose the same API
+families and no rider, camera presentation, authored spawn, boss/setpiece, or new ownership surface.
+Do not collapse those families into one broader "flying enemy" helper unless more validated enemies
+prove the same narrower shape.
 
 Split-screen follows the same classification rule outside enemy code. Camera, viewport, HUD,
 lighting, audio, and render-culling questions should not be patched as generic "P2 fixes." Route

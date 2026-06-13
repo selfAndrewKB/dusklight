@@ -6,6 +6,11 @@
 #include "d/dolzel_rel.h" // IWYU pragma: keep
 
 #include "d/actor/d_a_e_bu.h"
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
 #include "f_op/f_op_actor_enemy.h"
 
 class daE_BU_HIO_c : public JORReflexible {
@@ -63,6 +68,84 @@ static void anm_init(e_bu_class* i_this, int i_anm, f32 i_morf, u8 i_mode, f32 i
     i_this->modelMorf->setAnm((J3DAnmTransform*)dComIfG_getObjectRes("E_BU", i_anm), i_mode, i_morf, i_speed, 0.0f, -1.0f);
     i_this->anm = i_anm;
 }
+
+#if TARGET_PC
+static const char* coOpActionLabel(e_bu_class* i_this) {
+    switch (i_this->action) {
+    case ACTION_WAIT:
+        return "e_bu.wait";
+    case ACTION_FIGHT_FLY:
+        return "e_bu.fight_fly";
+    case ACTION_FIGHT:
+        return "e_bu.fight";
+    case ACTION_ATTACK:
+        return "e_bu.attack";
+    case ACTION_FLY:
+        return "e_bu.fly";
+    case ACTION_PATH_FLY:
+        return "e_bu.path_fly";
+    case ACTION_CHANCE:
+        return "e_bu.chance";
+    case ACTION_HEAD:
+        return "e_bu.head";
+    case ACTION_DEAD:
+        return "e_bu.dead";
+    default:
+        return "e_bu.combat";
+    }
+}
+
+static dusk::coop::EnemyTargetMode coOpTargetModeForAction(e_bu_class* i_this) {
+    switch (i_this->action) {
+    case ACTION_WAIT:
+    case ACTION_FLY:
+    case ACTION_PATH_FLY:
+        return dusk::coop::EnemyTargetMode::ImmediateAcquire;
+    default:
+        return dusk::coop::EnemyTargetMode::StickyCombat;
+    }
+}
+
+// Co-op: Bubble is a flying enemy; wake, orbit, and dive movement share one Combat owner,
+// while labels describe the native state reading that owner.
+static bool coOpSelectTargetState(
+    e_bu_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance_xz,
+    s16* angle_y) {
+    fopAc_ac_c* actor = &i_this->enemy;
+    dusk::coop::EnemyTargetContext context;
+    context.observer = actor;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        actor, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    i_this->angle_to_player = target.angleY;
+    i_this->dist_to_player = target.distance;
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance_xz != NULL) {
+        *distance_xz = target.distanceXZ;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    return true;
+}
+#endif
 
 static int nodeCallBack(J3DJoint* i_joint, int param_1) {
     if (param_1 == 0) {
@@ -131,7 +214,19 @@ static BOOL other_bg_check(e_bu_class* i_this, fopAc_ac_c* i_other) {
 
 static BOOL pl_check(e_bu_class* i_this, f32 i_range, s16 i_angle) {
     fopAc_ac_c* actor = &i_this->enemy;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: Bubble wake/re-engage checks keep the native range/angle/LoS gate, but the
+    // player tested by that gate is the current active co-op target.
+    if (!coOpSelectTargetState(i_this, coOpActionLabel(i_this), i_this->action == ACTION_ATTACK,
+                               coOpTargetModeForAction(i_this), &targetState, NULL, NULL))
+    {
+        return FALSE;
+    }
+    fopAc_ac_c* player = targetState.actor;
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     
     if (i_this->dist_to_player < i_range) {
         s16 temp_r28 = actor->shape_angle.y - i_this->angle_to_player;
@@ -145,7 +240,9 @@ static BOOL pl_check(e_bu_class* i_this, f32 i_range, s16 i_angle) {
 
 static void damage_check(e_bu_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
+#if !TARGET_PC
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
     
     if (i_this->invulnerabilityTimer == 0) {
         i_this->ccStts.Move();
@@ -154,6 +251,14 @@ static void damage_check(e_bu_class* i_this) {
             OS_REPORT("E_BU HP %d\n", actor->health);
             i_this->atInfo.mpCollider = i_this->ccSph.GetTgHitObj();
             cc_at_check(actor, &i_this->atInfo);
+#if TARGET_PC
+            const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+                dusk::coop::damage_owner::resolveDamageOwner(actor, i_this->atInfo.mpCollider);
+            daPy_py_c* ownerPlayer =
+                dusk::coop::damage_owner::resolveDamageOwnerPlayer(damageOwner);
+#else
+            daPy_py_c* ownerPlayer = player;
+#endif
             OS_REPORT("E_BU AP %d\n", i_this->atInfo.mAttackPower);
 
             if (i_this->atInfo.mpCollider->ChkAtType(AT_TYPE_WOLF_ATTACK | AT_TYPE_WOLF_CUT_TURN | AT_TYPE_10000000 | AT_TYPE_MIDNA_LOCK)) {
@@ -176,7 +281,8 @@ static void damage_check(e_bu_class* i_this) {
                 if (i_this->atInfo.mpCollider->ChkAtType(AT_TYPE_HOOKSHOT)) {
                     actor->speedF = 0.0f;
                     i_this->head_rot_y = i_this->atInfo.mHitDirection.y;
-                } else if (player->getCutType() == daPy_py_c::CUT_TYPE_JUMP && player->checkCutJumpCancelTurn()) {
+                } else if (ownerPlayer != NULL && ownerPlayer->getCutType() == daPy_py_c::CUT_TYPE_JUMP
+                           && ownerPlayer->checkCutJumpCancelTurn()) {
                     i_this->invulnerabilityTimer = NREG_S(7) + 3;
                     actor->speedF = 0.0f;
                 } else {
@@ -330,7 +436,14 @@ static void e_bu_wait(e_bu_class* i_this) {
 
 static void e_bu_fight_fly(e_bu_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
+#if TARGET_PC
+    // Co-op: approach flight moves toward the retained combat target's current 3D position.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectTargetState(i_this, "e_bu.fight_fly", false,
+                          dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL, NULL);
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
 
     switch (i_this->mode) {
     case 0:
@@ -354,16 +467,30 @@ static void e_bu_fight_fly(e_bu_class* i_this) {
     }
 
     cLib_addCalc2(&actor->speedF, l_HIO.fly_speed, 1.0f, 0.1f * l_HIO.fly_speed);
+#if TARGET_PC
+    if (targetState.available) {
+        i_this->move_pos = targetState.pos;
+    }
+#else
     i_this->move_pos = player->current.pos;
+#endif
     fly_move(i_this);
 }
 
 static void e_bu_fight(e_bu_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
+#if TARGET_PC
+    // Co-op: Bubble's orbit points are selected-target state, not fresh P1 singleton state.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectTargetState(i_this, "e_bu.fight", false,
+                          dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL, NULL);
+    s16 sp8 = targetState.available ? targetState.shapeAngleY : i_this->angle_to_player;
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+    s16 sp8 = player->shape_angle.y;
+#endif
     cXyz sp24;
     cXyz sp18;
-    s16 sp8 = player->shape_angle.y;
 
     switch (i_this->mode) {
     case 0:
@@ -379,7 +506,13 @@ static void e_bu_fight(e_bu_class* i_this) {
             sp24.y = 150.0f + cM_rndF(100.0f);
             sp24.z = 150.0f + cM_rndF(150.0f);
             MtxPosition(&sp24, &i_this->move_pos);
+#if TARGET_PC
+            if (targetState.available) {
+                i_this->move_pos += targetState.pos;
+            }
+#else
             i_this->move_pos += player->current.pos;
+#endif
             sp24 = i_this->move_pos - actor->current.pos;
             cMtx_YrotS(*calc_mtx, cM_atan2s(sp24.x, sp24.z));
             cMtx_XrotM(*calc_mtx, -cM_atan2s(sp24.y, JMAFastSqrt((sp24.x * sp24.x) + (sp24.z * sp24.z))));
@@ -419,7 +552,14 @@ static void e_bu_fight(e_bu_class* i_this) {
 
 static void e_bu_attack(e_bu_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
+#if TARGET_PC
+    // Co-op: committed dash startup keeps using the chosen target through the attack.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectTargetState(i_this, "e_bu.attack", true,
+                          dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL, NULL);
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     cXyz sp18;
     cXyz spC;
     f32 var_f31 = 0.0f;
@@ -433,7 +573,13 @@ static void e_bu_attack(e_bu_class* i_this) {
         i_this->timers[1] = 20;
         break;
     case 1:
+#if TARGET_PC
+        if (targetState.available) {
+            i_this->move_pos = targetState.pos;
+        }
+#else
         i_this->move_pos = player->current.pos;
+#endif
         i_this->move_pos.y += 120.0f;
         i_this->field_0x690 = 2.0f;
 
@@ -472,7 +618,6 @@ static void e_bu_attack(e_bu_class* i_this) {
 
 static void e_bu_fly(e_bu_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
     cXyz sp14;
 
     switch (i_this->mode) {
@@ -509,7 +654,6 @@ static void e_bu_fly(e_bu_class* i_this) {
 
 static void e_bu_path_fly(e_bu_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
     cXyz sp18;
     dPnt* pnt;
 
@@ -741,12 +885,19 @@ static s8 e_bu_head(e_bu_class* i_this) {
 
 static s8 action(e_bu_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: update the vanilla cached target fields before Bubble state code reads them.
+    coOpSelectTargetState(i_this, "e_bu.action", i_this->action == ACTION_ATTACK,
+                          coOpTargetModeForAction(i_this), &targetState, NULL, NULL);
+#else
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
-    cXyz sp30;
-    cXyz sp24;
 
     i_this->angle_to_player = fopAcM_searchPlayerAngleY(actor);
     i_this->dist_to_player = fopAcM_searchPlayerDistance(actor);
+#endif
+    cXyz sp30;
+    cXyz sp24;
 
     damage_check(i_this);
     i_this->ccSph.OffAtVsPlayerBit();
@@ -864,8 +1015,18 @@ static s8 action(e_bu_class* i_this) {
         cLib_addCalc2(&i_this->field_0x6a8, 30.0f * l_HIO.base_size, 1.0f, 1.0f);
     }
 
-    if (player->current.pos.y - 30.0f < actor->current.pos.y && i_this->action != ACTION_WAIT) {
+#if TARGET_PC
+    if (targetState.available && targetState.pos.y - 30.0f < actor->current.pos.y
+        && i_this->action != ACTION_WAIT)
+#else
+    if (player->current.pos.y - 30.0f < actor->current.pos.y && i_this->action != ACTION_WAIT)
+#endif
+    {
+#if TARGET_PC
+        if (fopAcM_otherBgCheck(targetState.actor, actor)) {
+#else
         if (fopAcM_otherBgCheck(player, actor)) {
+#endif
             fopAcM_OffStatus(actor, 0);
             actor->attention_info.flags = 0;
         } else {
@@ -990,6 +1151,10 @@ static int daE_BU_IsDelete(e_bu_class* i_this) {
 
 static int daE_BU_Delete(e_bu_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
+#if TARGET_PC
+    // Co-op: Bubble target state is actor-lifetime sidecar data.
+    dusk::coop::clearAllEnemyTargets(actor);
+#endif
     fopAcM_RegisterDeleteID(actor, "E_BU");
     dComIfG_resDelete(&i_this->phase, "E_BU");
 

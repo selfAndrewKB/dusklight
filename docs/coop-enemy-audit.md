@@ -83,7 +83,9 @@ collision-owner, render/visibility culling, or story/demo/global state.
 | Ghost Soldier | Ghost Soldier | `src/d/actor/d_a_e_gs.cpp` | `E_GS` | policy-backed proximity, pending validation | Appear/disappear proximity and facing metrics route through one Combat owner plus `selected_target_state`. The wolf-sense visibility gate still uses the vanilla global wolf-power check and remains a deferred selected-player/form-sense surface; no damage-owner, defender-owner, caught/grab, spawn, or camera surfaces were found in this first pass. |
 | Chuchu 2 | Chuchu 2 | `src/d/actor/d_a_e_sm2.cpp` | `E_SM2` | policy-backed targeting, pending validation | Normal move awareness and action-wide target metrics route through one Combat owner. Merge/split/roof/water/fail behavior remains native self/state behavior; the camera visibility cleanup path remains vanilla camera/presentation logic. No damage-owner, defender-owner, caught/grab, or spawn surfaces were converted in this first pass. |
 | Walltula | Walltula | `src/d/actor/d_a_e_ws.cpp` | `E_WS` | policy-backed targeting, pending validation | Wall/climb awareness, attack continuation, and attack facing route through one Combat owner plus `selected_target_state`, using the selected player's climb/status facts instead of P1. Damage remains routed through shared `cc_at_check()`. No defender/caught/grab/spawn/camera surfaces were found in this first pass. |
-| Keese | Keese | `src/d/actor/d_a_e_ba.cpp` | `E_BA` | policy-backed targeting, pending validation | Wake/re-engage checks, hover/orbit positions, dive attack startup, and battle attention height checks route through one Combat owner plus `selected_target_state`. Wolf-bite hold starts from `damage_owner`, then uses `wolf_catch_owner` for release/throw and mouth-matrix attachment. Boomerang wind uses `item_awareness` to follow any active owner-local boomerang actor. This is the reusable flying-small-enemy pattern: vertical positioning stays selected-target state, retained wolf bite stays retained-owner state, and item wind/reaction stays item-awareness. |
+| Keese | Keese / Fire Keese / Ice Keese | `src/d/actor/d_a_e_ba.cpp` | `E_BA` | policy-backed targeting, pending validation | One actor handles normal, fire, and ice Keese via resource/type variants: `E_ba`, `E_fb`, and `E_ib`. Wake/re-engage checks, hover/orbit positions, dive attack startup, and battle attention height checks route through one Combat owner plus `selected_target_state`. Wolf-bite hold starts from `damage_owner`, then uses `wolf_catch_owner` for release/throw and mouth-matrix attachment. Boomerang wind uses `item_awareness` to follow any active owner-local boomerang actor. This is the reusable flying-small-enemy pattern: vertical positioning stays selected-target state, retained wolf bite stays retained-owner state, and item wind/reaction stays item-awareness. |
+| Shadow Keese | Shadow Keese | `src/d/actor/d_a_e_yk.cpp` | `E_YK` | policy-backed targeting, first-pass validated | Keese-family flyer batch pass. Wake/re-engage, approach flight, hover/orbit positions, dive startup, and battle attention height checks route through one Combat owner plus `selected_target_state`. Wolf-bite hold starts from `damage_owner`, then uses `wolf_catch_owner` for release/throw and mouth-matrix attachment. Boomerang wind uses `item_awareness`. No defender-owner, spawned-child, camera, or broader caught/grab surfaces were found in this pass. |
+| Bubble | Bubble | `src/d/actor/d_a_e_bu.cpp` | `E_BU` | policy-backed targeting, first-pass validated | Flying-small-enemy batch pass. Wake/re-engage, approach flight, hover/orbit positions, dive startup, and battle attention height checks route through one Combat owner plus `selected_target_state`. Jump-cut cancellation after damage uses `damage_owner`; other damage tables and native head/knockback flow remain unchanged. No defender-owner, caught/grab, item-awareness, spawned-child, or camera surfaces were found in this pass. |
 
 ## Reviewed Evidence
 
@@ -92,10 +94,10 @@ These rows have been inspected beyond the machine count. "Label evidence" is tak
 | Actor/File | Profile | Label Evidence | Classification | Targeting Notes |
 | --- | --- | --- | --- | --- |
 | `d_a_e_ai.cpp` | `E_AI` | HIO label `アモス`; actions wait/move/attack/damage/return | regular enemy candidate | Small action table; likely a good early audit target after names/locations are confirmed. |
-| `d_a_e_ba.cpp` | `E_BA` | source header "Enemy - Keese"; arc variants `E_ba`, `E_fb`, `E_ib`; attack, wolf-bite, and wind actions | regular enemy candidate | Keese. Combat targeting/selected-target state, wolf-bite retained ownership, and boomerang item awareness are implemented pending validation. |
+| `d_a_e_ba.cpp` | `E_BA` | source header "Enemy - Keese"; arc variants `E_ba`, `E_fb`, `E_ib`; attack, wolf-bite, and wind actions | regular enemy candidate | Keese / Fire Keese / Ice Keese. Combat targeting/selected-target state, wolf-bite retained ownership, and boomerang item awareness are implemented pending validation. |
 | `d_a_e_bi.cpp` | `E_BI` | enemy name `E_bi`; wait/up/move/water/disappear actions | regular/proximity candidate | Simple action table; likely useful for a low-risk wake/chase audit. |
 | `d_a_e_bs.cpp` | `E_BS` | HIO label `ベビースタル`; normal/fight-run/attack/damage actions | regular melee candidate | Looks like a simple melee enemy shape with weapon model and guard/damage checks. |
-| `d_a_e_bu.cpp` | `E_BU` | HIO label `バブル`; fly/fight/attack/chance/head actions | flying enemy candidate | Needs vertical targeting policy, not just XZ nearest. |
+| `d_a_e_bu.cpp` | `E_BU` | HIO label `バブル`; fly/fight/attack/chance/head actions | flying enemy candidate | Bubble. Combat targeting/selected-target state and damage-owner jump-cut cancellation are implemented and first-pass validated. |
 | `d_a_e_cr.cpp` | `E_CR` | HIO label `クレイジーランナー`; move/damage actions | simple movement enemy candidate | Small file, likely good for movement/proximity conversion after identification. |
 | `d_a_e_fk.cpp` | `E_FK` | HIO label `ファントム騎馬兵` | mounted/special enemy | Mounted/special; defer until ordinary enemies and mount-related targeting are understood. |
 | `d_a_e_fz.cpp` | `E_FZ` | enemy name `E_fz`; wait/move/attack/damage actions | regular enemy candidate | Moderate action table; no HIO label found in first pass. |
@@ -165,7 +167,7 @@ This batch resolves the "unclassified" rows from the machine inventory. Sources:
 | `d_a_e_yc.cpp` | `E_YC` | file comment "Twilit Carrier Kargarok"; fly/rider-carry/wolfbite/damage | Twilight flying enemy | Twilit Carrier Kargarok; rider-carry paths complicate targeting. Defer. |
 | `d_a_e_yd.cpp` | `E_YD` | spawns `e_yd_leaf_class` sub-actor; `Z2SE_DARK_VANISH` on death; appears/moves/vanishes | Twilight enemy | Twilight plant/vine enemy with leaf sub-actor. Defer with Twilight category. |
 | `d_a_e_yg.cpp` | `E_YG` | genLabel `グース`; normal/attack/swim/dokuro/damage/wolfbite | Twilight enemy | Goose; water/Twilight creature. |
-| `d_a_e_yk.cpp` | `E_YK` | file header "Shadow Keese"; genLabel `闇キース`; wind/cruise/charge/damage/disappear | Twilight flying enemy | Shadow Keese; Twilight bat; vertical/flying policy needed. |
+| `d_a_e_yk.cpp` | `E_YK` | file header "Shadow Keese"; genLabel `闇キース`; wind/cruise/charge/damage/disappear | Twilight flying enemy | Shadow Keese; Twilight bat. Keese-family combat targeting/selected-target state, wolf-bite ownership, and boomerang item awareness are implemented and first-pass validated. |
 | `d_a_e_yr.cpp` | `E_YR` | genLabel `闇カーゴロック`; English comment "Dark Kargarok" at line 2548; wait/hover/attack/fly/damage | Twilight flying enemy | Dark Kargarok; audit with E_YC family. |
 | `d_a_e_zh.cpp` | `E_ZH` | no HIO label; searches for `daObjCarry_c` lightball objects; `BCK_ZH_CATCH*/FLY_DELETE`; entrance model `BMDV_ZH_ENTRANCE` | boss-encounter special | Likely Palace of Twilight Zant's Hands (catches Sols/light orbs). Defer. |
 | `d_a_e_zm.cpp` | `E_ZM` | HIO comment `ザントの首 Zant's Head`; tongue animations; search/move/attack/bullet | boss/story special | Zant's Head (from Zant boss encounter). Defer. |
@@ -358,13 +360,13 @@ This inventory is generated from `src/d/actor/d_a_e_*.cpp` file names and `g_pro
 | --- | --- | ---: | --- | --- |
 | `d_a_e_ai.cpp` | `E_AI` | 6 | regular enemy candidate | HIO label `アモス`; compact wait/move/attack/damage table |
 | `d_a_e_arrow.cpp` | `E_ARROW` | 3 | helper/projectile likely |  |
-| `d_a_e_ba.cpp` | `E_BA` | 10 | regular enemy candidate | Keese; combat target/selected-target state converted; wolf-bite hold and boomerang item awareness converted pending validation |
+| `d_a_e_ba.cpp` | `E_BA` | 10 | regular enemy candidate | Keese / Fire Keese / Ice Keese; combat target/selected-target state converted; wolf-bite hold and boomerang item awareness converted pending validation |
 | `d_a_e_bee.cpp` | `E_BEE` | 5 | helper/swarm enemy | tied to `E_NEST`; not standalone targeting |
 | `d_a_e_bg.cpp` | `E_BG` | 16 | water/special enemy | fishing rod bait/hook/eat paths |
 | `d_a_e_bi.cpp` | `E_BI` | 5 | regular/proximity candidate | compact wait/up/move/water/disappear action table |
 | `d_a_e_bi_leaf.cpp` | `E_BI_LEAF` | 0 | helper/projectile likely |  |
 | `d_a_e_bs.cpp` | `E_BS` | 8 | regular melee candidate | HIO label `ベビースタル` |
-| `d_a_e_bu.cpp` | `E_BU` | 10 | flying enemy candidate | HIO label `バブル`; needs vertical targeting consideration |
+| `d_a_e_bu.cpp` | `E_BU` | 10 | flying enemy candidate | HIO label `バブル`; combat target/selected-target state converted; damage-owner jump-cut cancellation converted and first-pass validated |
 | `d_a_e_bug.cpp` | `E_BUG` | 15 | swarm/special enemy | group insect/simple-model behavior; boomerang/bomb searches seen |
 | `d_a_e_cr.cpp` | `E_CR` | 6 | simple movement enemy candidate | HIO label `クレイジーランナー` |
 | `d_a_e_cr_egg.cpp` | `E_CR_EGG` | 0 | helper/projectile likely |  |
@@ -444,7 +446,7 @@ This inventory is generated from `src/d/actor/d_a_e_*.cpp` file names and `g_pro
 | `d_a_e_yd_leaf.cpp` | `E_YD_LEAF` | 0 | helper/projectile | E_YD leaf sub-actor; audit with E_YD |
 | `d_a_e_yg.cpp` | `E_YG` | 8 | Twilight enemy | グース (Goose); HIO genLabel confirmed; normal/attack/swim/dokuro/damage/wolfbite; water/Twilight enemy |
 | `d_a_e_yh.cpp` | `E_YH` | 29 | special/grab likely | caught-state style calls seen in scan |
-| `d_a_e_yk.cpp` | `E_YK` | 10 | Twilight flying enemy | 闇キース (Shadow Keese); file header + genLabel confirmed; wind/cruise/charge/damage/disappear; Twilight bat; flying policy needed |
+| `d_a_e_yk.cpp` | `E_YK` | 10 | Twilight flying enemy | 闇キース (Shadow Keese); combat target/selected-target state converted; wolf-bite hold and boomerang item awareness converted and first-pass validated |
 | `d_a_e_ym.cpp` | `E_YM` | 32 | wolf/Midna-sensitive likely | many wolf-specific checks seen in scan |
 | `d_a_e_ym_tag.cpp` | `E_YM_TAG` | 0 | tag/helper likely |  |
 | `d_a_e_ymb.cpp` | `E_YMB` | 42 | boss/miniboss likely | high density and camera/player-state calls seen in scan |
