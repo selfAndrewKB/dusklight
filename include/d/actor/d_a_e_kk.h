@@ -7,6 +7,7 @@
 #include "d/d_cc_uty.h"
 #include "f_op/f_op_actor_mng.h"
 
+class daPy_py_c;
 
 /**
  * @ingroup actors-enemies
@@ -23,7 +24,7 @@ public:
     int draw();
     void setBck(int, u8, f32, f32);
     void setWeaponBck(int, u8, f32, f32);
-    bool mCutTypeCheck(int);
+    bool mCutTypeCheck(int, daPy_py_c* = NULL);
     void setActionMode(int, int);
     void damage_check();
     void nextActionCheck();

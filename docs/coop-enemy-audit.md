@@ -14,11 +14,12 @@ actor patches -> enemy_targeting -> player_query
 - `enemy_targeting`: policy for choosing and retaining a target through reusable behavior scopes.
 - actor patches: narrow conversions at concrete enemy callsites, preserving vanilla behavior outside the scoped PC/co-op hook.
 
-The current Bokoblin, Tektite, Stalhound, Stalchild, and Gibdo proofs now use `enemy_targeting`
-over `player_query`. Bokoblin remains the richer melee validation surface; Tektite is the first
-compact non-Bokoblin port, Stalhound and Stalchild are breadth proofs, and Gibdo is the first
-target-state-sensitive humanoid/undead proof. Choose the next enemy from the audit queue rather
-than widening any one proof surface by default.
+The current Bokoblin, Tektite, Stalhound, Stalchild, Gibdo, and Chilfos proofs now use
+`enemy_targeting` over `player_query`. Bokoblin remains the richer melee validation surface;
+Tektite is the first compact non-Bokoblin port, Stalhound and Stalchild are breadth proofs, Gibdo is
+the first target-state-sensitive humanoid/undead proof, and Chilfos is the first melee-plus-thrown
+weapon stress test. Choose the next enemy from the audit queue rather than widening any one proof
+surface by default.
 
 ## Target Policy Requirements
 
@@ -69,6 +70,7 @@ collision-owner, render/visibility culling, or story/demo/global state.
 | Gibdo | Gibdo | `src/d/actor/d_a_e_gi.cpp` | `E_GI` | policy-backed targeting, owner APIs validated | Sleep/wait/chase/attack/damage recovery and head tracking route through `enemy_targeting` plus `selected_target_state`; the close-range attack/scream gate uses immediate acquisition so stale chase retention cannot suppress an in-range player; ordinary sword cut reactions use `damage_owner`; scream stun uses `caught_stun_owner` so the retained slot owns release input and best-effort camera lock while nearby affected slots share the scream animation timer with an expanded co-op AoE. Wolf-bite ownership remains intentionally deferred to a later caught/grab-owner proof enemy. `gibdo.state` remains available for follow-up debugging and records native range/angle/LOS/delay/scream-owner gates. Some placed Gibdos use `mSwbit2` switch gating before sight checks, so apparent P1-only activation may also involve room script state. Simultaneous per-player scream ownership is documented as deferred because vanilla `m_cry_gi` also coordinates follow-up attacks. |
 | Young Gohma | Young Gohma | `src/d/actor/d_a_e_kg.cpp` | `E_KG` | policy-backed targeting, first-pass validated | Central action target metrics route through `enemy_targeting` plus `selected_target_state`; move/search and attack gates share the selected target's distance, angle, and line-of-sight actor. Roof/drop front-roll awareness uses the selected player's state instead of P1. Damage remains routed through the shared `cc_at_check()` owner path. `young_gohma.state` records range/cone/LOS and `pl_check` gate facts. The post-attack wander gap was confirmed to match vanilla Young Gohma behavior rather than co-op target loss. |
 | White Wolfos | White Wolfos | `src/d/actor/d_a_e_ww.cpp` | `E_WW` | policy-backed targeting, first-pass validated | Combat chase/attack/walk/move-out paths use one Combat owner plus `selected_target_state`; guard contact uses `defender_owner`; hookshot side-step awareness scans active players for live hookshot top positions instead of asking P1; master spawn staging can wake on P2; child facing follows the encounter anchor; presentation angles use the selected slot's camera when available. Remaining special/demo presentation and any broader spawn ownership should be documented as presentation/camera or master/child ownership if encountered in later passes. |
+| Chilfos | Chilfos / Ice Swordsman | `src/d/actor/d_a_e_kk.cpp` | `E_KK` | policy-backed targeting, first-pass validated | Wait/wake, action selection, spear throw, attack, guard, backwalk, damage recovery, and head tracking route through one Combat owner plus `selected_target_state`. Damage/cut reactions and iron-ball owner status use `damage_owner`; shield posture uses the selected combat target's cut facts; thrown spear child launch math inherits the parent Combat target when available. P2 testing and diagnostics showed `spear_throw`, `weapon_move`, `next_action`, `damage_shield`, and `head_track` following slot 1. No defender-owner, caught/grab, or item-awareness surfaces were found in this pass. |
 | Amos | Armos | `src/d/actor/d_a_e_ai.cpp` | `E_AI` | policy-backed targeting, pending validation | Wake, movement, attack gates, line-of-sight checks, and shield-facing state route through one Combat owner plus `selected_target_state`; sword cut reactions use `damage_owner`. No defender-owner or caught/grab/spawn surfaces were found in this first pass. |
 | Mini Freezard | Mini Freezard | `src/d/actor/d_a_e_fz.cpp` | `E_FZ` | policy-backed targeting, pending validation | Wait/move/attack gates, attention LOS, rebound angles, and damage bounce steering route through one Combat owner plus `selected_target_state`; attack contact uses `defender_owner`. True item-owner/item-awareness bias for boomerang, hookshot, spinner, and arrow reactions remains deferred; Blizzeta roll-mode is boss-owned/special and left vanilla. |
 | Donketsu | Donketsu | `src/d/actor/d_a_e_mm.cpp` | `E_MM` | policy-backed targeting, pending validation | Search/dash metrics route through one Combat owner plus `selected_target_state`; attack shield reflection records `defender_owner`. The native `dComIfGp_checkPlayerStatus0(0, 0x100)` gate remains a deferred selected-target/player-status hook until its exact meaning is classified; armor child spawning for `E_MM_MT` remains vanilla master/child ownership. |
@@ -81,7 +83,7 @@ collision-owner, render/visibility culling, or story/demo/global state.
 | Ghost Soldier | Ghost Soldier | `src/d/actor/d_a_e_gs.cpp` | `E_GS` | policy-backed proximity, pending validation | Appear/disappear proximity and facing metrics route through one Combat owner plus `selected_target_state`. The wolf-sense visibility gate still uses the vanilla global wolf-power check and remains a deferred selected-player/form-sense surface; no damage-owner, defender-owner, caught/grab, spawn, or camera surfaces were found in this first pass. |
 | Chuchu 2 | Chuchu 2 | `src/d/actor/d_a_e_sm2.cpp` | `E_SM2` | policy-backed targeting, pending validation | Normal move awareness and action-wide target metrics route through one Combat owner. Merge/split/roof/water/fail behavior remains native self/state behavior; the camera visibility cleanup path remains vanilla camera/presentation logic. No damage-owner, defender-owner, caught/grab, or spawn surfaces were converted in this first pass. |
 | Walltula | Walltula | `src/d/actor/d_a_e_ws.cpp` | `E_WS` | policy-backed targeting, pending validation | Wall/climb awareness, attack continuation, and attack facing route through one Combat owner plus `selected_target_state`, using the selected player's climb/status facts instead of P1. Damage remains routed through shared `cc_at_check()`. No defender/caught/grab/spawn/camera surfaces were found in this first pass. |
-| Keese | Keese | `src/d/actor/d_a_e_ba.cpp` | `E_BA` | policy-backed targeting, pending validation | Wake/re-engage checks, hover/orbit positions, dive attack startup, and battle attention height checks route through one Combat owner plus `selected_target_state`. Wolf-bite hold starts from `damage_owner`, then uses `wolf_catch_owner` for release/throw and mouth-matrix attachment. Boomerang wind uses `item_awareness` to follow any active owner-local boomerang actor. |
+| Keese | Keese | `src/d/actor/d_a_e_ba.cpp` | `E_BA` | policy-backed targeting, pending validation | Wake/re-engage checks, hover/orbit positions, dive attack startup, and battle attention height checks route through one Combat owner plus `selected_target_state`. Wolf-bite hold starts from `damage_owner`, then uses `wolf_catch_owner` for release/throw and mouth-matrix attachment. Boomerang wind uses `item_awareness` to follow any active owner-local boomerang actor. This is the reusable flying-small-enemy pattern: vertical positioning stays selected-target state, retained wolf bite stays retained-owner state, and item wind/reaction stays item-awareness. |
 
 ## Reviewed Evidence
 
@@ -100,7 +102,7 @@ These rows have been inspected beyond the machine count. "Label evidence" is tak
 | `d_a_e_gb.cpp` | `E_GB` | HIO label `デカババ`; head/flower actions, bomb-eat, drop-key demo | plant/special enemy | Has key/demo and bomb-specific behavior; not a first-wave target. |
 | `d_a_e_gob.cpp` | `E_GOB` | HIO label `マグネゴロン`; fight/attack/defence/grab/jump/message actions | special/NPC-like combat actor | Despite enemy prefix, message/grab/special actions make it a poor first-wave target. |
 | `d_a_e_hb.cpp` | `E_HB` | HIO label `デグババ（ボックリ）`; stay/appear/wait/attack/chance actions | plant enemy candidate | Plant enemy with leaf/helper model; audit after ordinary mobile enemies. |
-| `d_a_e_kk.cpp` | `E_KK` | HIO label `氷の剣士`; walk/spear throw/guard/attack/weaponmove actions | regular humanoid/ranged candidate | Good later stress test for melee plus thrown weapon policy. |
+| `d_a_e_kk.cpp` | `E_KK` | HIO label `氷の剣士`; walk/spear throw/guard/attack/weaponmove actions | regular humanoid/ranged candidate | Chilfos / Ice Swordsman. First pass covers combat targeting, selected-target state, damage-owner cut/status reads, and parent-owned thrown spear launch ownership pending validation. |
 | `d_a_e_pm.cpp` | `E_PM` | demo action and trumpet/glow models | demo/special enemy | Many demo and player demo calls; defer. |
 | `d_a_e_sf.cpp` | `E_SF` | op-demo, guard, sitwait/crashwait/getup actions | regular humanoid with demo intro | Possible regular enemy, but first-contact demo paths need care. |
 | `d_a_e_st.cpp` | `E_ST` | HIO label `スタルチュラ`; search/shoot/jump/hang phases | multi-form regular enemy | Good policy stress test after simple ground enemies. |
@@ -237,7 +239,7 @@ Do not leave these permanently primary-player-only just because V1 is cautious. 
 | `d_a_e_ba.cpp` | `E_BA` | Keese | 2 | 5 | 0 | **Converted first pass** — distance/angle and `checkSwimUp()` eligibility follow selected-target state; wolf-bite hold uses `wolf_catch_owner`; boomerang wind uses `item_awareness` |
 | `d_a_e_ww.cpp` | `E_WW` | White Wolfos | ~30 | ~15 | 0 | **Second-wave** — 45 total callsites; wolf-form checks and demo logic mixed in; needs per-callsite read before any redirect |
 | `d_a_e_sf.cpp` | `E_SF` | (humanoid) | ~8 | ~12 | 0 | **Defer** — story intro calls `changeOriginalDemo()`/`setPlayerPosAndAngle()` are protagonist-locked |
-| `d_a_e_kk.cpp` | `E_KK` | Ice Swordsman | ~20 | ~16 | 0 | **Second-wave** — most calls targeting but `getDamageWaitTimer()` state checks intermixed |
+| `d_a_e_kk.cpp` | `E_KK` | Ice Swordsman | ~20 | ~16 | 0 | **Converted, first-pass validated** — combat targeting, selected-target damage/status facts, damage-owner cut/status reads, and thrown spear child launch ownership covered |
 | `d_a_e_gi.cpp` | `E_GI` | Gibdo | ~10 | ~12 | 0 | **Current proof** — combat targeting, ordinary damage-owner reads, and scream stun ownership converted; wolf-bite ownership remains deferred caught/grab work |
 | `d_a_e_hz.cpp` | `E_HZ` | (hazard enemy) | ~12 | ~7 | 0 | **Defer** — boots/armor/throw-damage checks are primary-player-specific equipment state |
 | `d_a_e_st.cpp` | `E_ST` | Skulltula | ~15 | ~36 | 0 | **Protagonist-locked** — `getStCaught()` grab state is protagonist-specific; no callsites are safe to redirect without a co-op caught-state ownership model |
@@ -283,7 +285,7 @@ The table below is machine-assisted from `src/d/actor/d_a_e_*.cpp` and profile s
 | Candidate | `d_a_e_ymb.cpp` | `E_YMB` | 42 | boss/miniboss likely | High density and many camera/player-state calls; defer. |
 | Candidate | `d_a_e_fm.cpp` | `E_FM` | 41 | special/grab/chain likely | Has demo/grab-heavy paths; defer until targeting policy exists. |
 | Candidate | `d_a_e_rdy.cpp` | `E_RDY` | 36 | related humanoid | Likely related to `E_RD`; audit with that family. |
-| Candidate | `d_a_e_kk.cpp` | `E_KK` | 36 | regular humanoid/ranged candidate | HIO label `氷の剣士` (Ice Swordsman); spear throw and guard; good later stress test. |
+| Converted, first-pass validated | `d_a_e_kk.cpp` | `E_KK` | 36 | regular humanoid/ranged candidate | HIO label `氷の剣士` (Ice Swordsman); spear throw, guard, damage-owner, selected-target state, and parent-owned spear launch covered in first pass. |
 | Candidate | `d_a_e_ym.cpp` | `E_YM` | 31 | wolf/Midna-sensitive likely | Many wolf-specific checks; defer until damage/guard policy improves. |
 | Candidate | `d_a_e_yh.cpp` | `E_YH` | 28 | grab/catch likely | Has caught-state style calls; likely needs player-state ownership audit. |
 | Candidate | `d_a_e_db.cpp` | `E_DB` | 28 | grab/catch likely | Has caught-state style calls; likely needs player-state ownership audit. |
@@ -307,7 +309,7 @@ Use these groups to minimize manual per-enemy work. Each group should map to reu
 | Ground search/chase/attack | Enemy wakes, turns, chases, and gates an attack by player distance/angle | Actor-local helper over `EnemyTargetScope::Combat`; callsite labels are diagnostics only | `E_OC`, `E_TT`, `E_KG`, `E_BS`, `E_SH`, `E_AI` | Demo intros, guard/damage-owner paths |
 | Proximity/contact | Enemy reacts mostly through collision or a small wake radius | Collision-owner pass plus small query helpers where explicit search exists | `E_HM`, `E_BI`, `E_SM`, `E_SM2` | Hookshot/carry interactions, contact owner attribution |
 | Vertical/flying/ranged | Enemy needs height, line-of-sight, projectile aim, or flight behavior | Later policy profile with vertical scoring and target-state helpers | `E_BU`, `E_GE`, `E_PH`, `E_YK`, `E_YR`, `E_FB` | Camera/story flyers, rider-carry paths |
-| Target-state-sensitive | Enemy decision depends on target form/speed/guard/swim/damage state | Use `dusk::coop::selected_target_state` after the target identity is known | `E_WW`, `E_GI`, `E_KK`, `E_BA` | Accidentally reading P1 state for P2, or replacing protagonist-only state |
+| Target-state-sensitive | Enemy decision depends on target form/speed/guard/swim/damage state | Use `dusk::coop::selected_target_state` after the target identity is known | `E_WW`, `E_GI`, `E_BA`; `E_KK` first pass covered | Accidentally reading P1 state for P2, or replacing protagonist-only state |
 | Pathing/steering after target lock | Enemy already has a combat target, then samples player position/angle for detours, obstacle checks, or chase steering | Use selected-target state derived from the retained `enemy_targeting` result; do not run a fresh nearest-player query | `E_OC` first proof | P1-derived detour angles fighting a P2 combat target |
 | Enemy-attack defender contact | Enemy attack collider hits a player, then code checks guard/block/defender state | Use `dusk::coop::defender_owner`; direct-player V1 proof surface is Bokoblin guard collision | `E_OC`, later humanoid melee enemies | Confusing defender identity with damage-owner or current target |
 | Damage-owner | Enemy reaction depends on who hit it | Separate damage ownership API, later aggro/threat bias | Many humanoids and item-reactive enemies | Treating attacker identity as nearest target |
@@ -321,10 +323,10 @@ Bokoblin now has the reusable policy spine plus damage-owner, selected-target-st
 defender-owner proof surfaces. Tektite has been ported and validated as the first compact
 non-Bokoblin specimen.
 
-After Bokoblin, Tektite, Stalhound, Stalchild, Gibdo, Young Gohma, and the current White Wolfos first pass, the next choices are:
+After Bokoblin, Tektite, Stalhound, Stalchild, Gibdo, Young Gohma, White Wolfos, Keese, and the current Chilfos first pass, the next choices are:
 
 1. **Finish validating White Wolfos (`E_WW`)** - confirm P2 chase/attack, selected target speed/form behavior, and guard contact before broadening the pattern.
-2. **Next target-state-sensitive enemy (`E_KK` or `E_BA`)** - now reasonable because `selected_target_state` exists, but classify form/guard/damage reads before patching.
+2. **Next target-state-sensitive enemy** - now reasonable because `selected_target_state` exists, but classify form/guard/damage reads before patching.
 3. **A future caught/grab-owner proof enemy** - needed for wolf-bite hang ownership and similar retained physical interactions; Gibdo's wolf-bite path is explicitly deferred.
 4. **Avoid grab-heavy or setpiece enemies** until caught/grab-owner and event/camera policies exist.
 
@@ -393,7 +395,7 @@ This inventory is generated from `src/d/actor/d_a_e_*.cpp` file names and `g_pro
 | `d_a_e_hzelda.cpp` | `E_HZELDA` | 20 | boss/story likely |  |
 | `d_a_e_is.cpp` | `E_IS` | 4 | regular/proximity candidate | compact wait/move/attack/trap/poweroff/break states |
 | `d_a_e_kg.cpp` | `E_KG` | 5 | regular melee candidate | move/attack/damage around `pl_check` |
-| `d_a_e_kk.cpp` | `E_KK` | 36 | regular humanoid/ranged candidate | HIO label `氷の剣士`; spear throw and guard |
+| `d_a_e_kk.cpp` | `E_KK` | 36 | converted, first-pass validated | HIO label `氷の剣士`; spear throw and guard; first pass covers parent-owned spear launch |
 | `d_a_e_kr.cpp` | `E_KR` | 15 | mounted/path special enemy | horse/coach/path/bomb coupling |
 | `d_a_e_mb.cpp` | `E_MB` | 1 | boss helper | boss monkey helper path |
 | `d_a_e_md.cpp` | `E_MD` | 3 | destructible/decoy special | dummy/real half-break/break behavior |
@@ -453,10 +455,10 @@ This inventory is generated from `src/d/actor/d_a_e_*.cpp` file names and `g_pro
 
 ## Next Steps
 
-1. Choose the next regular enemy from an accessible test location, preferably a target-state-sensitive second-wave enemy (`E_WW`, `E_KK`, or `E_BA`) or another compact non-flying ground enemy.
+1. Choose the next regular enemy from an accessible test location, preferably a remaining target-state-sensitive second-wave enemy or another compact non-flying ground enemy.
 2. Before patching, classify its singleton reads into targeting, selected-target state, damage-owner, defender/collision-owner, caught/grab-owner, primary/global, and render/culling.
 3. Convert only the smallest coherent behavior slice, using actor-local helpers over the API families proven by Bokoblin and Tektite.
-4. Continue classifying/test-locating target-state-sensitive second-wave enemies (`E_WW`, `E_KK`, `E_BA`) in parallel.
+4. Continue classifying/test-locating remaining target-state-sensitive second-wave enemies in parallel.
 
 ## Multiplayer AI Notes
 

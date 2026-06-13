@@ -28,10 +28,14 @@ struct SelectedTargetState {
     cXyz pos = cXyz::Zero;
     s16 shapeAngleY = 0;
     f32 speedF = 0.0f;
+    int damageWaitTimer = 0;
     int cutType = -1;
     int cutCount = -1;
     bool cutActive = false;
     bool horseRide = false;
+    bool damageWaiting = false;
+    bool status0_0x100 = false;
+    bool ironBallSubject = false;
     bool available = false;
 };
 

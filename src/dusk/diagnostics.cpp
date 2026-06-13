@@ -588,9 +588,12 @@ json selectedTargetStateDecisionEventKey(const json& decision) {
         {"found", decision.value("found", false)},
         {"slot", decision.value("slot", -1)},
         {"actor", actorIdentityEventData(decision.value("actor", json::object()))},
+        {"damage_waiting", decision.value("damage_waiting", false)},
         {"cut_active", decision.value("cut_active", false)},
         {"cut_type", decision.value("cut_type", -1)},
         {"horse_ride", decision.value("horse_ride", false)},
+        {"status0_0x100", decision.value("status0_0x100", false)},
+        {"iron_ball_subject", decision.value("iron_ball_subject", false)},
         {"reason", decision.value("reason", std::string())},
     };
 }
@@ -2085,10 +2088,14 @@ json selectedTargetStateSummary(
         {"pos", {state.pos.x, state.pos.y, state.pos.z}},
         {"shape_angle_y", static_cast<int>(state.shapeAngleY)},
         {"speed_f", state.speedF},
+        {"damage_wait_timer", state.damageWaitTimer},
+        {"damage_waiting", state.damageWaiting},
         {"cut_type", state.cutType},
         {"cut_count", state.cutCount},
         {"cut_active", state.cutActive},
         {"horse_ride", state.horseRide},
+        {"status0_0x100", state.status0_0x100},
+        {"iron_ball_subject", state.ironBallSubject},
     };
 }
 

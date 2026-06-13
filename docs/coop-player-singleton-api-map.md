@@ -78,6 +78,14 @@ camera-facing presentation, route it through a presentation-aware helper that ca
 slot's camera when available, and leave a documented deferred hook when the proper presentation API
 does not exist yet.
 
+Chilfos added the attack-owned child-weapon version of the same rule. A spawned spear is not an
+independent enemy choosing a target from scratch; it is a child attack launched by the parent
+Chilfos. Its launch angle, vertical aim, and distance math should inherit the parent's retained
+Combat target when the parent is live, then fall back locally only if the parent is gone. When
+patching old switch/fallthrough/goto-heavy enemy code, hide nontrivial selected-target snapshots in
+file-scope helpers and keep switch cases to primitive assignments so C++ lifetime rules do not fight
+the decompiled control flow.
+
 Hookshot, boomerang, bomb, bait, and similar item-awareness checks are also their own question:
 "which active player or owned item should this enemy react to?" White Wolfos side-step awareness
 proved that these can be active-player scans without changing combat target ownership. Do not answer
@@ -87,6 +95,12 @@ the vanilla behavior is an immediate reaction to an item/tool state.
 `item_awareness` is the first Dusk-owned helper for that family. Keese wind now scans active
 owner-local boomerang actor keeps so a P2 boomerang can drive the same wind/follow behavior without
 becoming the Keese's retained combat target.
+
+Keese also defines the batchable flying-small-enemy pattern: use `enemy_targeting` for combat
+identity, `selected_target_state` for vertical position/height/orbit/dive facts, `damage_owner` for
+the hit that starts a wolf bite, `wolf_catch_owner` for the retained mouth/throw/release lifetime,
+and `item_awareness` for immediate tool reactions such as boomerang wind. Do not collapse those into
+one broader "flying enemy" helper unless multiple validated enemies prove the same narrower shape.
 
 Split-screen follows the same classification rule outside enemy code. Camera, viewport, HUD,
 lighting, audio, and render-culling questions should not be patched as generic "P2 fixes." Route
@@ -116,7 +130,7 @@ to the requesting player slot.
 | "Which active player is nearest or eligible by raw distance/angle facts?" | `dusk::coop::player_query` | Implemented |
 | "Who is this enemy fighting right now?" | `dusk::coop::enemy_targeting` | Implemented for scoped combat targeting |
 | "Who caused this hit?" | `dusk::coop::damage_owner` | Implemented for direct players and known owned items |
-| "What is the selected target's form/speed/guard/horse/swim/damage state?" | `dusk::coop::selected_target_state` | Initial implementation for target speed/facing/position/cut/horse facts |
+| "What is the selected target's form/speed/guard/horse/swim/damage/status state?" | `dusk::coop::selected_target_state` | Initial implementation for target speed/facing/position/cut/horse facts; Chilfos added selected-target damage-wait and slot-local status bits such as `0x100` and iron-ball subject mode |
 | "What position/angle should this enemy use for chase detours after it already selected a target?" | `dusk::coop::selected_target_state` | Bokoblin obstacle steering proof uses selected target facts instead of P1 globals |
 | "Is any active player near this enemy/teammate for group wake-up?" | `dusk::coop::player_query` | Bokoblin group battle participation uses nearest active-player facts |
 | "Who did this enemy attack touch, and was that player guarding/blocking?" | `dusk::coop::defender_owner` | Initial direct-player implementation for Bokoblin guard collision |
@@ -124,6 +138,7 @@ to the requesting player slot.
 | "Which player is caught, stunned, grabbed, carried, swallowed, or retained by this actor?" | `dusk::coop::caught_stun_owner` / `dusk::coop::wolf_catch_owner` / future caught-grab helpers | Gibdo scream stun uses `caught_stun_owner`; Keese wolf bite uses `wolf_catch_owner` |
 | "Which active player or owned item should this enemy notice immediately?" | `dusk::coop::item_awareness` / narrow active-player scans | Initial hookshot-awareness proof in White Wolfos; Keese boomerang wind uses `item_awareness` |
 | "Which player/camera owns this spawn intro, child facing, or presentation angle?" | future presentation/camera-owner helpers | White Wolfos uses a narrow helper; broader API deferred |
+| "Which target should this enemy-spawned weapon or child attack inherit?" | parent/master `enemy_targeting` scope plus local fallback | Chilfos thrown spear launch math inherits the parent Combat target when the parent is live |
 | "Which player owns this item/tool instance?" | item-owner helpers / owner keeps | Partially implemented by item ownership patches |
 | "What is this player slot locked onto or allowed to target?" | `dusk::coop::player_attention` | V1 gives additional ALINK actors their own `dAttention_c`; lock acquisition/status gating, owner target-capability masks, owner camera gameplay, cursor drawing, and actor-observed "am I locked-on?" checks use the same attention owner while P1 remains on global attention for HUD/story compatibility |
 | "What Do/A/R/Z, wolf X/Y, or 3D action status should this ALINK consume?" | `dusk::coop::player_button_status` | Implemented for ALINK gameplay prompt state; P1 forwards to vanilla globals and additional slots store sidecar values |
@@ -149,7 +164,8 @@ to the requesting player slot.
 - **Damage-owner:** cut type/count, weapon owner, hit direction, attacker equipment, and hit reaction
   ownership. Route through `damage_owner`. Never use nearest player or current enemy target to answer
   "who hit me?"
-- **Selected-target state:** form, speed, position, guard, swim, horse, damage-wait, or facing
+- **Selected-target state:** form, speed, position, guard, swim, horse, damage-wait, camera/status
+  bits, or facing
   checks that modify behavior toward a known target. Route these through
   `dusk::coop::selected_target_state` once the target identity is known. Do not leave them
   permanently P1-only by accident, but do not fake them with fresh nearest-player guesses.

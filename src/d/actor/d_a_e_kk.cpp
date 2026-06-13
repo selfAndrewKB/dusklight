@@ -11,6 +11,13 @@
 #include "d/d_item.h"
 #include "f_op/f_op_actor_enemy.h"
 
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/player_camera_status.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 class daE_KK_HIO_c : public JORReflexible {
 public:
     daE_KK_HIO_c();
@@ -176,8 +183,87 @@ void daE_KK_c::setWeaponBck(int i_index, u8 i_attr, f32 i_morf, f32 i_rate) {
     field_0x768 = i_index;
 }
 
-bool daE_KK_c::mCutTypeCheck(int param_0) {
-    daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#if TARGET_PC
+// Co-op: Chilfos asks several vanilla callsites for player facts. Keep those facts tied to one
+// combat target owner; labels identify the callsite for diagnostics, not independent retention.
+static bool coOpSelectTargetState(fopAc_ac_c* observer, const char* label, bool committed,
+                                  dusk::coop::EnemyTargetMode mode,
+                                  dusk::coop::selected_target_state::SelectedTargetState* state,
+                                  f32* distance, s16* angle_y, s16* angle_x) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = observer;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        observer, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    if (angle_x != NULL) {
+        *angle_x = fopAcM_searchActorAngleX(observer, targetState.actor);
+    }
+    return true;
+}
+
+static bool coOpSelectTargetState(fopAc_ac_c* observer, const char* label, bool committed,
+                                  dusk::coop::EnemyTargetMode mode,
+                                  dusk::coop::selected_target_state::SelectedTargetState* state,
+                                  f32* distance, s16* angle_y) {
+    return coOpSelectTargetState(observer, label, committed, mode, state, distance, angle_y, NULL);
+}
+
+static f32 coOpSearchActorDistanceY(fopAc_ac_c* observer,
+                                    const dusk::coop::selected_target_state::SelectedTargetState&
+                                        targetState) {
+    return targetState.actor != NULL ? fopAcM_searchActorDistanceY(observer, targetState.actor)
+                                     : fopAcM_searchPlayerDistanceY(observer);
+}
+
+// Co-op: the thrown spear is a child attack, so its launch should inherit the parent's retained
+// combat target instead of sampling P1 from inside the projectile actor.
+static void coOpSelectWeaponMoveTarget(fopAc_ac_c* spear, fopAc_ac_c* parent, s16* angle_x,
+                                       f32* distance, f32* distance_y) {
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    fopAc_ac_c* targetObserver = parent != NULL ? parent : spear;
+    if (coOpSelectTargetState(targetObserver, "e_kk.weapon_move", true,
+                              dusk::coop::EnemyTargetMode::StickyCombat, &targetState, distance,
+                              NULL, angle_x))
+    {
+        if (distance_y != NULL) {
+            *distance_y = coOpSearchActorDistanceY(spear, targetState);
+        }
+    }
+}
+
+static bool coOpOwnerIronBallSubject(const dusk::coop::damage_owner::DamageOwnerResult& owner) {
+    return owner.slot != dusk::coop::PlayerSlot::Invalid &&
+           dusk::coop::player_camera_status::checkStatus0(owner.slot, 0x400) != 0;
+}
+#endif
+
+bool daE_KK_c::mCutTypeCheck(int param_0, daPy_py_c* player) {
+    if (player == NULL) {
+        player = (daPy_py_c*)dComIfGp_getPlayer(0);
+    }
 
     if (param_0 == 0 && player->getCutCount() >= 4) {
         return 1;
@@ -246,6 +332,23 @@ void daE_KK_c::damage_check() {
         }
 
         if (field_0x67d == 0) {
+#if TARGET_PC
+            // Co-op: shield posture is selected-target state; it should react to the combat
+            // target's sword pressure instead of sampling P1 while Chilfos is facing P2.
+            dusk::coop::selected_target_state::SelectedTargetState targetState;
+            f32 targetDistance = 0.0f;
+            if (coOpSelectTargetState(this, "e_kk.damage_shield", false,
+                                      dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
+                                      &targetDistance, NULL) &&
+                targetDistance <= l_HIO.direct_attack_range)
+            {
+                if (mCutTypeCheck(0, targetState.player)) {
+                    mCyl.OnTgShield();
+                } else {
+                    mCyl.OffTgShield();
+                }
+            }
+#else
             if (fopAcM_searchPlayerDistance(this) <= l_HIO.direct_attack_range) {
                 if (mCutTypeCheck(0)) {
                     mCyl.OnTgShield();
@@ -253,6 +356,7 @@ void daE_KK_c::damage_check() {
                     mCyl.OffTgShield();
                 }
             }
+#endif
         }
 
         if (mCyl.ChkTgHit()) {
@@ -263,6 +367,18 @@ void daE_KK_c::damage_check() {
             current.angle.y = shape_angle.y;
             mDamageTimer = 8;
             mAtInfo.mpCollider = mCyl.GetTgHitObj();
+#if TARGET_PC
+            // Co-op: once a collider hit exists, cut type/count and iron-ball status belong to
+            // the player who caused that hit, not the nearest player or retained combat target.
+            const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+                dusk::coop::damage_owner::resolveDamageOwner(this, mAtInfo.mpCollider);
+            daPy_py_c* damageOwnerPlayer =
+                dusk::coop::damage_owner::resolveDamageOwnerPlayer(damageOwner);
+            const bool ownerIronBallSubject = coOpOwnerIronBallSubject(damageOwner);
+#else
+            daPy_py_c* damageOwnerPlayer = NULL;
+            const bool ownerIronBallSubject = dComIfGp_checkPlayerStatus0(0, 0x400);
+#endif
 
             if (mCyl.GetTgHitObj()->ChkAtType(AT_TYPE_HOOKSHOT) ||
                 mCyl.GetTgHitObj()->ChkAtType(AT_TYPE_ARROW) ||
@@ -281,8 +397,8 @@ void daE_KK_c::damage_check() {
                     setActionMode(5, 0);
                 }
             } else if ((mCyl.GetTgHitObj()->ChkAtType(AT_TYPE_IRON_BALL) &&
-                        !dComIfGp_checkPlayerStatus0(0, 0x400)) ||
-                       mCutTypeCheck(2))
+                        !ownerIronBallSubject) ||
+                       mCutTypeCheck(2, damageOwnerPlayer))
             {
                 mCyl.OnTgNoHitMark();
                 health = 0;
@@ -293,7 +409,7 @@ void daE_KK_c::damage_check() {
                 dComIfGp_particle_set(0x85BA, &position, &shape_angle, &hioScale);
                 if (field_0x67d == 0) {
                     at_power_check(&mAtInfo);
-                    if (mAtInfo.mHitStatus != 0 || dComIfGp_checkPlayerStatus0(0, 0x400) ||
+                    if (mAtInfo.mHitStatus != 0 || ownerIronBallSubject ||
                         mCyl.GetTgHitObj()->ChkAtType(AT_TYPE_MIDNA_LOCK))
                     {
                         def_se_set(&mCreatureSound, mAtInfo.mpCollider, 0x1F, NULL);
@@ -318,7 +434,9 @@ void daE_KK_c::damage_check() {
 
                     mCyl.OffTgNoHitMark();
                     setActionMode(7, 1);
-                    if (mCyl.GetTgHitObj()->ChkAtType(AT_TYPE_NORMAL_SWORD) && mCutTypeCheck(1)) {
+                    if (mCyl.GetTgHitObj()->ChkAtType(AT_TYPE_NORMAL_SWORD) &&
+                        mCutTypeCheck(1, damageOwnerPlayer))
+                    {
                         mDamageTimer = 8;
                         mCyl.ClrTgHit();
                         mCyl.OnTgStopNoConHit();
@@ -333,6 +451,51 @@ void daE_KK_c::damage_check() {
 }
 
 void daE_KK_c::nextActionCheck() {
+#if TARGET_PC
+    // Co-op: action selection is selected-target state. Use the current combat target's
+    // distance, visibility, height, damage wait, and status bits instead of P1 globals.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    f32 targetDistance = 0.0f;
+    if (coOpSelectTargetState(this, "e_kk.next_action", false,
+                              dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
+                              &targetDistance, NULL))
+    {
+        if (!dComIfGp_event_runCheck() && targetDistance > l_HIO.direct_attack_range &&
+            targetDistance <= l_HIO.spear_throw_range)
+        {
+            if (!fopAcM_otherBgCheck(this, targetState.actor) &&
+                eyePos.y + 200.0f >= targetState.pos.y)
+            {
+                setActionMode(3, 0);
+                return;
+            }
+        }
+        if (!dComIfGp_event_runCheck() && targetDistance <= l_HIO.direct_attack_range &&
+            !fopAcM_otherBgCheck(this, targetState.actor))
+        {
+            if (targetState.damageWaiting && mActionMode != 0) {
+                setActionMode(0, 0);
+                return;
+            }
+            if (!dComIfGp_event_runCheck()) {
+                if (!fopAcM_otherBgCheck(this, targetState.actor) && !targetState.status0_0x100 &&
+                    eyePos.y + 50.0f > targetState.pos.y)
+                {
+                    setActionMode(8, 0);
+                    return;
+                }
+                setActionMode(3, 0);
+            }
+        } else {
+            if (field_0x672 == 0 && mActionMode != 0) {
+                setActionMode(0, 0);
+            } else if (field_0x672 == 0 && mActionMode != 2) {
+                setActionMode(2, 0);
+            }
+        }
+        return;
+    }
+#endif
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
     if (!dComIfGp_event_runCheck() && fopAcM_searchPlayerDistance(this) > l_HIO.direct_attack_range &&
         fopAcM_searchPlayerDistance(this) <= l_HIO.spear_throw_range)
@@ -411,13 +574,31 @@ void daE_KK_c::mDeadEffSet(cXyz& param_0) {
 }
 
 void daE_KK_c::executeWait() {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    f32 targetDistance = 0.0f;
+    const bool hasTarget =
+        coOpSelectTargetState(this, "e_kk.wait", false,
+                              dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState,
+                              &targetDistance, NULL);
+#else
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
     switch (mMoveMode) {
     case 0:
+#if TARGET_PC
+        // Co-op: wake from wait is immediate awareness over active players; it should not be
+        // suppressed by a stale sticky combat target.
+        if (hasTarget && targetDistance <= l_HIO.direct_attack_range &&
+            current.pos.y + 100.0f >= targetState.pos.y &&
+            !fopAcM_otherBgCheck(this, targetState.actor))
+        {
+#else
         if (fopAcM_searchPlayerDistance(this) <= l_HIO.direct_attack_range &&
             current.pos.y + 100.0f >= player->current.pos.y &&
             !fopAcM_otherBgCheck(this, dComIfGp_getPlayer(0)))
         {
+#endif
             setBck(0x1A, 2, 3.0f, 1.0f);
             mTimer = 30;
         } else {
@@ -428,9 +609,15 @@ void daE_KK_c::executeWait() {
         break;
 
     case 1:
+#if TARGET_PC
+        if (field_0x672 == 0 && (!hasTarget || !targetState.damageWaiting)) {
+            nextActionCheck();
+        }
+#else
         if (field_0x672 == 0 && daPy_getPlayerActorClass()->getDamageWaitTimer() == 0) {
             nextActionCheck();
         }
+#endif
         break;
     }
 }
@@ -540,22 +727,56 @@ void daE_KK_c::executeWalk() {
 }
 
 void daE_KK_c::executeSpearThrow() {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    f32 targetDistance = 0.0f;
+    s16 targetAngleY = fopAcM_searchPlayerAngleY(this);
+    const bool hasTarget =
+        coOpSelectTargetState(this, "e_kk.spear_throw", mMoveMode >= 2,
+                              dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
+                              &targetDistance, &targetAngleY);
+#endif
     switch (mMoveMode) {
     case 0:
         if (field_0x764 != 0x14) {
             setBck(0x14, 2, 3.0f, 1.0f);
         }
+#if TARGET_PC
+        cLib_addCalcAngleS2(&current.angle.y, targetAngleY, 4, 0x500);
+#else
         cLib_addCalcAngleS2(&current.angle.y, fopAcM_searchPlayerAngleY(this), 4, 0x500);
+#endif
         shape_angle.y = current.angle.y;
+#if TARGET_PC
+        if (abs((s16)(shape_angle.y - targetAngleY)) <= 0x100) {
+#else
         if (abs((s16)(shape_angle.y - fopAcM_searchPlayerAngleY(this))) <= 0x100) {
+#endif
         case 1:
+#if TARGET_PC
+            shape_angle.y = current.angle.y = targetAngleY;
+#else
             shape_angle.y = current.angle.y = fopAcM_searchPlayerAngleY(this);
+#endif
             setBck(0x18, 0, 3.0f, 1.0f);
             mMoveMode++;
         }
         break;
 
     case 2:
+#if TARGET_PC
+        // Co-op: mid-throw close-range interrupt checks the selected target's distance,
+        // visibility, status, and height instead of P1's.
+        if (hasTarget && !dComIfGp_event_runCheck() && targetDistance <= l_HIO.direct_attack_range &&
+            !fopAcM_otherBgCheck(this, targetState.actor) && (s32)mpMorfSO->getFrame() < 0x17 &&
+            !dComIfGp_event_runCheck() && !targetState.status0_0x100)
+        {
+            if (!fopAcM_otherBgCheck(this, targetState.actor) && eyePos.y + 50.0f > targetState.pos.y) {
+                setActionMode(8, 0);
+                break;
+            }
+        }
+#else
         if (!dComIfGp_event_runCheck() && fopAcM_searchPlayerDistance(this) <= l_HIO.direct_attack_range &&
             !fopAcM_otherBgCheck(this, dComIfGp_getPlayer(0)) && (s32)mpMorfSO->getFrame() < 0x17 &&
             !dComIfGp_event_runCheck() && !dComIfGp_checkPlayerStatus0(0, 0x100))
@@ -566,6 +787,7 @@ void daE_KK_c::executeSpearThrow() {
                 break;
             }
         }
+#endif
         if ((s32)mpMorfSO->getFrame() == 0x17) {
             fopAcM_createChild(fpcNm_E_KK_e, fopAcM_GetID(this), 0xFF0001, &field_0x698,
                                fopAcM_GetRoomNo(this), &shape_angle, NULL, -1, NULL);
@@ -620,6 +842,12 @@ void daE_KK_c::executeBackWalk() {
     dBgS_LinChk linChk;
     cXyz position1;
     cXyz position2;
+#if TARGET_PC
+    // Co-op: retreat/facing during backwalk follows the retained combat target, not P1.
+    s16 targetAngleY = fopAcM_searchPlayerAngleY(this);
+    coOpSelectTargetState(this, "e_kk.back_walk", false,
+                          dusk::coop::EnemyTargetMode::StickyCombat, NULL, NULL, &targetAngleY);
+#endif
     mDoMtx_YrotS(*calc_mtx, current.angle.y);
     position1.x = 0.0f;
     position1.y = 100.0f;
@@ -651,7 +879,11 @@ void daE_KK_c::executeBackWalk() {
         break;
 
     case 1:
+#if TARGET_PC
+        current.angle.y = targetAngleY + 0x8000;
+#else
         current.angle.y = fopAcM_searchPlayerAngleY(this) + 0x8000;
+#endif
 
     case 2:
         speedF = 15.0f;
@@ -685,13 +917,23 @@ void daE_KK_c::executeBackWalk() {
         break;
     }
 
+#if TARGET_PC
+    cLib_addCalcAngleS2(&shape_angle.y, targetAngleY, 2, 0x200);
+#else
     cLib_addCalcAngleS2(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 2, 0x200);
+#endif
     if (field_0x764 == 7 && ((s32)mpMorfSO->getFrame() == 9 || (s32)mpMorfSO->getFrame() == 0x13)) {
         mCreatureSound.startCreatureSound(Z2SE_EN_KK_FOOTNOTE, 0, -1);
     }
 }
 
 void daE_KK_c::executeYoroke() {
+#if TARGET_PC
+    // Co-op: stagger recovery turns away from the selected combat target.
+    s16 targetAngleY = fopAcM_searchPlayerAngleY(this);
+    coOpSelectTargetState(this, "e_kk.yoroke", false,
+                          dusk::coop::EnemyTargetMode::StickyCombat, NULL, NULL, &targetAngleY);
+#endif
     switch (mMoveMode) {
     case 0:
         if (field_0x67d == 0) {
@@ -715,7 +957,11 @@ void daE_KK_c::executeYoroke() {
                 nextActionCheck();
                 return;
             }
+#if TARGET_PC
+            current.angle.y = targetAngleY + 0x8000;
+#else
             current.angle.y = fopAcM_searchPlayerAngleY(this) + 0x8000;
+#endif
             setActionMode(4, 0);
         } else {
             return;
@@ -725,6 +971,12 @@ void daE_KK_c::executeYoroke() {
 }
 
 void daE_KK_c::executeGuard() {
+#if TARGET_PC
+    // Co-op: guard facing follows the retained combat target, not global P1.
+    s16 targetAngleY = fopAcM_searchPlayerAngleY(this);
+    coOpSelectTargetState(this, "e_kk.guard", false,
+                          dusk::coop::EnemyTargetMode::StickyCombat, NULL, NULL, &targetAngleY);
+#endif
     switch (mMoveMode) {
     case 0:
         setWeaponBck(0x1D, 0, 0.0f, 1.0f);
@@ -744,11 +996,21 @@ void daE_KK_c::executeGuard() {
         }
         break;
     }
+#if TARGET_PC
+    cLib_addCalcAngleS2(&current.angle.y, targetAngleY, 8, 0x500);
+#else
     cLib_addCalcAngleS2(&current.angle.y, fopAcM_searchPlayerAngleY(this), 8, 0x500);
+#endif
     shape_angle.y = current.angle.y;
 }
 
 void daE_KK_c::executeDamage() {
+#if TARGET_PC
+    // Co-op: post-damage retreat turns away from the selected combat target.
+    s16 targetAngleY = fopAcM_searchPlayerAngleY(this);
+    coOpSelectTargetState(this, "e_kk.damage", false,
+                          dusk::coop::EnemyTargetMode::StickyCombat, NULL, NULL, &targetAngleY);
+#endif
     switch (mMoveMode) {
     case 0:
         setBck(8, 0, 3.0f, 1.0f);
@@ -779,7 +1041,11 @@ void daE_KK_c::executeDamage() {
     case 3:
         mCyl.OffTgNoHitMark();
         if (mpMorfSO->isStop()) {
+#if TARGET_PC
+            current.angle.y = targetAngleY + 0x8000;
+#else
             current.angle.y = fopAcM_searchPlayerAngleY(this) + 0x8000;
+#endif
             setActionMode(4, 0);
         }
         return;
@@ -790,6 +1056,15 @@ void daE_KK_c::executeAttack() {
     dBgS_LinChk linChk;
     cXyz position1;
     cXyz position2;
+#if TARGET_PC
+    // Co-op: attack run-in and pre-swing facing are committed combat reads so the swing follows
+    // through on the selected target instead of re-sampling global P1.
+    f32 targetDistance = fopAcM_searchPlayerDistance(this);
+    s16 targetAngleY = fopAcM_searchPlayerAngleY(this);
+    coOpSelectTargetState(this, "e_kk.attack", true,
+                          dusk::coop::EnemyTargetMode::StickyCombat, NULL, &targetDistance,
+                          &targetAngleY);
+#endif
 
     mDoMtx_YrotS(*calc_mtx, current.angle.y);
     position1.x = 0.0f;
@@ -804,7 +1079,11 @@ void daE_KK_c::executeAttack() {
     switch (mMoveMode) {
     case 0:
         field_0x67c = 0;
+#if TARGET_PC
+        if (targetDistance > 600.0f) {
+#else
         if (fopAcM_searchPlayerDistance(this) > 600.0f) {
+#endif
             setBck(0x1C, 2, 3.0f, 1.0f);
             mMoveMode = 1;
         } else {
@@ -813,9 +1092,17 @@ void daE_KK_c::executeAttack() {
         break;
 
     case 1:
+#if TARGET_PC
+        if (targetDistance > 600.0f) {
+#else
         if (fopAcM_searchPlayerDistance(this) > 600.0f) {
+#endif
             speedF = 20.0f;
+#if TARGET_PC
+            if (targetDistance > l_HIO.direct_attack_range) {
+#else
             if (fopAcM_searchPlayerDistance(this) > l_HIO.direct_attack_range) {
+#endif
                 speedF = 0.0f;
                 nextActionCheck();
             }
@@ -855,7 +1142,11 @@ void daE_KK_c::executeAttack() {
     }
 
     if ((s32)mpMorfSO->getFrame() < 0x19) {
+#if TARGET_PC
+        cLib_addCalcAngleS2(&current.angle.y, targetAngleY, 1, 0x500);
+#else
         cLib_addCalcAngleS2(&current.angle.y, fopAcM_searchPlayerAngleY(this), 1, 0x500);
+#endif
         shape_angle.y = current.angle.y;
     } else if ((s32)mpMorfSO->getFrame() >= 0x21) {
         field_0x67e = 1;
@@ -936,27 +1227,49 @@ void daE_KK_c::executeWeaponMove() {
 
     f32 temp;
     f32 player_distance_y;
+#if TARGET_PC
+    s16 targetAngleX = fopAcM_searchPlayerAngleX(this);
+    f32 targetDistance = fopAcM_searchPlayerDistance(this);
+    f32 targetDistanceY = fopAcM_searchPlayerDistanceY(this);
+#endif
 
     switch (mMoveMode) {
     case 0:
         shape_angle.x = home.angle.x + 0x878C;
         shape_angle.y = home.angle.y + 0x4399;
 
+#if TARGET_PC
+        coOpSelectWeaponMoveTarget(this, actor, &targetAngleX, &targetDistance, &targetDistanceY);
+        current.angle.x = targetAngleX;
+        field_0x674 = targetAngleX - 0x2EE0;
+#else
         current.angle.x = fopAcM_searchPlayerAngleX(this);
         field_0x674 = fopAcM_searchPlayerAngleX(this) - 0x2EE0;
+#endif
         shape_angle.z = -0x389A;
 
         mTimer = 200;
         speedF = 120.0f;
 
+#if TARGET_PC
+        mMovingRange = 20.0f - (targetDistance - l_HIO.direct_attack_range) / 7.0f;
+
+        mDistance = (targetDistance - l_HIO.direct_attack_range) * 1.5f;
+#else
         mMovingRange = 20.0f - (fopAcM_searchPlayerDistance(this) - l_HIO.direct_attack_range) / 7.0f;
 
         mDistance = (fopAcM_searchPlayerDistance(this) - l_HIO.direct_attack_range) * 1.5f;
+#endif
 
         temp = 2000.0f;
 
+#if TARGET_PC
+        if (targetDistanceY < -300.0f) {
+            player_distance_y = (targetDistanceY + 300.0f) * -2.0f;
+#else
         if (fopAcM_searchPlayerDistanceY(this) < -300.0f) {
             player_distance_y = (fopAcM_searchPlayerDistanceY(this) + 300.0f) * -2.0f;
+#endif
             temp = player_distance_y + 2000.0f;
             mDistance += player_distance_y;
         }
@@ -1116,7 +1429,17 @@ void daE_KK_c::action() {
         fopAcM_posMoveF(this, mStts.GetCCMoveP());
     }
     if (field_0x679 != 1) {
+#if TARGET_PC
+        // Co-op: head tracking is selected-target presentation/aiming, not a fresh P1 lookup.
+        f32 targetDistance = fopAcM_searchPlayerDistance(this);
+        s16 targetAngleY = fopAcM_searchPlayerAngleY(this);
+        coOpSelectTargetState(this, "e_kk.head_track", false,
+                              dusk::coop::EnemyTargetMode::StickyCombat, NULL, &targetDistance,
+                              &targetAngleY);
+        s16 angle = -(shape_angle.y - targetAngleY);
+#else
         s16 angle = -(shape_angle.y - fopAcM_searchPlayerAngleY(this));
+#endif
 
         if (angle < -10000) {
             angle = -10000;
@@ -1124,8 +1447,12 @@ void daE_KK_c::action() {
             angle = 10000;
         }
 
+#if TARGET_PC
+        if ((mActionMode == 5 || mActionMode == 7) || targetDistance > l_HIO.spear_throw_range)
+#else
         if ((mActionMode == 5 || mActionMode == 7) ||
             fopAcM_searchPlayerDistance(this) > l_HIO.spear_throw_range)
+#endif
         {
             angle = 0;
         }
@@ -1306,6 +1633,10 @@ static int daE_KK_IsDelete(daE_KK_c* i_this) {
 }
 
 int daE_KK_c::_delete() {
+#if TARGET_PC
+    // Co-op: clear retained combat/debug state for both Chilfos bodies and thrown spear children.
+    dusk::coop::clearAllEnemyTargets(this);
+#endif
     dComIfG_resDelete(&mPhaseReq, "E_KK");
 
     if (mHIOInit != 0) {
@@ -1451,6 +1782,12 @@ int daE_KK_c::create() {
                 fopAcM_OnStatus(this, fopAcStts_UNK_0x4000_e);
                 field_0x67d = 1;
                 s16 player_angle = fopAcM_searchPlayerAngleY(this);
+#if TARGET_PC
+                // Co-op: icicle intro faces whichever active player woke the enemy, not P1.
+                coOpSelectTargetState(this, "e_kk.create_icicle", false,
+                                      dusk::coop::EnemyTargetMode::ImmediateAcquire, NULL, NULL,
+                                      &player_angle);
+#endif
                 shape_angle.y = player_angle;
                 current.angle.y = player_angle;
                 setActionMode(1, 0);

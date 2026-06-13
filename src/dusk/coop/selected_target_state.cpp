@@ -1,6 +1,7 @@
 #include "dusk/coop/selected_target_state.h"
 
 #include "d/actor/d_a_player.h"
+#include "dusk/coop/player_camera_status.h"
 #include "f_op/f_op_actor_mng.h"
 
 #include <cstdio>
@@ -87,10 +88,17 @@ SelectedTargetState stateForSlot(PlayerSlot slot, fopAc_ac_c* actor) {
     state.pos = actor->current.pos;
     state.shapeAngleY = actor->shape_angle.y;
     state.speedF = player->getSpeedF();
+    state.damageWaitTimer = player->getDamageWaitTimer();
     state.cutType = static_cast<int>(player->getCutType());
     state.cutCount = static_cast<int>(player->getCutCount());
     state.cutActive = player->getCutType() != daPy_py_c::CUT_TYPE_NONE;
     state.horseRide = player->checkHorseRide();
+    state.damageWaiting = state.damageWaitTimer != 0;
+    // Co-op: these are slot-local camera/status gates that several enemies use after they
+    // already know which player they mean. Snapshot them here so actor files do not fall back
+    // to dComIfGp_checkPlayerStatus0(0, flag) for P2+ selected targets.
+    state.status0_0x100 = player_camera_status::checkStatus0(slot, 0x100) != 0;
+    state.ironBallSubject = player_camera_status::checkStatus0(slot, 0x400) != 0;
     state.available = true;
     return state;
 }
