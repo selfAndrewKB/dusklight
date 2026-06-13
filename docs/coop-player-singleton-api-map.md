@@ -106,6 +106,14 @@ families and no rider, camera presentation, authored spawn, boss/setpiece, or ne
 Do not collapse those families into one broader "flying enemy" helper unless more validated enemies
 prove the same narrower shape.
 
+Static/ranged enemies follow the same identity split but need stricter callsite policy: wake/LOS
+may acquire immediately, while breath, bullet, or spawned-child attack continuation should read the
+retained Combat target through `selected_target_state`. Big Freezard (`E_FB`) uses this for vertical
+eligibility, head pitch, caged/sweep side gates, Mini Freezard spawn facing, and active-player
+bullet hit counting. Big Freezard also confirmed that `dComIfGp_checkPlayerStatus0(0, 0x02000000)`
+is the heavy-boots status bit (`FLG0_EQUIP_HVY_BOOTS`), so selected-player status0 gates belong in
+`selected_target_state` once the enemy already knows which player it means.
+
 Split-screen follows the same classification rule outside enemy code. Camera, viewport, HUD,
 lighting, audio, and render-culling questions should not be patched as generic "P2 fixes." Route
 them through the split-screen ownership families recorded in
@@ -133,7 +141,7 @@ to the requesting player slot.
 | "Which ALINK temporarily owns the shared body model-data calculators?" | `dusk::coop::alink_model_data_owner` | Implemented for additional-player startup model evaluation, execute, and draw; each scope restores P1 afterward |
 | "Which active player is nearest or eligible by raw distance/angle facts?" | `dusk::coop::player_query` | Implemented |
 | "Who is this enemy fighting right now?" | `dusk::coop::enemy_targeting` | Implemented for scoped combat targeting |
-| "Who caused this hit?" | `dusk::coop::damage_owner` | Implemented for direct players and known owned items |
+| "Who caused this hit?" | `dusk::coop::damage_owner` / narrow actor-local collision owner checks | Implemented for direct players and known owned items; Big Freezard added a bespoke direct-hit counter proof for enemies that bypass normal HP |
 | "What is the selected target's form/speed/guard/horse/swim/damage/status state?" | `dusk::coop::selected_target_state` | Initial implementation for target speed/facing/position/cut/horse facts; Chilfos added selected-target damage-wait and slot-local status bits such as `0x100` and iron-ball subject mode |
 | "What position/angle should this enemy use for chase detours after it already selected a target?" | `dusk::coop::selected_target_state` | Bokoblin obstacle steering proof uses selected target facts instead of P1 globals |
 | "Is any active player near this enemy/teammate for group wake-up?" | `dusk::coop::player_query` | Bokoblin group battle participation uses nearest active-player facts |
@@ -168,6 +176,11 @@ to the requesting player slot.
 - **Damage-owner:** cut type/count, weapon owner, hit direction, attacker equipment, and hit reaction
   ownership. Route through `damage_owner`. Never use nearest player or current enemy target to answer
   "who hit me?"
+- **Bespoke damage counters:** some enemies reset HP or keep manual hit counters for specific tools
+  rather than relying on `cc_at_check()`. Classify direct-hit bonuses, object thresholds, cannon or
+  carried-object exceptions, and special death counters as damage/collision identity. Big Freezard's
+  iron-ball counter is the proof case: direct active-player hits must match vanilla P1 behavior, while
+  cannon-carry instant kill remains object-owned.
 - **Selected-target state:** form, speed, position, guard, swim, horse, damage-wait, camera/status
   bits, or facing
   checks that modify behavior toward a known target. Route these through

@@ -9,6 +9,13 @@
 #include "Z2AudioLib/Z2Instances.h"
 #include "d/actor/d_a_obj_carry.h"
 #include "d/d_s_play.h"
+#include "f_op/f_op_actor_mng.h"
+
+#if TARGET_PC
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/player_slots.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
 
 #if DEBUG
 #include "d/d_debug_viewer.h"
@@ -55,6 +62,92 @@ void daE_FB_HIO_c::genMessage(JORMContext* ctext) {
     ctext->genSlider("カラレジ１α　", &color_register_1a, 0, 0xFF);
     // "Maximum rotation width"
     ctext->genSlider("最大回転幅", &maximum_rotation_width_2, 0, 180);
+}
+#endif
+
+#if TARGET_PC
+// Co-op: Big Freezard/Freezard uses one combat target for wake, head aim, breath, and child
+// spawn aim. Labels describe native callsites for diagnostics only.
+static bool coOpSelectCombatTargetState(
+    daE_FB_c* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance, f32* distance_y,
+    s16* angle_y) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (distance_y != NULL) {
+        *distance_y = i_this->current.pos.y - targetState.pos.y;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+
+    return true;
+}
+
+static bool coOpLineCrossToTarget(daE_FB_c* i_this,
+                                  const dusk::coop::selected_target_state::SelectedTargetState& state) {
+    dBgS_LinChk linchk;
+    cXyz targetPos;
+    targetPos.set(state.pos);
+    targetPos.y += 100.0f;
+    linchk.Set(&i_this->attention_info.position, &targetPos, i_this);
+    // Co-op: LOS is blocked by terrain unless the selected target's heavy-boots status allows it.
+    return dComIfG_Bgsp().LineCross(&linchk) && !state.equipHeavyBoots;
+}
+
+static bool coOpDidHitActivePlayer(daE_FB_c* i_this, const fopAc_ac_c* hitActor) {
+    (void)i_this;
+    return dusk::coop::getSlotForActor(hitActor) != dusk::coop::PlayerSlot::Invalid;
+}
+
+static bool coOpDidHitCannonCarry(fopAc_ac_c* hitActor) {
+    return hitActor != NULL && fopAcM_IsActor(hitActor) &&
+           fopAcM_GetName(hitActor) == fpcNm_Obj_Carry_e &&
+           static_cast<daObjCarry_c*>(hitActor)->checkCannon();
+}
+
+// Co-op: Big Freezard's type-2 gates are heavy-boots checks on the selected player, not P1.
+static bool coOpSelectedTargetHasHeavyBoots(daE_FB_c* i_this, const char* label) {
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    return coOpSelectCombatTargetState(i_this, label, true,
+                                       dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
+                                       NULL, NULL, NULL) &&
+           targetState.equipHeavyBoots;
+}
+
+// Co-op: the breath continuation ends when the retained target is below the vanilla height gate
+// and is no longer protected by that target's heavy-boots status.
+static bool coOpSelectedTargetCanEndType2Attack(daE_FB_c* i_this, const char* label,
+                                                f32 threshold) {
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    f32 targetDistanceY = 0.0f;
+    return coOpSelectCombatTargetState(i_this, label, true,
+                                       dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
+                                       NULL, &targetDistanceY, NULL) &&
+           !targetState.equipHeavyBoots && targetDistanceY < threshold;
 }
 #endif
 
@@ -194,7 +287,9 @@ void daE_FB_c::damage_check() {
     }
 
     fopAc_ac_c* tg_hit_ac = NULL;
+#if !TARGET_PC
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     mStts.Move();
     field_0x560 = health = 200;
     if (mSphere.ChkTgHit()) {
@@ -204,11 +299,20 @@ void daE_FB_c::damage_check() {
             if (!field_0x68c && mActionMode != 2) {
                 tg_hit_ac = mSphere.GetTgHitAc();
                 ++field_0x68e;
+#if TARGET_PC
+                // Co-op: direct iron-ball hits from any active player get vanilla P1's bonus count.
+                if (coOpDidHitActivePlayer(this, tg_hit_ac)) {
+                    ++field_0x68e;
+                } else if (coOpDidHitCannonCarry(tg_hit_ac)) {
+                    field_0x68e = 3;
+                }
+#else
                 if (player == tg_hit_ac) {
                     ++field_0x68e;
                 } else if (((daObjCarry_c*)tg_hit_ac)->checkCannon()) {
                     field_0x68e = 3;
                 }
+#endif
 
                 if (field_0x68e > 2) {
                     health = 0;
@@ -242,11 +346,20 @@ void daE_FB_c::damage_check() {
             if (!field_0x68c && mActionMode != 2) {
                 tg_hit_ac = mSphere2.GetTgHitAc();
                 ++field_0x68e;
+#if TARGET_PC
+                // Co-op: direct iron-ball hits from any active player get vanilla P1's bonus count.
+                if (coOpDidHitActivePlayer(this, tg_hit_ac)) {
+                    ++field_0x68e;
+                } else if (coOpDidHitCannonCarry(tg_hit_ac)) {
+                    field_0x68e = 3;
+                }
+#else
                 if (player == tg_hit_ac) {
                     ++field_0x68e;
                 } else if (((daObjCarry_c*)tg_hit_ac)->checkCannon()) {
                     field_0x68e = 3;
                 }
+#endif
 
                 if (field_0x68e > 2) {
                     health = 0;
@@ -275,6 +388,18 @@ void daE_FB_c::damage_check() {
 }
 
 bool daE_FB_c::mBgLineCheck() {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: visibility should test the selected active target, with sticky reads during breath.
+    if (coOpSelectCombatTargetState(this, "e_fb.los", mActionMode == 1,
+                                    mActionMode == 0
+                                        ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                                        : dusk::coop::EnemyTargetMode::StickyCombat,
+                                    &targetState,
+                                    NULL, NULL, NULL)) {
+        return coOpLineCrossToTarget(this, targetState);
+    }
+#endif
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
     dBgS_LinChk linchk;
     cXyz vec;
@@ -290,6 +415,28 @@ bool daE_FB_c::mBgLineCheck() {
 
 bool daE_FB_c::search_check() {
     bool retval = false;
+#if TARGET_PC
+    f32 targetDistance = 0.0f;
+    s16 targetAngle = 0;
+    // Co-op: wake/search uses immediate acquisition so any active in-range player can start the turn.
+    if (coOpSelectCombatTargetState(this, "e_fb.search", false,
+                                    dusk::coop::EnemyTargetMode::ImmediateAcquire, NULL,
+                                    &targetDistance, NULL, &targetAngle) &&
+        targetDistance <= l_HIO.player_detection_range)
+    {
+        if (!field_0x69c) {
+            mRotation = targetAngle;
+            field_0x69c = 30;
+            field_0x696 = 0;
+        }
+
+        retval = true;
+    } else if (mActionMode != 1 && !field_0x69c) {
+        mRotation = home.angle.y;
+        field_0x69c = 30;
+        field_0x696 = 0;
+    }
+#else
     if (fopAcM_searchPlayerDistance(this) <= l_HIO.player_detection_range) {
         if (!field_0x69c) {
             mRotation = fopAcM_searchPlayerAngleY(this);
@@ -303,6 +450,7 @@ bool daE_FB_c::search_check() {
         field_0x69c = 30;
         field_0x696 = 0;
     }
+#endif
 
     cLib_addCalcAngleS2(&field_0x696, l_HIO.maximum_rotation_width, 1, l_HIO.minimum_turning_range);
     cLib_addCalcAngleS2(&shape_angle.y, mRotation, 1, field_0x696);
@@ -330,6 +478,31 @@ void daE_FB_c::executeWait() {
         /* fallthrough */
     case 1:
         if (mType == 1) {
+#if TARGET_PC
+            dusk::coop::selected_target_state::SelectedTargetState targetState;
+            f32 targetDistanceY = 0.0f;
+            // Co-op: caged Freezard side/height gates should use the player it is reacting to.
+            if (!coOpSelectCombatTargetState(this, "e_fb.wait_type1", false,
+                                             dusk::coop::EnemyTargetMode::ImmediateAcquire,
+                                             &targetState, NULL, &targetDistanceY, NULL)) {
+                break;
+            }
+            if (targetDistanceY > 300.0f) {
+                break;
+            }
+
+            if (targetDistanceY < -300.0f) {
+                break;
+            }
+
+            if (current.pos.y <= 300.0f) {
+                if (targetState.pos.x > -2800.0f) {
+                    break;
+                }
+            } else if (targetState.pos.x < -3600.0f) {
+                break;
+            }
+#else
             fopAc_ac_c* player = dComIfGp_getPlayer(0);
             if (fopAcM_searchPlayerDistanceY(this) > 300.0f) {
                 break;
@@ -346,6 +519,7 @@ void daE_FB_c::executeWait() {
             } else if (player->current.pos.x < -3600.0f) {
                 break;
             }
+#endif
 
             setActionMode(1, 0);
         } else if (search_check() && !field_0x680) {
@@ -358,6 +532,22 @@ void daE_FB_c::executeWait() {
                     OS_REPORT("fopAcM_searchPlayerDistanceY(this) %f\n", fopAcM_searchPlayerDistanceY(this));
                 }
 
+#if TARGET_PC
+                f32 targetDistanceY = 0.0f;
+                // Co-op: vertical eligibility is selected-target state.
+                if (!coOpSelectCombatTargetState(this, "e_fb.wait_type2", false,
+                                                 dusk::coop::EnemyTargetMode::ImmediateAcquire,
+                                                 NULL, NULL, &targetDistanceY, NULL)) {
+                    break;
+                }
+                if (targetDistanceY > 300.0f) {
+                    break;
+                }
+
+                if (targetDistanceY < -700.0f + JREG_F(1)) {
+                    break;
+                }
+#else
                 if (fopAcM_searchPlayerDistanceY(this) > 300.0f) {
                     break;
                 }
@@ -365,6 +555,7 @@ void daE_FB_c::executeWait() {
                 if (fopAcM_searchPlayerDistanceY(this) < -700.0f + JREG_F(1)) {
                     break;
                 }
+#endif
             }
 
             setActionMode(1, 0);
@@ -393,7 +584,12 @@ void daE_FB_c::executeAttack() {
         field_0x68f = 0;
         mFireTimer = 0;
         field_0x690 = 0;
-        if (mType == 2 && dComIfGp_checkPlayerStatus0(0, 0x02000000)) {
+        if (mType == 2 &&
+#if TARGET_PC
+            coOpSelectedTargetHasHeavyBoots(this, "e_fb.attack_type2_start")) {
+#else
+            dComIfGp_checkPlayerStatus0(0, 0x02000000)) {
+#endif
             setBck(6, 2, 6.0f, 1.0f);
             mMoveMode = 2;
         } else if (mType == 1) {
@@ -480,11 +676,24 @@ void daE_FB_c::executeAttack() {
         }
 
         if (mMoveMode == 3) {
+#if TARGET_PC
+            dusk::coop::selected_target_state::SelectedTargetState targetState;
+            f32 targetDistanceY = 0.0f;
+            // Co-op: the scripted sweep variant keeps tracking the retained combat target's side/height.
+            const bool hasTarget = coOpSelectCombatTargetState(
+                this, "e_fb.attack_type1", true, dusk::coop::EnemyTargetMode::StickyCombat,
+                &targetState, NULL, &targetDistanceY, NULL);
+#else
             fopAc_ac_c* player = (fopAc_ac_c*) dComIfGp_getPlayer(0);
+#endif
             cLib_addCalcAngleS2(&shape_angle.y, mRotation, 1, l_HIO.rotation_width_stairs);
             if (current.pos.y <= 300.0f) {
                 mHeadAngle = f32(NREG_S(1) + 14000 - abs(s16(shape_angle.y))) / (6.0f + NREG_F(1));
+#if TARGET_PC
+                if (!hasTarget || targetState.pos.x > -2800.0f) {
+#else
                 if (player->current.pos.x > -2800.0f) {
+#endif
                     field_0x69c = 0;
                     current.angle.y = shape_angle.y;
                     setActionMode(0, 0);
@@ -493,7 +702,11 @@ void daE_FB_c::executeAttack() {
             } else {
                 mHeadAngle = NREG_S(2) - 2500;
                 mHeadAngle -= abs(s16(shape_angle.y)) * (-0.2f + NREG_F(2));
+#if TARGET_PC
+                if (!hasTarget || targetState.pos.x < -3600.0f) {
+#else
                 if (player->current.pos.x < -3600.0f) {
+#endif
                     field_0x69c = 0;
                     current.angle.y = shape_angle.y;
                     setActionMode(0, 0);
@@ -501,8 +714,12 @@ void daE_FB_c::executeAttack() {
                 }
             }
 
+#if TARGET_PC
+            if (!hasTarget || targetDistanceY > 300.0f || targetDistanceY < -300.0f) {
+#else
             if (fopAcM_searchPlayerDistanceY(this) > 300.0f
                 || fopAcM_searchPlayerDistanceY(this) < -300.0f) {
+#endif
                 field_0x69c = 0;
                 current.angle.y = shape_angle.y;
                 setActionMode(0, 0);
@@ -539,8 +756,13 @@ void daE_FB_c::executeAttack() {
             field_0x69c = 0;
             field_0x680 = l_HIO.next_attack_waiting_time;
             setActionMode(0, 0);
-        } else if (mMoveMode == 2 && dComIfGp_checkPlayerStatus0(0, 0x02000000) == FALSE
-                    && fopAcM_searchPlayerDistanceY(this) < -900.0f) {
+#if TARGET_PC
+        } else if (mMoveMode == 2 &&
+                   coOpSelectedTargetCanEndType2Attack(this, "e_fb.attack_type2", -900.0f)) {
+#else
+        } else if (mMoveMode == 2 && dComIfGp_checkPlayerStatus0(0, 0x02000000) == FALSE &&
+                   fopAcM_searchPlayerDistanceY(this) < -900.0f) {
+#endif
             if (NREG_S(6)) {
                 OS_REPORT("\n\n");
                 OS_REPORT("fopAcM_searchPlayerDistanceY %f\n", fopAcM_searchPlayerDistanceY(this));
@@ -584,7 +806,19 @@ void daE_FB_c::executeDamage() {
             int num_babies = 4;
             for (int idx = 0; idx < num_babies; ++idx) {
                 mini_angle = shape_angle;
+#if TARGET_PC
+                s16 targetAngle = 0;
+                // Co-op: spawned Mini Freezards inherit the parent Freezard's combat target aim.
+                if (coOpSelectCombatTargetState(this, "e_fb.spawn_mini", true,
+                                                dusk::coop::EnemyTargetMode::StickyCombat,
+                                                NULL, NULL, NULL, &targetAngle)) {
+                    mini_angle.y = targetAngle + 0x8000;
+                } else {
+                    mini_angle.y = fopAcM_searchPlayerAngleY(this) + 0x8000;
+                }
+#else
                 mini_angle.y = fopAcM_searchPlayerAngleY(this) + 0x8000;
+#endif
                 mini_angle.y += s16(cM_rndFX(4000.0f));
                 mini_pos = current.pos;
                 mini_pos.x += cM_rndF(50.0f);
@@ -658,11 +892,19 @@ void daE_FB_c::executeBullet() {
     mAtSph.SetAtVec(sp_0x8);
     dComIfG_Ccsp()->Set(&mAtSph);
     if (mAtSph.ChkAtHit()) {
+#if TARGET_PC
+        fopAc_ac_c* at_hit_ac = mAtSph.GetAtHitAc();
+        // Co-op: bullet hit counting should advance for whichever active player the projectile hit.
+        if (coOpDidHitActivePlayer(this, at_hit_ac) && lbl_188_bss_7C < 2) {
+            ++lbl_188_bss_7C;
+        }
+#else
         fopAc_ac_c* player = dComIfGp_getPlayer(0);
         fopAc_ac_c* at_hit_ac = mAtSph.GetAtHitAc();
         if (player == at_hit_ac && lbl_188_bss_7C < 2) {
             ++lbl_188_bss_7C;
         }
+#endif
 
         mAtSph.ClrAtHit();
     }
@@ -686,6 +928,31 @@ void daE_FB_c::action() {
     }
 
     if (mType == 0 || mType == 2) {
+#if TARGET_PC
+        dusk::coop::selected_target_state::SelectedTargetState targetState;
+        // Co-op: head pitch aims at the selected target's height rather than P1's head/body line.
+        if (coOpSelectCombatTargetState(this, "e_fb.head_track", mActionMode == 1,
+                                        mActionMode == 0
+                                            ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                                            : dusk::coop::EnemyTargetMode::StickyCombat,
+                                        &targetState, NULL, NULL, NULL)) {
+            cXyz sp_0x14;
+            cXyz sp_0x8;
+            mDoMtx_stack_c::copy(mpMorf->getModel()->getAnmMtx(2));
+            mDoMtx_stack_c::multVecZero(&sp_0x14);
+            sp_0x8.set(targetState.pos);
+            sp_0x8.y += 200.0f;
+            sp_0x14 -= sp_0x8;
+            s16 var_r29 = sp_0x14.atan2sY_XZ() * -1.0f;
+            if (var_r29 < 0) {
+                var_r29 = 0;
+            } else if (var_r29 > 3400) {
+                var_r29 = 3400;
+            }
+
+            cLib_addCalcAngleS2(&mHeadAngle, s16(var_r29), 2 + NREG_S(4), 0x200 + NREG_S(5));
+        }
+#else
         fopAc_ac_c* player = dComIfGp_getPlayer(0);
         cXyz sp_0x14;
         cXyz sp_0x8;
@@ -702,6 +969,7 @@ void daE_FB_c::action() {
         }
 
         cLib_addCalcAngleS2(&mHeadAngle, s16(var_r29), 2 + NREG_S(4), 0x200 + NREG_S(5));
+#endif
     }
 
     if (!mBgLineCheck() || mType == 1) {
@@ -846,6 +1114,10 @@ static int daE_FB_IsDelete(daE_FB_c*) {
 
 int daE_FB_c::_delete() {
     dComIfG_resDelete(&mPhaseReq, "E_FL");
+#if TARGET_PC
+    // Co-op: remove retained targeting/debug state for both parent Freezards and child bullets.
+    dusk::coop::clearAllEnemyTargets(this);
+#endif
     if (mType == 10 || mType == 11) {
         return 1;
     }

@@ -36,6 +36,7 @@ struct SelectedTargetState {
     bool damageWaiting = false;
     bool status0_0x100 = false;
     bool ironBallSubject = false;
+    bool equipHeavyBoots = false;
     bool available = false;
 };
 

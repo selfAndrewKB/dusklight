@@ -594,6 +594,7 @@ json selectedTargetStateDecisionEventKey(const json& decision) {
         {"horse_ride", decision.value("horse_ride", false)},
         {"status0_0x100", decision.value("status0_0x100", false)},
         {"iron_ball_subject", decision.value("iron_ball_subject", false)},
+        {"equip_heavy_boots", decision.value("equip_heavy_boots", false)},
         {"reason", decision.value("reason", std::string())},
     };
 }
@@ -2096,6 +2097,7 @@ json selectedTargetStateSummary(
         {"horse_ride", state.horseRide},
         {"status0_0x100", state.status0_0x100},
         {"iron_ball_subject", state.ironBallSubject},
+        {"equip_heavy_boots", state.equipHeavyBoots},
     };
 }
 

@@ -27,6 +27,7 @@ The hooks are guardrails, not a replacement for judgment. They exist to preserve
 - Remind enemy-targeting edits to use actor-local helpers, keep `EnemyTargetScope` as the behavior owner, keep callsite strings as diagnostic labels, use `EnemyTargetMode` for callsite policy, and avoid independent per-callsite retention machines.
 - Remind enemy-targeting edits that `EnemyTargetResult::slot` is the durable identity and `EnemyTargetResult::localActor` is the local process pointer; do not reintroduce old `result.actor` usage in enemy patches.
 - Remind damage-owner edits that nearest player and current enemy target do not answer "who hit me?"; route cut type/count, weapon-owner, hit direction, and hit-reaction ownership through `dusk::coop::damage_owner`.
+- Remind enemy damage-counter edits that bespoke HP resets, special-hit counters, direct-hit bonuses, and object-threshold branches still need owner/collision classification; do not assume shared `cc_at_check()` damage covers them.
 - Remind selected-target-state edits that target speed, facing, position, form, horse, swim, guard, and damage-state reads belong behind `dusk::coop::selected_target_state` once target identity is known.
 - Remind enemy steering edits that obstacle checks, detour angles, chase line probes, and home-range checks after target selection are selected-target state, while group "any active player near this teammate" checks belong to `player_query`.
 - Remind enemy-spawned weapon/child edits that launch and inherited attack intent should follow the parent/master combat target when the parent owns the attack, and that nontrivial target snapshots should live in helpers when native switches use fallthrough or `goto`.
@@ -67,6 +68,7 @@ The hooks are guardrails, not a replacement for judgment. They exist to preserve
   - Also watches enemy actor edits and reminds Codex to classify singleton reads before touching targeting behavior, then route targeting through actor-local helper wrappers over scoped `enemy_targeting`.
   - Also reminds enemy-targeting edits to consume `EnemyTargetResult::localActor` rather than any old `actor` field; selected-target snapshots may still expose `SelectedTargetState::actor`.
   - Also reminds enemy/damage edits that hit-reaction ownership belongs to `damage_owner`, not nearest-player or current-target policy.
+  - Also reminds enemy damage-counter edits to classify bespoke HP resets, special-hit counters, direct-hit bonuses, and object-threshold branches before moving to the next enemy.
   - Also reminds enemy/player-state edits that selected target facts belong to `selected_target_state`, not direct P1 globals or new nearest-player guesses.
   - Also reminds enemy steering edits that selected-target pathing/obstacle facts should not fall back to P1 or fresh nearest-player guesses.
   - Also reminds enemy spawned-weapon/child edits to inherit parent/master combat target intent for launch math instead of re-sampling P1, and to hide nontrivial target snapshots behind helpers when native switch/fallthrough/goto control flow would reject local C++ objects.
