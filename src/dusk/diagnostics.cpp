@@ -18,6 +18,7 @@
 #include "dusk/coop/hud_diagnostics.h"
 #include "dusk/coop/horse_owner.h"
 #include "dusk/coop/input.h"
+#include "dusk/coop/item_awareness.h"
 #include "dusk/coop/line_render_diagnostics.h"
 #include "dusk/coop/message_owner.h"
 #include "dusk/coop/player_attention.h"
@@ -25,6 +26,7 @@
 #include "dusk/coop/player_query.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/coop/selected_target_state.h"
+#include "dusk/coop/wolf_catch_owner.h"
 #include "dusk/coop/young_gohma_state_probe.h"
 #include "dusk/dusk.h"
 #include "dusk/game_clock.h"
@@ -753,6 +755,62 @@ void emitCaughtStunOwnerEvents(const Provider& provider, const json& data) {
             {"decision", decision},
         };
         emitProviderEvent(provider, "stun", eventData);
+    }
+}
+
+void emitWolfCatchOwnerEvents(const Provider& provider, const json& data) {
+    if (!data.contains("decisions") || !data["decisions"].is_array()) {
+        return;
+    }
+
+    for (const json& decision : data["decisions"]) {
+        const u64 eventId = decision.value("event_id", 0ull);
+        if (eventId == 0) {
+            continue;
+        }
+
+        const json eventKey = {
+            {"event_id", eventId},
+        };
+        const std::string stateKey =
+            fmt::format(FMT_STRING("wolf_catch.owner:{}"), static_cast<unsigned long long>(eventId));
+        if (provider.emitOnChange && !shouldEmitProviderEvent(stateKey, eventKey)) {
+            continue;
+        }
+
+        const json eventData = {
+            {"schema_version", data.value("schema_version", 1)},
+            {"decision", decision},
+        };
+        emitProviderEvent(provider, "catch", eventData);
+    }
+}
+
+void emitItemAwarenessEvents(const Provider& provider, const json& data) {
+    if (!data.contains("decisions") || !data["decisions"].is_array()) {
+        return;
+    }
+
+    for (const json& decision : data["decisions"]) {
+        const u64 eventId = decision.value("event_id", 0ull);
+        if (eventId == 0) {
+            continue;
+        }
+
+        const json eventKey = {
+            {"event_id", eventId},
+        };
+        const std::string stateKey =
+            fmt::format(FMT_STRING("item.awareness:{}"), static_cast<unsigned long long>(eventId));
+        if (provider.emitOnChange && !shouldEmitProviderEvent(stateKey, eventKey)) {
+            continue;
+        }
+
+        const json eventData = {
+            {"schema_version", data.value("schema_version", 1)},
+            {"decision", decision},
+        };
+        emitProviderEvent(provider, "item", eventData);
     }
 }
 
@@ -2254,6 +2312,69 @@ json collectCaughtStunOwner() {
     };
 }
 
+json wolfCatchOwnerDecisionSummary(
+    const coop::wolf_catch_owner::WolfCatchOwnerDecisionDebug& decision) {
+    const coop::wolf_catch_owner::WolfCatchOwnerState& state = decision.state;
+    return {
+        {"event_id", static_cast<unsigned long long>(decision.eventId)},
+        {"sim_frame", static_cast<unsigned int>(decision.simFrame)},
+        {"label", decision.label},
+        {"enemy", playerQueryActorSummary(state.enemyDebug)},
+        {"player", playerQueryActorSummary(state.playerDebug)},
+        {"owner_slot", state.slot != coop::PlayerSlot::Invalid ? static_cast<int>(state.slot) : -1},
+        {"found", state.found},
+        {"active", state.active},
+        {"reason", coop::wolf_catch_owner::wolfCatchOwnerReasonName(state.reason)},
+    };
+}
+
+json collectWolfCatchOwner() {
+    const coop::wolf_catch_owner::WolfCatchOwnerDebugState& state =
+        coop::wolf_catch_owner::getWolfCatchOwnerDebugState();
+    json decisions = json::array();
+    for (int i = 0; i < state.decisionCount; i++) {
+        decisions.push_back(wolfCatchOwnerDecisionSummary(state.decisions[i]));
+    }
+
+    return {
+        {"schema_version", 1},
+        {"current_sim_frame", static_cast<unsigned int>(state.currentSimFrame)},
+        {"decisions", decisions},
+    };
+}
+
+json itemAwarenessDecisionSummary(
+    const coop::item_awareness::ItemAwarenessDecisionDebug& decision) {
+    const coop::item_awareness::ItemAwarenessResult& result = decision.result;
+    return {
+        {"event_id", static_cast<unsigned long long>(decision.eventId)},
+        {"sim_frame", static_cast<unsigned int>(decision.simFrame)},
+        {"label", decision.label},
+        {"observer", playerQueryActorSummary(result.observerDebug)},
+        {"player", playerQueryActorSummary(result.playerDebug)},
+        {"item_actor", playerQueryActorSummary(result.itemDebug)},
+        {"owner_slot", result.slot != coop::PlayerSlot::Invalid ? static_cast<int>(result.slot) : -1},
+        {"found", result.found},
+        {"distance_xz", result.distanceXZ},
+        {"reason", coop::item_awareness::itemAwarenessReasonName(result.reason)},
+    };
+}
+
+json collectItemAwareness() {
+    const coop::item_awareness::ItemAwarenessDebugState& state =
+        coop::item_awareness::getItemAwarenessDebugState();
+    json decisions = json::array();
+    for (int i = 0; i < state.decisionCount; i++) {
+        decisions.push_back(itemAwarenessDecisionSummary(state.decisions[i]));
+    }
+
+    return {
+        {"schema_version", 1},
+        {"current_sim_frame", static_cast<unsigned int>(state.currentSimFrame)},
+        {"decisions", decisions},
+    };
+}
+
 json bokoblinAttackProbeSummary(
     const coop::bokoblin_attack_probe::BokoblinAttackProbe& probe) {
     return {
@@ -2748,6 +2869,8 @@ Provider s_providers[] = {
     {"damage.owner", 1, "cheap", 1, true, 600, 12288, collectDamageOwner},
     {"defender.owner", 1, "cheap", 1, true, 600, 12288, collectDefenderOwner},
     {"caught_stun.owner", 1, "cheap", 1, true, 240, 8192, collectCaughtStunOwner},
+    {"wolf_catch.owner", 1, "cheap", 1, true, 240, 8192, collectWolfCatchOwner},
+    {"item.awareness", 1, "cheap", 1, true, 240, 8192, collectItemAwareness},
     {"bokoblin.attack", 1, "cheap", 1, true, 240, 8192, collectBokoblinAttackProbe},
     {"bokoblin.steering", 1, "cheap", 1, true, 240, 8192, collectBokoblinSteeringProbe},
     {"gibdo.state", 1, "cheap", 1, true, 240, 8192, collectGibdoStateProbe},
@@ -2921,6 +3044,14 @@ void tick(u32 frame) {
         }
         if (std::string(provider.name) == "caught_stun.owner") {
             emitCaughtStunOwnerEvents(provider, data);
+            continue;
+        }
+        if (std::string(provider.name) == "wolf_catch.owner") {
+            emitWolfCatchOwnerEvents(provider, data);
+            continue;
+        }
+        if (std::string(provider.name) == "item.awareness") {
+            emitItemAwarenessEvents(provider, data);
             continue;
         }
         if (std::string(provider.name) == "bokoblin.attack") {

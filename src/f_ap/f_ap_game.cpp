@@ -34,7 +34,9 @@
 #include "dusk/coop/defender_owner.h"
 #include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/gibdo_state_probe.h"
+#include "dusk/coop/item_awareness.h"
 #include "dusk/coop/midna_owner.h"
+#include "dusk/coop/wolf_catch_owner.h"
 #include "dusk/coop/young_gohma_state_probe.h"
 #include <dusk/gamepad_color.h>
 #include <dusk/autosave.h>
@@ -850,6 +852,10 @@ void fapGm_Execute() {
     dusk::coop::defender_owner::advanceDefenderOwnerFrame(sExecCount);
     // Co-op: caught/stun ownership also expires and emits diagnostics by simulation frame.
     dusk::coop::caught_stun_owner::advanceCaughtStunOwnerFrame(sExecCount);
+    // Co-op: retained wolf-bite/catch ownership is a simulation interaction, not render state.
+    dusk::coop::wolf_catch_owner::advanceWolfCatchOwnerFrame(sExecCount);
+    // Co-op: item awareness decisions are sampled by simulation frame for quiet diagnostics.
+    dusk::coop::item_awareness::advanceItemAwarenessFrame(sExecCount);
     // Co-op: Bokoblin attack-loop diagnostics compare attack-state progress by simulation frame.
     dusk::coop::bokoblin_attack_probe::advanceBokoblinAttackProbeFrame(sExecCount);
     // Co-op: Gibdo diagnostics track native wake/chase/scream gates by simulation frame.

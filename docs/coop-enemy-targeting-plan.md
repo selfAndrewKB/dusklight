@@ -115,9 +115,10 @@ Retention is expressed as simulation seconds, not frame counts. V1 uses `retainS
 - `dusk::coop::damage_owner` for facts about the player/weapon that actually struck an enemy, such as cut type and hit reaction ownership. Enemy targeting must not answer cut type/count, weapon owner, boomerang/head-jump hit direction, or hit-reaction ownership.
 - `dusk::coop::defender_owner` for enemy-attack contact facts, such as which player blocked or guarded the enemy's swing. This must not use damage-owner, nearest-player, selected-target, or P1 global state.
 - `dusk::coop::caught_stun_owner` for retained stun effects such as Gibdo scream, where the enemy must keep using the same owner slot for release input and camera ownership until the effect ends, while optional affected slots can share the same effect timer;
+- `dusk::coop::wolf_catch_owner` for wolf-bite enemy ownership, where `damage_owner` starts the bite from the hit owner but the ongoing release, throw, and mouth-matrix attachment follow the retained wolf slot;
 - future caught/grab-owner helpers for a player currently captured, carried, eaten, hung from, or otherwise physically retained by an enemy;
 - broader collision-owner helpers for contact-driven actors with no explicit search/chase targeting surface;
-- item-awareness helpers for immediate reactions to active player-owned tools, such as White Wolfos hookshot side-step checks, where the enemy should scan active players/items without making that item state the sticky combat target;
+- `dusk::coop::item_awareness` or similar item-awareness helpers for immediate reactions to active player-owned tools, such as Keese boomerang wind checks and White Wolfos hookshot side-step checks, where the enemy should scan active players/items without making that item state the sticky combat target;
 - presentation/camera-owner helpers for spawn intros, master/child facing, or flourish angles, such as White Wolfos master/child spawning and target-slot camera presentation;
 - render/visibility or split-screen culling helpers for distance checks that only gate model calculation or presentation work.
 

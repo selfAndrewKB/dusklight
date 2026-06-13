@@ -58,6 +58,11 @@ keep talking to that same player slot until release. The first proof surface is 
 which now binds release input and best-effort camera lock to the retained slot, while also allowing
 the same scream timer to animate nearby affected player slots.
 
+`wolf_catch_owner` answers the wolf-specific retained physical version of that question: **"which
+wolf player currently owns this bitten enemy?"** The hit that starts the bite is still resolved
+through `damage_owner`, but once the bite begins, release checks, left/right throw state, and
+mouth-matrix attachment must follow the retained wolf slot. Keese is the first proof surface.
+
 Gibdo currently preserves the vanilla single global scream owner (`m_cry_gi`) because that pointer
 also coordinates follow-up attacks between Gibdos. Dusk broadens the affected-player range for the
 single owned scream instead of allowing simultaneous per-player screams. A future retained-effect
@@ -78,6 +83,10 @@ Hookshot, boomerang, bomb, bait, and similar item-awareness checks are also thei
 proved that these can be active-player scans without changing combat target ownership. Do not answer
 item-awareness with P1 globals by habit, but also do not force it through sticky combat targeting if
 the vanilla behavior is an immediate reaction to an item/tool state.
+
+`item_awareness` is the first Dusk-owned helper for that family. Keese wind now scans active
+owner-local boomerang actor keeps so a P2 boomerang can drive the same wind/follow behavior without
+becoming the Keese's retained combat target.
 
 Split-screen follows the same classification rule outside enemy code. Camera, viewport, HUD,
 lighting, audio, and render-culling questions should not be patched as generic "P2 fixes." Route
@@ -112,8 +121,8 @@ to the requesting player slot.
 | "Is any active player near this enemy/teammate for group wake-up?" | `dusk::coop::player_query` | Bokoblin group battle participation uses nearest active-player facts |
 | "Who did this enemy attack touch, and was that player guarding/blocking?" | `dusk::coop::defender_owner` | Initial direct-player implementation for Bokoblin guard collision |
 | "Which player collided, rode, pushed, stood on, or picked this up?" | broader collision-owner helpers | Not implemented yet |
-| "Which player is caught, stunned, grabbed, carried, swallowed, or retained by this actor?" | `dusk::coop::caught_stun_owner` / future caught-grab helpers | Initial implementation for Gibdo scream stun |
-| "Which active player or owned item should this enemy notice immediately?" | item/awareness helpers over player slots and owner keeps | Initial hookshot-awareness proof in White Wolfos |
+| "Which player is caught, stunned, grabbed, carried, swallowed, or retained by this actor?" | `dusk::coop::caught_stun_owner` / `dusk::coop::wolf_catch_owner` / future caught-grab helpers | Gibdo scream stun uses `caught_stun_owner`; Keese wolf bite uses `wolf_catch_owner` |
+| "Which active player or owned item should this enemy notice immediately?" | `dusk::coop::item_awareness` / narrow active-player scans | Initial hookshot-awareness proof in White Wolfos; Keese boomerang wind uses `item_awareness` |
 | "Which player/camera owns this spawn intro, child facing, or presentation angle?" | future presentation/camera-owner helpers | White Wolfos uses a narrow helper; broader API deferred |
 | "Which player owns this item/tool instance?" | item-owner helpers / owner keeps | Partially implemented by item ownership patches |
 | "What is this player slot locked onto or allowed to target?" | `dusk::coop::player_attention` | V1 gives additional ALINK actors their own `dAttention_c`; lock acquisition/status gating, owner target-capability masks, owner camera gameplay, cursor drawing, and actor-observed "am I locked-on?" checks use the same attention owner while P1 remains on global attention for HUD/story compatibility |
@@ -150,10 +159,14 @@ to the requesting player slot.
 - **Broader collision-owner:** contact-driven logic with no explicit search/chase surface, such as
   ride, push, stand-on, pickup, and object interaction. Keep it out of `enemy_targeting`; it needs
   its own ownership model.
-- **Caught/grab-owner / caught-stun-owner:** a retained interaction with one specific player. It
+- **Caught/grab-owner / caught-stun-owner / wolf-catch-owner:** a retained interaction with one specific player. It
   must not retarget to the nearest player while the grab/stun is active, and it must not borrow P1
-  camera/body/controller state for P2. Gibdo scream stun now uses `caught_stun_owner`; Gibdo
-  wolf-bite ownership remains deferred caught/grab work.
+  camera/body/controller state for P2. Gibdo scream stun now uses `caught_stun_owner`; Keese
+  wolf-bite hold now uses `wolf_catch_owner`; remaining swallow/carry/grab files need their own
+  retained-owner proof before conversion.
+- **Item awareness:** immediate item/tool reactions should ask `item_awareness` or a similarly
+  scoped owner scan. Do not route boomerang, hookshot, bomb, or bait reaction checks through sticky
+  combat targeting just because an enemy also has a combat target.
 - **Player attention:** ALINK lock-on, target actor, attention truth/release, and slot-local prompt
   candidates. Do not let P2 consume P1's `dAttention_c::Lockon()` as its own gameplay lock state.
 - **Player button status:** Do/A/R/Z, wolf X/Y, and 3D action availability consumed by ALINK

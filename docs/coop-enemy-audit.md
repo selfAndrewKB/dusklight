@@ -81,6 +81,7 @@ collision-owner, render/visibility culling, or story/demo/global state.
 | Ghost Soldier | Ghost Soldier | `src/d/actor/d_a_e_gs.cpp` | `E_GS` | policy-backed proximity, pending validation | Appear/disappear proximity and facing metrics route through one Combat owner plus `selected_target_state`. The wolf-sense visibility gate still uses the vanilla global wolf-power check and remains a deferred selected-player/form-sense surface; no damage-owner, defender-owner, caught/grab, spawn, or camera surfaces were found in this first pass. |
 | Chuchu 2 | Chuchu 2 | `src/d/actor/d_a_e_sm2.cpp` | `E_SM2` | policy-backed targeting, pending validation | Normal move awareness and action-wide target metrics route through one Combat owner. Merge/split/roof/water/fail behavior remains native self/state behavior; the camera visibility cleanup path remains vanilla camera/presentation logic. No damage-owner, defender-owner, caught/grab, or spawn surfaces were converted in this first pass. |
 | Walltula | Walltula | `src/d/actor/d_a_e_ws.cpp` | `E_WS` | policy-backed targeting, pending validation | Wall/climb awareness, attack continuation, and attack facing route through one Combat owner plus `selected_target_state`, using the selected player's climb/status facts instead of P1. Damage remains routed through shared `cc_at_check()`. No defender/caught/grab/spawn/camera surfaces were found in this first pass. |
+| Keese | Keese | `src/d/actor/d_a_e_ba.cpp` | `E_BA` | policy-backed targeting, pending validation | Wake/re-engage checks, hover/orbit positions, dive attack startup, and battle attention height checks route through one Combat owner plus `selected_target_state`. Wolf-bite hold starts from `damage_owner`, then uses `wolf_catch_owner` for release/throw and mouth-matrix attachment. Boomerang wind uses `item_awareness` to follow any active owner-local boomerang actor. |
 
 ## Reviewed Evidence
 
@@ -89,7 +90,7 @@ These rows have been inspected beyond the machine count. "Label evidence" is tak
 | Actor/File | Profile | Label Evidence | Classification | Targeting Notes |
 | --- | --- | --- | --- | --- |
 | `d_a_e_ai.cpp` | `E_AI` | HIO label `アモス`; actions wait/move/attack/damage/return | regular enemy candidate | Small action table; likely a good early audit target after names/locations are confirmed. |
-| `d_a_e_ba.cpp` | `E_BA` | enemy name `E_ba`; attack and wolf-bite actions | regular enemy candidate | Has direct wolf-bite state, so damage/wolf reaction may be separate from search/chase. |
+| `d_a_e_ba.cpp` | `E_BA` | source header "Enemy - Keese"; arc variants `E_ba`, `E_fb`, `E_ib`; attack, wolf-bite, and wind actions | regular enemy candidate | Keese. Combat targeting/selected-target state, wolf-bite retained ownership, and boomerang item awareness are implemented pending validation. |
 | `d_a_e_bi.cpp` | `E_BI` | enemy name `E_bi`; wait/up/move/water/disappear actions | regular/proximity candidate | Simple action table; likely useful for a low-risk wake/chase audit. |
 | `d_a_e_bs.cpp` | `E_BS` | HIO label `ベビースタル`; normal/fight-run/attack/damage actions | regular melee candidate | Looks like a simple melee enemy shape with weapon model and guard/damage checks. |
 | `d_a_e_bu.cpp` | `E_BU` | HIO label `バブル`; fly/fight/attack/chance/head actions | flying enemy candidate | Needs vertical targeting policy, not just XZ nearest. |
@@ -233,7 +234,7 @@ Do not leave these permanently primary-player-only just because V1 is cautious. 
 | `d_a_e_nz.cpp` | `E_NZ` | (unknown) | 0 | 2 | 0 | **Safe** — no targeting search callsites; possibly collision-driven |
 | `d_a_e_is.cpp` | `E_IS` | (unknown) | 0 | 4 | 0 | **Safe** — no targeting search; state pointer fetches only |
 | `d_a_e_dd.cpp` | `E_DD` | (fire enemy) | 2 | 4 | 0 | **Safe** — two targeting calls; damage branch has cut-type state |
-| `d_a_e_ba.cpp` | `E_BA` | (unknown) | 2 | 5 | 0 | **Conditional** — distance/angle clean, but `checkSwimUp()` guards a targeting branch and should wait for selected-target state support |
+| `d_a_e_ba.cpp` | `E_BA` | Keese | 2 | 5 | 0 | **Converted first pass** — distance/angle and `checkSwimUp()` eligibility follow selected-target state; wolf-bite hold uses `wolf_catch_owner`; boomerang wind uses `item_awareness` |
 | `d_a_e_ww.cpp` | `E_WW` | White Wolfos | ~30 | ~15 | 0 | **Second-wave** — 45 total callsites; wolf-form checks and demo logic mixed in; needs per-callsite read before any redirect |
 | `d_a_e_sf.cpp` | `E_SF` | (humanoid) | ~8 | ~12 | 0 | **Defer** — story intro calls `changeOriginalDemo()`/`setPlayerPosAndAngle()` are protagonist-locked |
 | `d_a_e_kk.cpp` | `E_KK` | Ice Swordsman | ~20 | ~16 | 0 | **Second-wave** — most calls targeting but `getDamageWaitTimer()` state checks intermixed |
@@ -355,7 +356,7 @@ This inventory is generated from `src/d/actor/d_a_e_*.cpp` file names and `g_pro
 | --- | --- | ---: | --- | --- |
 | `d_a_e_ai.cpp` | `E_AI` | 6 | regular enemy candidate | HIO label `アモス`; compact wait/move/attack/damage table |
 | `d_a_e_arrow.cpp` | `E_ARROW` | 3 | helper/projectile likely |  |
-| `d_a_e_ba.cpp` | `E_BA` | 10 | regular enemy candidate | attack and wolf-bite actions |
+| `d_a_e_ba.cpp` | `E_BA` | 10 | regular enemy candidate | Keese; combat target/selected-target state converted; wolf-bite hold and boomerang item awareness converted pending validation |
 | `d_a_e_bee.cpp` | `E_BEE` | 5 | helper/swarm enemy | tied to `E_NEST`; not standalone targeting |
 | `d_a_e_bg.cpp` | `E_BG` | 16 | water/special enemy | fishing rod bait/hook/eat paths |
 | `d_a_e_bi.cpp` | `E_BI` | 5 | regular/proximity candidate | compact wait/up/move/water/disappear action table |
