@@ -75,7 +75,8 @@ The hooks are guardrails, not a replacement for judgment. They exist to preserve
   - Also reminds enemy/collision edits that defender contact belongs to `defender_owner`, not damage-owner, targeting, or primary-player state.
   - Also reminds enemy/caught-state edits that retained stun/grab/carry/hang effects need a retained owner slot, not nearest-player or current-target recomputation.
   - Also reminds enemy item-awareness edits that boomerang, hookshot, bomb, bait, and similar item/tool checks should not use P1 static helpers or sticky combat targeting.
-  - Also reminds flying enemy edits that vertical targeting is selected-target state and that wolf-bite/item-awareness surfaces stay separate from combat targeting.
+  - Also reminds flying enemy edits that vertical targeting is selected-target state, camera-relative dive/staging gates should use the selected slot's presentation camera when available, and wolf-bite/item-awareness surfaces stay separate from combat targeting.
+  - Also reminds enemy dispatcher-cache edits that native cached player angle/distance fields should be filled once from the Combat owner when the original state machine already consumes one player-fact pair.
   - Also reminds enemy batch work to record deferred API hooks in the enemy audit row before moving to the next enemy.
   - Also reminds independent-player-control edits to keep lock-on, button status, item camera state, prompts, and training routed through their specific ownership APIs instead of broad P1 singleton replacement.
   - Also reminds UI/item edits to separate slot-local item assignment, meter prompt presentation, transient viewport-local overlays, and world-rendered fishing geometry instead of folding them into one broad HUD patch.

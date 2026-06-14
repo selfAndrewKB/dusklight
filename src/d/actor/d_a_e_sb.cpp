@@ -13,6 +13,12 @@
 #include "d/d_com_inf_game.h"
 #include "Z2AudioLib/Z2Instances.h"
 
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 daE_SB_HIO_c::daE_SB_HIO_c() {
     field_0x04 = -1;
     search_area = 1100.0f;
@@ -262,7 +268,45 @@ namespace {
     static fopAc_ac_c* s_Bomb;
     static s16 s_TargetAngle;
     static cXyz* s_LinkPos;
+#if TARGET_PC
+    static cXyz s_CoOpLinkPos;
+    static fopAc_ac_c* s_CoOpTargetActor;
+    static dusk::coop::selected_target_state::SelectedTargetState s_CoOpTargetState;
+#endif
 }
+
+#if TARGET_PC
+// Co-op: Shell Blade's original code caches one Link position in file-static scratch state for
+// search, jump facing, and hit-angle checks. Keep that native shape, but fill it from the retained
+// combat target so all downstream callsites agree on the same player for this actor tick.
+static bool coOpSelectShellBladeTarget(daE_SB_c* i_this, const char* label,
+                                       dusk::coop::EnemyTargetMode mode, bool committed) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    s_CoOpTargetState = dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, s_CoOpTargetState,
+        s_CoOpTargetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+
+    if (!s_CoOpTargetState.available) {
+        return false;
+    }
+
+    s_CoOpLinkPos = s_CoOpTargetState.pos;
+    s_LinkPos = &s_CoOpLinkPos;
+    s_CoOpTargetActor = s_CoOpTargetState.actor;
+    s_TargetAngle = target.angleY;
+    return true;
+}
+#endif
 
 void daE_SB_c::Shield_Motion() {
     mpMorf->setAnm((J3DAnmTransform*) dComIfG_getObjectRes("E_SB", 0xB), 0, 5.0f, l_HIO.shield_atk_anm_speed, 0.0f, -1.0f);
@@ -284,7 +328,12 @@ void daE_SB_c::AttackStop() {
 }
 
 void daE_SB_c::AttackSetSP() {
+#if TARGET_PC
+    // Co-op: attack jump height depends on the selected target's heavy-boots state, not P1's.
+    const bool targetHeavyBoots = s_CoOpTargetState.available && s_CoOpTargetState.equipHeavyBoots;
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
     dBgS_LinChk line_chk;
     cXyz pi_start(0.0f, 200.0f, 100.0f);
     cXyz pi_end(0.0f, -200.0f, 100.0f);
@@ -297,7 +346,13 @@ void daE_SB_c::AttackSetSP() {
         cXyz cross = line_chk.GetCross();
         if (cross.y - current.pos.y > 0.0f) {
             if (field_0x5c0 != 2) {
-                if (!player->checkEquipHeavyBoots()) {
+                if (
+#if TARGET_PC
+                    !targetHeavyBoots
+#else
+                    !player->checkEquipHeavyBoots()
+#endif
+                ) {
                     speed.y = (0.8f * l_HIO.atk_y_axis_speed);
                 } else {
                     speed.y = (0.8f * l_HIO.magne_on_atk_y_axis_speed);
@@ -306,7 +361,13 @@ void daE_SB_c::AttackSetSP() {
                 speed.y = (0.5f * l_HIO.atk_y_axis_speed);
             }
         } else if (field_0x5c0 != 2) {
-            if (!player->checkEquipHeavyBoots()) {
+            if (
+#if TARGET_PC
+                !targetHeavyBoots
+#else
+                !player->checkEquipHeavyBoots()
+#endif
+            ) {
                 speed.y = (0.7f * l_HIO.atk_y_axis_speed);
             } else {
                 speed.y = (0.7f * l_HIO.magne_on_atk_y_axis_speed);
@@ -599,15 +660,27 @@ void daE_SB_c::Hit() {
 
 void daE_SB_c::ActionCheck() {
     if (field_0x5b0 == 0 || field_0x602 == 1) {
+#if TARGET_PC
+        const u8 temp_r27 =
+            s_CoOpTargetState.available ? static_cast<u8>(s_CoOpTargetState.cutCount) : 0;
+        const u8 temp_r29 =
+            s_CoOpTargetState.available ? static_cast<u8>(s_CoOpTargetState.cutType) : 0;
+        const bool hookshotStatusActive = s_CoOpTargetState.status0_0x4000;
+#else
         u8 temp_r27 = daPy_getPlayerActorClass()->getCutCount();
         u8 temp_r29 = daPy_getPlayerActorClass()->getCutType();
         daPy_py_c* player = daPy_getPlayerActorClass();
         cXyz& unused_pos = fopAcM_GetPosition(player);
+        bool hookshotStatusActive = dComIfGp_checkPlayerStatus0(0, 0x4000U);
+#endif
         s16 tgt_ang = cLib_targetAngleY(&current.pos, s_LinkPos);
         if ( (s16) (shape_angle.y - tgt_ang) > -0x3000 && (s16) (shape_angle.y - tgt_ang) < 0x3000) {
             if (temp_r27 > 1U) {
                 Hit();
-            } else if (temp_r29 == daPy_py_c::CUT_TYPE_NM_VERTICAL || temp_r29 == daPy_py_c::CUT_TYPE_JUMP || temp_r29 == daPy_py_c::CUT_TYPE_GUARD_ATTACK || dComIfGp_checkPlayerStatus0(0, 0x4000U)) {
+            } else if (temp_r29 == daPy_py_c::CUT_TYPE_NM_VERTICAL ||
+                       temp_r29 == daPy_py_c::CUT_TYPE_JUMP ||
+                       temp_r29 == daPy_py_c::CUT_TYPE_GUARD_ATTACK ||
+                       hookshotStatusActive) {
                 Hanekaeri();
             } else {
                 Hit();
@@ -625,11 +698,15 @@ void daE_SB_c::ActionCheck() {
 void daE_SB_c::Search() {
     f32 temp_f31 = current.pos.absXZ(*s_LinkPos);
     f32 temp_f30 = field_0x5f4.absXZ(current.pos);
+#if TARGET_PC
+    fopAc_ac_c* player = s_CoOpTargetActor;
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
     mSound.setLinkSearch(0);
     attention_info.flags = 0;
     if (temp_f31 < l_HIO.search_area) {
-        if (!other_bg_check(this, player)) {
+        if (player != NULL && !other_bg_check(this, player)) {
             attention_info.flags = fopAc_AttnFlag_BATTLE_e;
             mSound.setLinkSearch(1);
             field_0x5b0 = 4;
@@ -642,7 +719,7 @@ void daE_SB_c::Search() {
             field_0x5c0 = 1;
         }
     } else if (temp_f31 < (400.0f + l_HIO.search_area)) {
-        if (!other_bg_check(this, player)) {
+        if (player != NULL && !other_bg_check(this, player)) {
             attention_info.flags = fopAc_AttnFlag_BATTLE_e;
         }
     } else if (temp_f30 > l_HIO.distance_home) {
@@ -849,7 +926,17 @@ void daE_SB_c::Obj_Damage() {
             field_0x60c = 5;
         }
 
+#if TARGET_PC
+        // Co-op: Shell Blade shell/chance reactions depend on the player who actually hit it,
+        // not the current target or P1's current sword animation.
+        const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+            dusk::coop::damage_owner::resolveDamageOwner(this, tg_hit_obj);
+        dusk::coop::damage_owner::recordDamageOwnerHit("e_sb.obj_damage", this, damageOwner,
+                                                       &mAtInfo, field_0x5b0);
+        const u8 cut_cnt = damageOwner.cutCount >= 0 ? static_cast<u8>(damageOwner.cutCount) : 0;
+#else
         u8 cut_cnt = daPy_getPlayerActorClass()->getCutCount();
+#endif
         if (tg_hit_obj->ChkAtType(AT_TYPE_SHIELD_ATTACK)
           || tg_hit_obj->ChkAtType(AT_TYPE_HOOKSHOT)
           || tg_hit_obj->ChkAtType(AT_TYPE_BOMB)) {
@@ -886,12 +973,16 @@ void daE_SB_c::Obj_Damage() {
 
         if (field_0x5b0 == 0 || field_0x602 == 1) {
             if (tg_hit_obj->ChkAtType(AT_TYPE_NORMAL_SWORD)) {
+#if TARGET_PC
+                u32 cut_type = damageOwner.cutType >= 0 ? damageOwner.cutType : 0;
+#else
                 u32 cut_type = daPy_getPlayerActorClass()->getCutType();
+#endif
                 if (field_0x5e8 == 1 && cut_cnt > 1
                   && (s16) (shape_angle.y - s_TargetAngle) > -0x3000 && (s16) (shape_angle.y - s_TargetAngle) < 0x3000) {
                     ChanceMotion();
                     --field_0x5e6;
-                    if (daPy_getPlayerActorClass()->checkMasterSwordEquip()) {
+                    if (daPy_py_c::checkMasterSwordEquip()) {
                         field_0x5e6 -= 1;
                     }
 
@@ -931,7 +1022,7 @@ void daE_SB_c::Obj_Damage() {
                     } else {
                         ChanceMotion();
                         --field_0x5e6;
-                        if (daPy_getPlayerActorClass()->checkMasterSwordEquip()) {
+                        if (daPy_py_c::checkMasterSwordEquip()) {
                             field_0x5e6 -= 1;
                         }
 
@@ -1000,7 +1091,27 @@ void daE_SB_c::setGroundAngle() {
 }
 
 int daE_SB_c::Execute() {
+#if TARGET_PC
+    // Co-op: awareness can acquire immediately while attack/shield/chance logic keeps the sticky
+    // Combat target, matching the original single cached Link position for this execution pass.
+    const bool committed = field_0x5b0 == 0 || field_0x5b0 == 5 || field_0x5b0 == 6;
+    const dusk::coop::EnemyTargetMode mode =
+        field_0x5b0 == 1 ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                         : dusk::coop::EnemyTargetMode::StickyCombat;
+    if (!coOpSelectShellBladeTarget(this, "e_sb.execute", mode, committed)) {
+        // Co-op: if no co-op target snapshot is available, keep vanilla P1 behavior and keep the
+        // cached state internally consistent for the rest of this execution pass.
+        daPy_py_c* player = daPy_getPlayerActorClass();
+        s_LinkPos = &fopAcM_GetPosition(player);
+        s_CoOpTargetActor = player;
+        s_CoOpTargetState =
+            dusk::coop::selected_target_state::stateForSlot(dusk::coop::PlayerSlot::Primary,
+                                                            player);
+        s_TargetAngle = cLib_targetAngleY(&current.pos, s_LinkPos);
+    }
+#else
     s_LinkPos = &fopAcM_GetPosition(daPy_getPlayerActorClass());
+#endif
     field_0x5c8 -= 1;
     if (field_0x5c8 < 0) {
         field_0x5c8 = 0;
@@ -1056,6 +1167,9 @@ int daE_SB_c::Draw() {
 }
 
 int daE_SB_c::Delete() {
+#if TARGET_PC
+    dusk::coop::clearAllEnemyTargets(this);
+#endif
     dComIfG_resDelete(&mPhaseReq, "E_SB");
     if (field_0xbbc) {
         hio_set = 0;

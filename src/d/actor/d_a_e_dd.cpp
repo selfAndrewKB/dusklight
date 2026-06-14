@@ -11,6 +11,12 @@
 #include "d/d_bomb.h"
 #include "f_op/f_op_actor_enemy.h"
 
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 class daE_DD_HIO_c : public JORReflexible {
 public:
     daE_DD_HIO_c();
@@ -181,14 +187,55 @@ static BOOL otherBgCheckS(fopAc_ac_c* param_1, fopAc_ac_c* param_2) {
     return FALSE;
 }
 
+#if TARGET_PC
+static dusk::coop::selected_target_state::SelectedTargetState s_CoOpTargetState;
+static fopAc_ac_c* s_CoOpTargetActor;
+
+static bool coOpSelectDodongoTarget(e_dd_class* i_this, const char* label,
+                                    dusk::coop::EnemyTargetMode mode, bool committed) {
+    fopAc_ac_c* a_this = &i_this->actor;
+
+    dusk::coop::EnemyTargetContext context;
+    context.observer = a_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    s_CoOpTargetState = dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        a_this, label, s_CoOpTargetState,
+        s_CoOpTargetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+
+    if (!s_CoOpTargetState.available) {
+        s_CoOpTargetActor = NULL;
+        return false;
+    }
+
+    s_CoOpTargetActor = s_CoOpTargetState.actor;
+    i_this->field_0x6a4 = target.distance;
+    return true;
+}
+#endif
+
 static BOOL pl_check(e_dd_class* i_this, f32 param_2, s16 param_3) {
     fopAc_ac_c* a_this = &i_this->actor;
+#if TARGET_PC
+    // Co-op: Dodongo states consume the cached combat target fields; LOS must check the same
+    // selected actor instead of resampling P1 inside each state gate.
+    fopAc_ac_c* player = s_CoOpTargetActor;
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
 
     if (i_this->field_0x6a4 < param_2) {
         s16 sVar1 = (a_this->shape_angle.y - i_this->field_0x6a0);
         
-        if (sVar1 < param_3 && sVar1 > (s16)-param_3 && !otherBgCheckS(a_this, player)) {
+        if (player != NULL && sVar1 < param_3 && sVar1 > (s16)-param_3 &&
+            !otherBgCheckS(a_this, player)) {
             return TRUE;
         }
     }
@@ -220,7 +267,9 @@ static BOOL way_gake_check(e_dd_class* i_this, f32 param_1) {
 
 static void damage_check(e_dd_class* i_this) {
     fopAc_ac_c* a_this = &i_this->actor;
+#if !TARGET_PC
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
 
     i_this->mStts.Move();
 
@@ -258,6 +307,15 @@ static void damage_check(e_dd_class* i_this) {
                 i_this->mSound.startCreatureVoice(Z2SE_EN_DD_V_GUARD, -1);
             } else {
                 cc_at_check(a_this, &i_this->mAtInfo);
+#if TARGET_PC
+                // Co-op: Dodongo's tail/jump-cancel reaction follows the player who struck it,
+                // not the current combat target or P1's current sword state.
+                const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+                    dusk::coop::damage_owner::resolveDamageOwner(a_this, i_this->mAtInfo.mpCollider);
+                dusk::coop::damage_owner::recordDamageOwnerHit("e_dd.damage", a_this, damageOwner,
+                                                               &i_this->mAtInfo, i_this->mAction);
+                daPy_py_c* ownerPlayer = damageOwner.localPlayer;
+#endif
 
                 s8 bVar1 = 0;
                 if (i_this->field_0x6d1 != 0) {
@@ -265,7 +323,15 @@ static void damage_check(e_dd_class* i_this) {
                     bVar1 = 1;
                 }
 
-                if (player->getCutType() == daPy_py_c::CUT_TYPE_JUMP && player->checkCutJumpCancelTurn()) {
+                if (
+#if TARGET_PC
+                    ownerPlayer != NULL && damageOwner.cutType == daPy_py_c::CUT_TYPE_JUMP &&
+                    ownerPlayer->checkCutJumpCancelTurn()
+#else
+                    player->getCutType() == daPy_py_c::CUT_TYPE_JUMP &&
+                    player->checkCutJumpCancelTurn()
+#endif
+                ) {
                     i_this->field_0x6b2 = 3;
                     i_this->field_0x6d1 = 1;
                 } else {
@@ -1097,6 +1163,42 @@ static void action(e_dd_class* i_this) {
     fopAc_ac_c* a_this = &i_this->actor;
     cXyz spa4, spb0;
 
+#if TARGET_PC
+    // Co-op: the original dispatcher caches one player angle/distance for every Dodongo action.
+    // Populate that cache from the Combat owner once so search, run, fire, and tail reaction
+    // gates agree on the same selected target for this tick.
+    const bool committed = i_this->mAction == ACTION_ATTACK;
+    const dusk::coop::EnemyTargetMode mode =
+        i_this->mAction == ACTION_NORMAL ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                                         : dusk::coop::EnemyTargetMode::StickyCombat;
+    if (coOpSelectDodongoTarget(i_this, "e_dd.action", mode, committed)) {
+        if (i_this->field_0x6d4 != 0) {
+            cMtx_XrotS(*calc_mtx, -i_this->field_0x6d6.x);
+            cMtx_YrotM(*calc_mtx, -i_this->field_0x6d6.y);
+            spa4 = s_CoOpTargetState.pos - a_this->current.pos;
+            MtxPosition(&spa4, &spb0);
+            i_this->field_0x6a0 = cM_atan2s(spb0.x, spb0.z);
+        } else {
+            i_this->field_0x6a0 = cLib_targetAngleY(&a_this->current.pos, &s_CoOpTargetState.pos);
+        }
+    } else {
+        daPy_py_c* player = daPy_getPlayerActorClass();
+        s_CoOpTargetActor = player;
+        s_CoOpTargetState =
+            dusk::coop::selected_target_state::stateForSlot(dusk::coop::PlayerSlot::Primary,
+                                                            player);
+        if (i_this->field_0x6d4 != 0) {
+            cMtx_XrotS(*calc_mtx, -i_this->field_0x6d6.x);
+            cMtx_YrotM(*calc_mtx, -i_this->field_0x6d6.y);
+            spa4 = player->current.pos - a_this->current.pos;
+            MtxPosition(&spa4, &spb0);
+            i_this->field_0x6a0 = cM_atan2s(spb0.x, spb0.z);
+        } else {
+            i_this->field_0x6a0 = cLib_targetAngleY(&a_this->current.pos, &player->current.pos);
+        }
+        i_this->field_0x6a4 = a_this->current.pos.abs(player->current.pos);
+    }
+#else
     if (i_this->field_0x6d4 != 0) {
         fopAc_ac_c* player = dComIfGp_getPlayer(0);
         cMtx_XrotS(*calc_mtx, -i_this->field_0x6d6.x);
@@ -1109,6 +1211,7 @@ static void action(e_dd_class* i_this) {
     }
 
     i_this->field_0x6a4 = fopAcM_searchPlayerDistance(a_this);
+#endif
     damage_check(i_this);
     i_this->field_0xe5a = 0;
     i_this->field_0x6be = 0;
@@ -1519,7 +1622,13 @@ static int daE_DD_Execute(e_dd_class* i_this) {
             bVar2 = 1;
         }
     } else {
-        if (bVar1 == 0 && daPy_getPlayerActorClass()->getCutAtFlg() != 0) {
+#if TARGET_PC
+        // Co-op: this is a selected-target combat-state gate, not a fresh P1/global read.
+        const bool targetCutActive = s_CoOpTargetState.cutActive;
+#else
+        const bool targetCutActive = daPy_getPlayerActorClass()->getCutAtFlg() != 0;
+#endif
+        if (bVar1 == 0 && targetCutActive) {
             bVar2 = 1;
         }
     }
@@ -1557,6 +1666,10 @@ static int daE_DD_IsDelete(e_dd_class* i_this) {
 
 static int daE_DD_Delete(e_dd_class* i_this) {
     fopAc_ac_c* a_this = &i_this->actor;
+#if TARGET_PC
+    // Co-op: purge the Dusk-owned combat target sidecar when the native Dodongo actor is deleted.
+    dusk::coop::clearAllEnemyTargets(a_this);
+#endif
     dComIfG_resDelete(&i_this->mPhase, "E_dd");
 
     if (i_this->field_0xe90 != 0) {

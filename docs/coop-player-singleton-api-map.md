@@ -114,6 +114,15 @@ eligibility, head pitch, caged/sweep side gates, Mini Freezard spawn facing, and
 bullet hit counting. Big Freezard also confirmed that `dComIfGp_checkPlayerStatus0(0, 0x02000000)`
 is the heavy-boots status bit (`FLG0_EQUIP_HVY_BOOTS`), so selected-player status0 gates belong in
 `selected_target_state` once the enemy already knows which player it means.
+Shell Blade (`E_SB`) added another selected-target status proof: status0 `0x4000` is sampled from
+the selected slot for hookshot/player-camera-state shell reaction gates instead of asking P1's
+global status.
+Dodongo (`E_DD`) confirmed the dispatcher-cache pattern: some enemies compute one native
+"player angle/distance" pair at the top of the action dispatcher and let every state consume those
+fields. Convert that cache from the Combat owner once per tick, then leave search, chase, attack,
+flame, and reaction state code using the native fields. Only split out separate families when the
+question changes, such as `damage_owner` for the player who caused a tail/jump-cancel reaction or
+object-owned bomb suction/search.
 
 Split-screen follows the same classification rule outside enemy code. Camera, viewport, HUD,
 lighting, audio, and render-culling questions should not be patched as generic "P2 fixes." Route

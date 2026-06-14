@@ -98,6 +98,7 @@ SelectedTargetState stateForSlot(PlayerSlot slot, fopAc_ac_c* actor) {
     // already know which player they mean. Snapshot them here so actor files do not fall back
     // to dComIfGp_checkPlayerStatus0(0, flag) for P2+ selected targets.
     state.status0_0x100 = player_camera_status::checkStatus0(slot, 0x100) != 0;
+    state.status0_0x4000 = player_camera_status::checkStatus0(slot, 0x4000) != 0;
     state.ironBallSubject = player_camera_status::checkStatus0(slot, 0x400) != 0;
     state.equipHeavyBoots =
         player_camera_status::checkStatus0(slot, daPy_py_c::FLG0_EQUIP_HVY_BOOTS) != 0;
