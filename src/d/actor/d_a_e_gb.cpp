@@ -15,6 +15,12 @@
 #include "f_op/f_op_camera_mng.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/item_awareness.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 enum Head_Action {
     /* 0x0 */ HEAD_ACTION_WAIT,
     /* 0x1 */ HEAD_ACTION_ATTACK_1,
@@ -135,16 +141,62 @@ static u8 data_806C7928;
 
 static daE_GB_HIO_c l_HIO;
 
+#if TARGET_PC
+static bool coOpSelectGbTargetState(
+    e_gb_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* homeDistance,
+    s16* angle_y) {
+    fopAc_ac_c* actor = &i_this->actor;
+    dusk::coop::EnemyTargetContext context;
+    context.observer = actor;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        actor, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (homeDistance != NULL) {
+        // Co-op: GB attack thresholds use full home-to-player distance.
+        *homeDistance = (actor->home.pos - targetState.pos).abs();
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+
+    return true;
+}
+#endif
+
 static void e_gb_wait(e_gb_class* i_this) {
     fopEn_enemy_c* actor = &i_this->actor;
+#if !TARGET_PC
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     cXyz work, target_offset;
     f32 offset = TREG_F(12) + 30.0f;
+#if TARGET_PC
+    f32 pl_dist = i_this->distToPlayer;
+#else
     #if VERSION == VERSION_SHIELD_DEBUG
     f32 pl_dist = (actor->home.pos - player->current.pos).abs();
     #else
     f32 pl_dist = (actor->home.pos - dComIfGp_getPlayer(0)->current.pos).abs();
     #endif
+#endif
     s8 near_attack_flag = 0;
 
     switch (i_this->mode) {
@@ -207,15 +259,21 @@ static void e_gb_wait(e_gb_class* i_this) {
 
 static void e_gb_attack_1(e_gb_class* i_this) {
     fopEn_enemy_c* actor = &i_this->actor;
+#if !TARGET_PC
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     cXyz work, pos_target_offset;
     f32 attack_spd = 0.0f;
     f32 step = YREG_F(2) + 20.0f;
+#if TARGET_PC
+    f32 pl_dist = i_this->distToPlayer;
+#else
     #if VERSION == VERSION_SHIELD_DEBUG
     f32 pl_dist = (actor->home.pos - player->current.pos).abs();
     #else
     f32 pl_dist = (actor->home.pos - dComIfGp_getPlayer(0)->current.pos).abs();
     #endif
+#endif
 
     switch (i_this->mode) {
         case 0:
@@ -307,7 +365,14 @@ static void e_gb_attack_1(e_gb_class* i_this) {
 
 static void e_gb_attack_2(e_gb_class* i_this) {
     fopEn_enemy_c* actor = &i_this->actor;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectGbTargetState(i_this, "e_gb.attack_2", true,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL, NULL);
+    fopAc_ac_c* player = targetState.available ? targetState.actor : dComIfGp_getPlayer(0);
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     cXyz work, pos_target_offset;
     f32 attack_spd = 0.0f;
     f32 step = YREG_F(2) + 20.0f;
@@ -688,7 +753,6 @@ static void* s_b_sub(void* i_actor, void* i_data) {
 
 static void damage_check(e_gb_class* i_this) {
     fopEn_enemy_c* actor = &i_this->actor;
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
 
     i_this->stts.Move();
     if (i_this->invulnerabilityTimer == 0) {
@@ -730,20 +794,41 @@ static void damage_check(e_gb_class* i_this) {
 
 static void action(e_gb_class* i_this) {
     fopEn_enemy_c* actor = (fopEn_enemy_c*)&i_this->actor;
+#if !TARGET_PC
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     cXyz work;
     cXyz new_speed;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    if (coOpSelectGbTargetState(i_this, "e_gb.action",
+                                i_this->headAction == HEAD_ACTION_ATTACK_1 ||
+                                    i_this->headAction == HEAD_ACTION_ATTACK_2,
+                                i_this->headAction == HEAD_ACTION_WAIT
+                                    ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                                    : dusk::coop::EnemyTargetMode::StickyCombat,
+                                &targetState, &i_this->distToPlayer, NULL))
+    {
+        // Co-op: native GB states consume these cached target angles throughout the frame.
+        work = targetState.pos - actor->current.pos;
+    } else {
+        work = dComIfGp_getPlayer(0)->current.pos - actor->current.pos;
+    }
+#else
     // FAKEMATCH???
     #if VERSION == VERSION_SHIELD_DEBUG
     work = player->current.pos - actor->current.pos;
     #else
     work = dComIfGp_getPlayer(0)->current.pos - actor->current.pos;
     #endif
+#endif
     work.y += 100.0f;
 
     i_this->angleYTarget = (s16)cM_atan2s(work.x, work.z);
     i_this->angleXTarget = -cM_atan2s(work.y, JMAFastSqrt(work.x * work.x + work.z * work.z));
+#if !TARGET_PC
     i_this->distToPlayer = fopAcM_searchPlayerDistance(actor);
+#endif
 
     damage_check(i_this);
 
@@ -1410,7 +1495,14 @@ static int daE_GB_Execute(e_gb_class* i_this) {
     }
 
     i_this->headSph.SetC(pos);
-    if (i_this->distToPlayer > 500.0f && daPy_getPlayerActorClass()->checkBoomerangChargeTime() != 0) {
+    if (i_this->distToPlayer > 500.0f
+#if TARGET_PC
+        // Co-op: boomerang-size reactions ask which active player owns a live boomerang.
+        && dusk::coop::item_awareness::findActiveBoomerang(actor, "e_gb.boomerang_radius").found
+#else
+        && daPy_getPlayerActorClass()->checkBoomerangChargeTime() != 0
+#endif
+    ) {
         i_this->headSph.SetR((BREG_F(9) + 160.0f) * l_HIO.face_size);
     } else {
         i_this->headSph.SetR((BREG_F(9) + 80.0f) * l_HIO.face_size);
@@ -1550,6 +1642,10 @@ static int daE_GB_IsDelete(e_gb_class* i_this) {
 
 static int daE_GB_Delete(e_gb_class* i_this) {
     fopEn_enemy_c* actor = &i_this->actor;
+#if TARGET_PC
+    // Co-op: clear combat target sidecars before this native actor slot can be reused.
+    dusk::coop::clearAllEnemyTargets(actor);
+#endif
     fopAcM_RegisterDeleteID(i_this, "E_GB");
 
     dComIfG_resDelete(&i_this->phase, "E_gb");

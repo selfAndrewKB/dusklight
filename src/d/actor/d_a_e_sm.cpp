@@ -13,6 +13,15 @@
 #include "f_op/f_op_camera_mng.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/defender_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/player_query.h"
+#include "dusk/coop/retained_interaction_owner.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 enum E_SM_RES_File_ID {
     /* BCK */
     /* 0x05 */ BCK_SC_ATTACK = 0x5,
@@ -66,6 +75,18 @@ enum Core_Action {
     /* 0x5 */ CORE_ACTION_HOOK,
     /* 0x7 */ CORE_ACTION_DEMO = 0x7,
 };
+
+#if TARGET_PC
+class daPy_py_c;
+
+// Co-op: early wake/damage helpers need the actor-local ownership wrappers defined below.
+static bool coOpSelectSmTargetState(
+    daE_SM_c* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distanceXZ,
+    s16* angle_y);
+static bool coOpFindSmHookshotOwner(daE_SM_c* i_this, const char* label,
+                                    daPy_py_c** playerOut, cXyz** hookTopOut);
+#endif
 
 class daE_Sm_HIO_c : public JORReflexible {
 public:
@@ -175,11 +196,28 @@ static BOOL other_bg_check(daE_SM_c* i_this, fopAc_ac_c* param_2) {
 }
 
 static BOOL pl_check(daE_SM_c* i_this, f32 param_2) {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: slime wake checks should notice any active player while preserving vertical/LOS gates.
+    if (!coOpSelectSmTargetState(i_this, "e_sm.pl_check", false,
+                                 dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState, NULL,
+                                 NULL))
+    {
+        return FALSE;
+    }
+
+    if (fabsf(i_this->current.pos.y - targetState.pos.y) < 500.0f &&
+        !other_bg_check(i_this, targetState.actor))
+    {
+        return TRUE;
+    }
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
 
     if (fabsf(i_this->current.pos.y - player->current.pos.y) < 500.0f && !other_bg_check(i_this, player)) {
         return TRUE;
     }
+#endif
 
     return FALSE;
 }
@@ -288,8 +326,10 @@ void daE_SM_c::E_SM_Damage() {
 }
 
 void daE_SM_c::SmDamageCheck() {
+#if !TARGET_PC
     daPy_py_c* player = daPy_getPlayerActorClass();
     cXyz& pos = fopAcM_GetPosition(player);
+#endif
 
     if (field_0x6d4 != 0) {
         mCoSm.ClrTgHit();
@@ -302,11 +342,30 @@ void daE_SM_c::SmDamageCheck() {
 
     if (mCoSm.ChkAtHit()) {
         field_0x6d4 = 10;
+#if TARGET_PC
+        const dusk::coop::defender_owner::DefenderOwnerResult defender =
+            dusk::coop::defender_owner::resolveDefenderOwner(this, &mCoSm);
+        dusk::coop::defender_owner::recordDefenderOwnerContact("e_sm.body_contact", this,
+                                                                defender);
+        fopAc_ac_c* defenderActor =
+            defender.found && defender.localPlayerActor != NULL ? defender.localPlayerActor
+                                                                : dComIfGp_getPlayer(0);
+        daPy_py_c* defenderPlayer =
+            defender.found && defender.localPlayer != NULL ? defender.localPlayer
+                                                           : daPy_getPlayerActorClass();
+        s16 sVar1 = cLib_targetAngleY(&field_0x990, &defenderActor->current.pos);
+
+        // Co-op: Slime body contact should throw the defender it touched, unless that player guards.
+        if (!defender.guarded && defenderPlayer != NULL) {
+            defenderPlayer->setThrowDamage(sVar1, 15.0f, 20.0f, 1, 0, 0);
+        }
+#else
         s16 sVar1 = cLib_targetAngleY(&field_0x990, &pos);
 
         if (!player->checkPlayerGuard()) {
             player->setThrowDamage(sVar1, 15.0f, 20.0f, 1, 0, 0);
         }
+#endif
 
         mCoSm.ClrAtHit();
         return;
@@ -426,10 +485,19 @@ void daE_SM_c::SmDamageCheck() {
         return;
     }
 
+#if TARGET_PC
+    daPy_py_c* player = NULL;
+    cXyz* hookshotTopPos = NULL;
+    // Co-op: loose hookshot awareness scans active players; it is not sticky combat targeting.
+    if (!coOpFindSmHookshotOwner(this, "e_sm.hookshot_awareness", &player, &hookshotTopPos)) {
+        return;
+    }
+#else
     cXyz* hookshotTopPos = player->getHookshotTopPos();
     if (hookshotTopPos == NULL) {
         return;
     }
+#endif
 
     cXyz sp34(field_0x990);
     sp34.y += 100.0f;
@@ -438,9 +506,11 @@ void daE_SM_c::SmDamageCheck() {
         return;
     }
 
+#if !TARGET_PC
     if (!daPy_getPlayerActorClass()->checkHookshotShootReturnMode()) {
         return;
     }
+#endif
 
     field_0x6be = 0;
     field_0x6c0[0] = 50;
@@ -466,6 +536,102 @@ namespace {
 
     static s16 s_TargetAngle;
 };
+
+#if TARGET_PC
+static bool coOpSelectSmTargetState(
+    daE_SM_c* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distanceXZ,
+    s16* angle_y) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distanceXZ != NULL) {
+        // Co-op: Slime's cached distance is horizontal; preserve the native XZ dimension.
+        *distanceXZ = target.distanceXZ;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+
+    return true;
+}
+
+static bool coOpFindSmHookshotOwner(daE_SM_c* i_this, const char* label,
+                                    daPy_py_c** playerOut, cXyz** hookTopOut) {
+    daPy_py_c* bestPlayer = NULL;
+    cXyz* bestTop = NULL;
+    f32 bestDistance = 0.0f;
+
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* playerActor) {
+        daPy_py_c* player = static_cast<daPy_py_c*>(playerActor);
+        cXyz* hookshotTopPos = player->getHookshotTopPos();
+        if (hookshotTopPos == NULL || !player->checkHookshotShootReturnMode()) {
+            return;
+        }
+
+        cXyz checkPos(i_this->field_0x990);
+        checkPos.y += 100.0f;
+        const f32 distance = checkPos.abs(*hookshotTopPos);
+        if (distance >= i_this->field_0x6f0 * 100.0f) {
+            return;
+        }
+
+        if (bestPlayer == NULL || distance < bestDistance) {
+            bestPlayer = player;
+            bestTop = hookshotTopPos;
+            bestDistance = distance;
+        }
+    });
+
+    if (bestPlayer != NULL && playerOut != NULL) {
+        *playerOut = bestPlayer;
+    }
+    if (bestTop != NULL && hookTopOut != NULL) {
+        *hookTopOut = bestTop;
+    }
+
+    const dusk::coop::selected_target_state::SelectedTargetState state =
+        bestPlayer != NULL
+            ? dusk::coop::selected_target_state::stateForSlot(
+                  dusk::coop::getSlotForActor((fopAc_ac_c*)bestPlayer), (fopAc_ac_c*)bestPlayer)
+            : dusk::coop::selected_target_state::SelectedTargetState{};
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, state,
+        state.available ? dusk::coop::selected_target_state::SelectedTargetStateReason::FilteredNearest
+                        : dusk::coop::selected_target_state::SelectedTargetStateReason::NoMatch);
+    return bestPlayer != NULL;
+}
+
+static dusk::coop::retained_interaction_owner::RetainedInteractionState
+coOpSmCarryOwner(daE_SM_c* i_this, const char* label) {
+    return dusk::coop::retained_interaction_owner::updateRetainedInteraction(
+        label, i_this, dusk::coop::retained_interaction_owner::RetainedInteractionScope::Carry);
+}
+
+static void coOpSmClearCarry(daE_SM_c* i_this, const char* label) {
+    dusk::coop::retained_interaction_owner::clearRetainedInteraction(
+        label, i_this, dusk::coop::retained_interaction_owner::RetainedInteractionScope::Carry);
+}
+#endif
 
 void daE_SM_c::E_SM_Normal() {
     f32 fVar1 = 0.0f;
@@ -1213,7 +1379,9 @@ void daE_SM_c::E_SM_C_Death() {
 }
 
 void daE_SM_c::C_DamageCheck() {
+#if !TARGET_PC
     cXyz& pos = fopAcM_GetPosition(daPy_getPlayerActorClass());
+#endif
 
     if (field_0x6d6 > 0) {
         mCoCore.ClrTgHit();
@@ -1243,6 +1411,20 @@ void daE_SM_c::C_DamageCheck() {
 
             if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_HOOKSHOT)) {
                 mCoCore.SetTgType(0xD8FBFDFF);
+#if TARGET_PC
+                const dusk::coop::damage_owner::DamageOwnerResult hookOwner =
+                    dusk::coop::damage_owner::resolveDamageOwner(this, mAtInfo.mpCollider);
+                dusk::coop::damage_owner::recordDamageOwnerHit("e_sm.core_hookshot", this,
+                                                                hookOwner, &mAtInfo);
+                // Co-op: hook carry belongs to the player whose hookshot struck the core.
+                dusk::coop::retained_interaction_owner::beginRetainedInteraction(
+                    "e_sm.core_hook_begin", this,
+                    dusk::coop::retained_interaction_owner::RetainedInteractionScope::Carry,
+                    hookOwner.localPlayerActor,
+                    hookOwner.found
+                        ? dusk::coop::retained_interaction_owner::RetainedInteractionReason::DirectPlayer
+                        : dusk::coop::retained_interaction_owner::RetainedInteractionReason::FallbackPrimary);
+#endif
 
                 if (mCoreAction == CORE_ACTION_NORMAL) {
                     field_0x68c = true;
@@ -1250,7 +1432,7 @@ void daE_SM_c::C_DamageCheck() {
                     field_0x68c = false;
                 }
 
-                csXyz i_rotation(0, fopAcM_searchPlayerAngleY(this), 0);
+                csXyz i_rotation(0, s_TargetAngle, 0);
 
                 if (mCoreAction != CORE_ACTION_FREE) {
                     dComIfGp_particle_set(0x877E, &current.pos, &tevStr, &i_rotation, &scale);
@@ -1326,11 +1508,22 @@ void daE_SM_c::C_DamageCheck() {
 }
 
 void daE_SM_c::E_SM_C_Hook() {
+#if TARGET_PC
+    dusk::coop::retained_interaction_owner::RetainedInteractionState hookOwner =
+        coOpSmCarryOwner(this, "e_sm.core_hook");
+    daPy_py_c* player =
+        hookOwner.found && hookOwner.localPlayer != NULL ? hookOwner.localPlayer
+                                                         : daPy_getPlayerActorClass();
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
     fopAcM_GetPosition(player);
 
     if (!player->checkHookshotReturnMode() || field_0xa60.ChkWallHit()) {
         fopAcM_cancelHookCarryNow(this);
+#if TARGET_PC
+        coOpSmClearCarry(this, "e_sm.core_hook_cancel");
+#endif
         speedF = IREG_F(18);
         speed.set(0.0f, 0.0f, 0.0f);
         current.pos.y -= 40.0f;
@@ -1341,6 +1534,9 @@ void daE_SM_c::E_SM_C_Hook() {
     } else {
         if (strcmp("D_SB01", dComIfGp_getStartStageName()) == 0 && current.pos.y > field_0x990.y + 800.0f) {
             fopAcM_cancelHookCarryNow(this);
+#if TARGET_PC
+            coOpSmClearCarry(this, "e_sm.core_hook_stage_cancel");
+#endif
             speedF = IREG_F(18);
             speed.set(0.0f, 0.0f, 0.0f);
             current.pos.y -= 40.0f;
@@ -1351,7 +1547,12 @@ void daE_SM_c::E_SM_C_Hook() {
         }
 
         cXyz sp28(0.0f, yREG_F(4) + -60.0f, 0.0f);
+#if TARGET_PC
+        // Co-op: write hook carry offset to the retained hookshot owner, not P1.
+        player->setHookshotCarryOffset(fopAcM_GetID(this), &sp28);
+#else
         daPy_getPlayerActorClass()->setHookshotCarryOffset(fopAcM_GetID(this), &sp28);
+#endif
 
         if (mAnm == BCK_SC_F_SHOCK && mpModelMorf->isStop()) {
             SetAnm(BCK_SC_DRAW, J3DFrameCtrl::EMode_LOOP, 1.0f, 3.0f);
@@ -1652,8 +1853,18 @@ void daE_SM_c::ArrowOn() {
 
 int daE_SM_c::Execute() {
     field_0x99c = field_0x990;
+#if TARGET_PC
+    // Co-op: downstream slime/core states share this native target cache for steering decisions.
+    coOpSelectSmTargetState(this, "e_sm.execute",
+                            mAction == ACTION_ATTACK || mCoreAction == CORE_ACTION_HOOK,
+                            mAction == ACTION_NORMAL
+                                ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                                : dusk::coop::EnemyTargetMode::StickyCombat,
+                            NULL, &s_Dis, &s_TargetAngle);
+#else
     s_TargetAngle = fopAcM_searchPlayerAngleY(this);
     s_Dis = fopAcM_searchPlayerDistanceXZ(this);
+#endif
     cLib_addCalc2(&field_0x6f0, scale.x * l_HIO.basic_size, 0.1f, 0.1f);
 
     for (int i = 0; i < 5; i++) {
@@ -1812,6 +2023,11 @@ static int daE_SM_Create(fopAc_ac_c* a_this) {
 }
 
 int daE_SM_c::Delete() {
+#if TARGET_PC
+    // Co-op: release target and hook-carry sidecars before this native actor is recycled.
+    dusk::coop::clearAllEnemyTargets(this);
+    dusk::coop::retained_interaction_owner::clearAllRetainedInteractions(this);
+#endif
     dComIfG_resDelete(&mPhase, "E_SM");
 
     for (int i = 0; i < 30; i++) {

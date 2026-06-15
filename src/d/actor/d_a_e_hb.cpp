@@ -10,6 +10,11 @@
 #include "f_op/f_op_actor_enemy.h"
 
 #if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/defender_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/retained_interaction_owner.h"
+#include "dusk/coop/selected_target_state.h"
 #include "dusk/frame_interpolation.h"
 #endif
 
@@ -84,6 +89,65 @@ static void daE_HB_interp_callback(bool isSimFrame, void* pUserWork) {
 }
 #endif
 
+#if TARGET_PC
+static bool coOpSelectHbTargetState(
+    e_hb_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* homeDistance,
+    s16* angle_y) {
+    fopAc_ac_c* actor = &i_this->enemy;
+    dusk::coop::EnemyTargetContext context;
+    context.observer = actor;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        actor, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (homeDistance != NULL) {
+        // Co-op: this Baba stores full home-to-player distance, not XZ distance.
+        *homeDistance = (actor->home.pos - targetState.pos).abs();
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+
+    return true;
+}
+
+static dusk::coop::retained_interaction_owner::RetainedInteractionState
+coOpHbBiteOwner(e_hb_class* i_this, const char* label) {
+    return dusk::coop::retained_interaction_owner::updateRetainedInteraction(
+        label, &i_this->enemy,
+        dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach);
+}
+
+static void coOpHbClearBite(e_hb_class* i_this, const char* label) {
+    dusk::coop::retained_interaction_owner::RetainedInteractionState owner =
+        coOpHbBiteOwner(i_this, label);
+    if (owner.found && owner.localPlayer != NULL) {
+        owner.localPlayer->offDkCaught();
+        owner.localPlayer->offDkCaught2();
+    }
+    dusk::coop::retained_interaction_owner::clearRetainedInteraction(
+        label, &i_this->enemy,
+        dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach);
+}
+#endif
+
 static int daE_HB_Draw(e_hb_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
 
@@ -126,18 +190,37 @@ static int daE_HB_Draw(e_hb_class* i_this) {
 
 static BOOL pl_check(e_hb_class* i_this, f32 i_range) {
     fopAc_ac_c* actor = &i_this->enemy;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: wake/search should consider the nearest active player now, not a stale retained bite.
+    if (!coOpSelectHbTargetState(i_this, "e_hb.pl_check", false,
+                                 dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState, NULL,
+                                 NULL))
+    {
+        return FALSE;
+    }
+
+    if (i_this->dist_to_player < i_range &&
+        (i_this->field_0x851 || !fopAcM_otherBgCheck(actor, targetState.actor)))
+    {
+        return TRUE;
+    }
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
 
     if (i_this->dist_to_player < i_range && (i_this->field_0x851 || !fopAcM_otherBgCheck(actor, player))) {
         return TRUE;
-    } else {
-        return FALSE;
     }
+#endif
+
+    return FALSE;
 }
 
 static void damage_check(e_hb_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
+#if !TARGET_PC
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     
     if (i_this->invulnerabilityTimer == 0) {
         i_this->ccStts.Move();
@@ -150,7 +233,19 @@ static void damage_check(e_hb_class* i_this) {
             i_this->timers[0] = 10;
             i_this->timers[1] = 100;
 
+#if TARGET_PC
+            // Co-op: shield bounce direction belongs to the player this attack touched.
+            const dusk::coop::defender_owner::DefenderOwnerResult defender =
+                dusk::coop::defender_owner::resolveDefenderOwner(actor, &i_this->atSph);
+            dusk::coop::defender_owner::recordDefenderOwnerContact("e_hb.shield", actor,
+                                                                    defender);
+            i_this->field_0x680 =
+                defender.found && defender.localPlayerActor != NULL
+                    ? defender.localPlayerActor->shape_angle.y
+                    : dComIfGp_getPlayer(0)->shape_angle.y;
+#else
             i_this->field_0x680 = player->shape_angle.y;
+#endif
             i_this->field_0x1230 = 10;
             dComIfGp_getVibration().StartShock(4, 0x1F, cXyz(0.0f, 1.0f, 0.0f));
             return;
@@ -162,12 +257,23 @@ static void damage_check(e_hb_class* i_this) {
             if (i_this->kukiSph[i].ChkTgHit()) {
                 i_this->invulnerabilityTimer = 10;
                 i_this->atInfo.mpCollider = i_this->kukiSph[i].GetTgHitObj();
+#if TARGET_PC
+                const dusk::coop::damage_owner::DamageOwnerResult owner =
+                    dusk::coop::damage_owner::resolveDamageOwner(actor, i_this->atInfo.mpCollider);
+#endif
 
                 if (i_this->atInfo.mpCollider->ChkAtType(AT_TYPE_BOOMERANG)) {
                     hit_type = 2;
                 } else if (i_this->atInfo.mpCollider->ChkAtType(AT_TYPE_40 | AT_TYPE_BOMB) || i_this->action == ACTION_CHANCE) {
                     at_power_check(&i_this->atInfo);
+#if TARGET_PC
+                    dusk::coop::damage_owner::recordDamageOwnerHit("e_hb.kuki", actor, owner,
+                                                                    &i_this->atInfo);
+                    // Co-op: sword/cut reactions follow the player who caused this hit.
+                    if (owner.cutType > 0) {
+#else
                     if (daPy_getPlayerActorClass()->getCutType() != 0) {
+#endif
                         hit_type = 1;
                     } else {
                         hit_type = 2;
@@ -177,7 +283,14 @@ static void damage_check(e_hb_class* i_this) {
                     i_this->mode = 0;
                     i_this->timers[0] = 10;
                     i_this->timers[1] = 100;
+#if TARGET_PC
+                    i_this->field_0x680 =
+                        owner.found && owner.localPlayerActor != NULL
+                            ? owner.localPlayerActor->shape_angle.y
+                            : dComIfGp_getPlayer(0)->shape_angle.y;
+#else
                     i_this->field_0x680 = player->shape_angle.y;
+#endif
                     def_se_set(&i_this->sound, i_this->atInfo.mpCollider, 0x2D, NULL);
                     i_this->field_0x1230 = 10;
                 }
@@ -188,6 +301,10 @@ static void damage_check(e_hb_class* i_this) {
         if (hit_type == 0 && i_this->ccSph.ChkTgHit()) {
             i_this->atInfo.mpCollider = i_this->ccSph.GetTgHitObj();
             fopAc_ac_c* tg_hit_actor = dCc_GetAc(i_this->atInfo.mpCollider->GetAc());
+#if TARGET_PC
+            const dusk::coop::damage_owner::DamageOwnerResult owner =
+                dusk::coop::damage_owner::resolveDamageOwner(actor, i_this->atInfo.mpCollider);
+#endif
 
             if (i_this->atInfo.mpCollider->ChkAtType(AT_TYPE_BOOMERANG | AT_TYPE_40 | AT_TYPE_BOMB)) {
                 hit_type = 2;
@@ -199,7 +316,14 @@ static void damage_check(e_hb_class* i_this) {
                 i_this->mode = 0;
                 i_this->timers[0] = 10;
                 i_this->timers[1] = 100;
+#if TARGET_PC
+                i_this->field_0x680 =
+                    owner.found && owner.localPlayerActor != NULL
+                        ? owner.localPlayerActor->shape_angle.y
+                        : dComIfGp_getPlayer(0)->shape_angle.y;
+#else
                 i_this->field_0x680 = player->shape_angle.y;
+#endif
                 i_this->field_0x1230 = 10;
                 def_se_set(&i_this->sound, i_this->atInfo.mpCollider, 0x2D, NULL);
             }
@@ -225,7 +349,17 @@ static void damage_check(e_hb_class* i_this) {
             e_hb_leaf_class* pleaf = (e_hb_leaf_class*)fopAcM_SearchByID(i_this->leaf_actor_id);
             if (pleaf != NULL) {
                 pleaf->field_0x5bc = fopAcM_createBokkuri(fopAcM_GetSetId(actor), &actor->current.pos, item_no, item_bit, fopAcM_GetRoomNo(actor), &sp2C, 0, 0);
+#if TARGET_PC
+                const dusk::coop::damage_owner::DamageOwnerResult owner =
+                    dusk::coop::damage_owner::resolveDamageOwner(actor, i_this->atInfo.mpCollider);
+                if (owner.localPlayer != NULL) {
+                    owner.localPlayer->onEnemyDead();
+                } else {
+                    daPy_getPlayerActorClass()->onEnemyDead();
+                }
+#else
                 daPy_getPlayerActorClass()->onEnemyDead();
+#endif
             }
 
             i_this->field_0x124c = 0.0f;
@@ -473,10 +607,18 @@ static void e_hb_wait(e_hb_class* i_this) {
     }
 
     if (i_this->field_0x851 != 0) {
-        fopAc_ac_c* player = dComIfGp_getPlayer(0);
         cLib_addCalcAngleS2(&actor->shape_angle.y, (i_this->angle_to_player + 0x8000), 8, 0x800);
         
+#if TARGET_PC
+        dusk::coop::selected_target_state::SelectedTargetState targetState;
+        coOpSelectHbTargetState(i_this, "e_hb.wait_pitch", false,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL,
+                                NULL);
+        cXyz sp24 = (targetState.available ? targetState.actor->eyePos : dComIfGp_getPlayer(0)->eyePos) - actor->current.pos;
+#else
+        fopAc_ac_c* player = dComIfGp_getPlayer(0);
         cXyz sp24 = player->eyePos - actor->current.pos;
+#endif
         int sp8 = cM_atan2s(sp24.y, JMAFastSqrt(SQUARE(sp24.x) + SQUARE(sp24.z)));
         cLib_addCalcAngleS2(&actor->shape_angle.x, (sp8 + 0x8000), 8, 0x400);
         i_this->field_0xb0c = 1;
@@ -488,7 +630,14 @@ static void e_hb_wait(e_hb_class* i_this) {
 
 static void e_hb_attack(e_hb_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectHbTargetState(i_this, "e_hb.attack", i_this->mode >= 2,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL, NULL);
+    fopAc_ac_c* player = targetState.available ? targetState.actor : dComIfGp_getPlayer(0);
+#else
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+#endif
     cXyz sp78;
     cXyz sp6C;
     s16 spA = 0;
@@ -586,14 +735,45 @@ static void e_hb_attack(e_hb_class* i_this) {
 
         cLib_addCalc2(&i_this->field_0x690, 0.2f, 1.0f, 0.05f);
 
-        if (!daPy_getPlayerActorClass()->getDkCaught() && !daPy_getPlayerActorClass()->getStCaught() && i_this->atSph.ChkAtHit()) {
+        if (i_this->atSph.ChkAtHit()
+#if !TARGET_PC
+            && !daPy_getPlayerActorClass()->getDkCaught() &&
+            !daPy_getPlayerActorClass()->getStCaught()
+#endif
+        ) {
+#if TARGET_PC
+            const dusk::coop::defender_owner::DefenderOwnerResult defender =
+                dusk::coop::defender_owner::resolveDefenderOwner(actor, &i_this->atSph);
+            dusk::coop::defender_owner::recordDefenderOwnerContact("e_hb.bite_contact", actor,
+                                                                    defender);
+            daPy_py_c* caughtPlayer = defender.localPlayer;
+            if (!defender.found || caughtPlayer == NULL || caughtPlayer->getDkCaught() ||
+                caughtPlayer->getStCaught())
+            {
+                if (i_this->modelMorf->isStop()) {
+                    i_this->mode = 3;
+                    i_this->timers[0] = 0;
+                }
+                break;
+            }
+#endif
             OS_REPORT("E_HB//////////////AT  SET 1 !!\n");
             i_this->mode = 5;
             i_this->field_0x690 = 20.0f;
             anm_init(i_this, 7, 2.0f, 2, 1.0f);
             i_this->timers[0] = 120;
 
+#if TARGET_PC
+            // Co-op: a bite hold is retained by the player this attack actually caught.
+            dusk::coop::retained_interaction_owner::beginRetainedInteraction(
+                "e_hb.bite_begin", actor,
+                dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach,
+                defender.localPlayerActor,
+                dusk::coop::retained_interaction_owner::RetainedInteractionReason::DirectPlayer);
+            caughtPlayer->setDkCaught(actor);
+#else
             daPy_getPlayerActorClass()->setDkCaught(actor);
+#endif
             dComIfGp_getVibration().StartShock(6, 0x1F, cXyz(0.0f, 1.0f, 0.0f));
         } else if (i_this->modelMorf->isStop()) {
             i_this->mode = 3;
@@ -612,7 +792,19 @@ static void e_hb_attack(e_hb_class* i_this) {
         i_this->ccSph.OffCoSetBit();
         spA = 0;
 
+#if TARGET_PC
+        {
+            dusk::coop::retained_interaction_owner::RetainedInteractionState biteOwner =
+                coOpHbBiteOwner(i_this, "e_hb.bite_hold");
+            if (biteOwner.found && biteOwner.localPlayerActor != NULL) {
+                player = biteOwner.localPlayerActor;
+            }
+            daPy_py_c* bitePlayer =
+                biteOwner.found && biteOwner.localPlayer != NULL ? biteOwner.localPlayer : NULL;
+        if (bitePlayer != NULL && bitePlayer->getDkCaught()) {
+#else
         if (daPy_getPlayerActorClass()->getDkCaught()) {
+#endif
             if (i_this->timers[0] == 30) {
                 dComIfGp_setItemLifeCount(-1.0f, 0);
             }
@@ -627,7 +819,11 @@ static void e_hb_attack(e_hb_class* i_this) {
                 if (var_f30 > (100.0f + YREG_F(1))) {
                     var_f30 = 100.0f + YREG_F(1);
                 }
+#if TARGET_PC
+                bitePlayer->setOutPower(var_f30, (sp8 + 0x8000), 0);
+#else
                 daPy_getPlayerActorClass()->setOutPower(var_f30, (sp8 + 0x8000), 0);
+#endif
             }
 
             if (i_this->field_0x851 == 0) {
@@ -650,11 +846,17 @@ static void e_hb_attack(e_hb_class* i_this) {
             cLib_addCalc2(&actor->current.pos.y, i_this->field_0x674.y, 1.0f, i_this->field_0x690);
             cLib_addCalc2(&i_this->field_0x690, 200.0f, 1.0f, 10.0f);
         } else {
+#if TARGET_PC
+            coOpHbClearBite(i_this, "e_hb.bite_release");
+#endif
             i_this->action = ACTION_WAIT;
             i_this->mode = -1;
             anm_init(i_this, 0x10, 2.0f, 0, 1.0f);
             i_this->sound.startCreatureVoice(Z2SE_EN_DB_V_RELEASE, -1);
         }
+#if TARGET_PC
+        }
+#endif
         break;
     }
 
@@ -1027,20 +1229,40 @@ static f32 dummyFloat() {
 
 static void action(e_hb_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
+#if !TARGET_PC
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     cXyz sp70;
     cXyz sp64;
 
+#if TARGET_PC
+    // Co-op: native HB states read these cached fields, so fill them from the combat owner once.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    if (coOpSelectHbTargetState(i_this, "e_hb.action", i_this->action == ACTION_ATTACK,
+                                i_this->action == ACTION_STAY
+                                    ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                                    : dusk::coop::EnemyTargetMode::StickyCombat,
+                                &targetState, &i_this->dist_to_player,
+                                &i_this->angle_to_player))
+    {
+        (void)targetState;
+    }
+#else
     i_this->angle_to_player = fopAcM_searchPlayerAngleY(actor);
     i_this->dist_to_player = (actor->home.pos - player->current.pos).abs();
+#endif
     actor->field_0x566 = 0;
     i_this->field_0x1231 = 1;
 
     damage_check(i_this);
 
     if (i_this->invulnerabilityTimer != 0 && i_this->field_0x852 != 0) {
+#if TARGET_PC
+        coOpHbClearBite(i_this, "e_hb.damage_release");
+#else
         daPy_getPlayerActorClass()->offDkCaught();
         daPy_getPlayerActorClass()->offDkCaught2();
+#endif
     }
 
     s8 attn_ON = FALSE;
@@ -1354,6 +1576,11 @@ static int daE_HB_IsDelete(e_hb_class* i_this) {
 
 static int daE_HB_Delete(e_hb_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
+#if TARGET_PC
+    // Co-op: release target/bite sidecars before the native actor memory can be reused.
+    dusk::coop::clearAllEnemyTargets(actor);
+    dusk::coop::retained_interaction_owner::clearAllRetainedInteractions(actor);
+#endif
     fopAcM_RegisterDeleteID(i_this, "E_HB");
     dComIfG_resDelete(&i_this->phase, "E_hb");
 

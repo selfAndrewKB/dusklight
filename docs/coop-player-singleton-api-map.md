@@ -74,7 +74,9 @@ mouth-matrix attachment must follow the retained wolf slot. Keese is the first p
 **"which player owns this ongoing attach/carry/hang interaction?"** Use it when the interaction is
 not the specialized Gibdo scream-stun or wolf-bite mouth hold. Ghost Rat uses it for body attachment,
 heavy-state counting, Midna rat-body routing, and joint attachment; Peahat uses it for hookshot
-carry/hang status, heavy-boots checks, and carry-offset writes.
+carry/hang status, heavy-boots checks, and carry-offset writes. Deku Baba uses the same retained
+family for bite/caught lifetime after defender contact establishes the caught player; Slime Chu uses
+it for hookshot core carry after `damage_owner` establishes the hookshot owner.
 
 Gibdo currently preserves the vanilla single global scream owner (`m_cry_gi`) because that pointer
 also coordinates follow-up attacks between Gibdos. Dusk broadens the affected-player range for the
