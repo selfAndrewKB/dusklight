@@ -32,6 +32,11 @@ struct SelectedTargetState {
     int cutType = -1;
     int cutCount = -1;
     bool cutActive = false;
+    bool wolf = false;
+    int wolfEyeUp = 0;
+    bool wolfSenseActive = false;
+    bool wolfBark = false;
+    bool wolfThreat = false;
     bool horseRide = false;
     bool damageWaiting = false;
     bool status0_0x100 = false;

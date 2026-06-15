@@ -443,8 +443,25 @@ void dComIfGs_revSwitch(int i_no, int i_roomNo);
 BOOL dComIfGs_isSwitch(int i_no, int i_roomNo);
 void dComIfGs_offActor(int i_no, int i_roomNo);
 
+#if TARGET_PC
+namespace dusk::coop::world_switch_probe {
+void recordSwitchOn(const fopAc_ac_c* sourceActor, int switchNo, int roomNo, bool wasOnBefore,
+                    const char* source);
+void suppressNextDirectSwitchOn(int switchNo, int roomNo);
+}
+#endif
+
 inline void fopAcM_onSwitch(const fopAc_ac_c* i_actor, int sw) {
-    return dComIfGs_onSwitch(sw, fopAcM_GetHomeRoomNo(i_actor));
+    const int roomNo = fopAcM_GetHomeRoomNo(i_actor);
+#if TARGET_PC
+    // Co-op: attribute switch producers to their actor when the native helper carries one. The
+    // lower dComIfGs_onSwitch probe still records direct callers with no actor context.
+    const bool wasOnBefore = dComIfGs_isSwitch(sw, roomNo) != 0;
+    dusk::coop::world_switch_probe::recordSwitchOn(i_actor, sw, roomNo, wasOnBefore,
+                                                   "fopAcM_onSwitch");
+    dusk::coop::world_switch_probe::suppressNextDirectSwitchOn(sw, roomNo);
+#endif
+    return dComIfGs_onSwitch(sw, roomNo);
 }
 
 inline void fopAcM_offSwitch(const fopAc_ac_c* i_actor, int sw) {

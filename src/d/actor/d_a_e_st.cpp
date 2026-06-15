@@ -9,6 +9,10 @@
 #include "f_op/f_op_kankyo_mng.h"
 #include "f_op/f_op_actor_enemy.h"
 #include "Z2AudioLib/Z2Instances.h"
+#if TARGET_PC
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
 #include <cstring>
 
 enum E_st_RES_File_ID {
@@ -312,6 +316,93 @@ static bool hio_set;
 
 static daE_ST_HIO_c l_HIO;
 
+#if TARGET_PC
+static dusk::coop::EnemyTargetMode coOpStTargetMode(e_st_class* i_this) {
+    switch (i_this->mAction) {
+    case ACTION_WAIT:
+    case ACTION_MOVE:
+    case ACTION_HANG:
+    case ACTION_HANG_2:
+        return dusk::coop::EnemyTargetMode::ImmediateAcquire;
+    default:
+        return dusk::coop::EnemyTargetMode::StickyCombat;
+    }
+}
+
+static bool coOpSelectStTargetState(
+    e_st_class* i_this, const char* label, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance, s16* angle_y) {
+    fopEn_enemy_c* a_this = &i_this->actor;
+
+    dusk::coop::EnemyTargetContext context;
+    context.observer = a_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = i_this->mAction == ACTION_SHOOT || i_this->mAction == ACTION_HANG_SHOOT ||
+                        i_this->mAction == ACTION_HANG_2_SHOOT ||
+                        i_this->mAction == ACTION_JUMP_ATTACK ||
+                        i_this->mAction == ACTION_G_FIGHT;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        a_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    return true;
+}
+
+static s16 coOpStLocalAngleToTarget(e_st_class* i_this, const char* label) {
+    fopEn_enemy_c* a_this = &i_this->actor;
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    if (!coOpSelectStTargetState(i_this, label, coOpStTargetMode(i_this), &targetState, NULL, NULL)) {
+        return fopAcM_searchPlayerAngleY(a_this);
+    }
+
+    cXyz pos_delta = targetState.pos - a_this->current.pos;
+    cXyz local_pos;
+    cMtx_XrotS(*calc_mtx, -i_this->field_0x69c.x);
+    cMtx_YrotM(*calc_mtx, -i_this->field_0x69c.y);
+    MtxPosition(&pos_delta, &local_pos);
+    return cM_atan2s(local_pos.x, local_pos.z);
+}
+
+static bool coOpStPlayerAboveAndInXZ(e_st_class* i_this, const char* label, f32 xzDistance,
+                                     dusk::coop::selected_target_state::SelectedTargetState* state) {
+    fopEn_enemy_c* a_this = &i_this->actor;
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: hanging Skulltula drop gates are native horizontal-under-enemy checks. Keep them XZ
+    // so a ceiling height offset does not prevent P2 from satisfying the same condition P1 used.
+    if (!coOpSelectStTargetState(i_this, label, dusk::coop::EnemyTargetMode::ImmediateAcquire,
+                                 &targetState, NULL, NULL))
+    {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    return a_this->current.pos.absXZ(targetState.pos) < xzDistance &&
+           a_this->current.pos.y - targetState.pos.y > 0.0f;
+}
+#endif
+
 static int daE_ST_Draw(e_st_class* i_this) {
     fopEn_enemy_c* a_this = &i_this->actor;
     J3DModel* model = i_this->mpModelMorf->getModel();
@@ -380,6 +471,35 @@ static BOOL other_bg_check(e_st_class* i_this, fopAc_ac_c* actor_p) {
 
 static BOOL pl_check(e_st_class* i_this, f32 i_distance) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    f32 distance = i_this->mPlayerDistance;
+    // Co-op: Skulltula recognition uses the active selected player while preserving vanilla's
+    // vertical cutoff, local wall/ceiling angle transform, cone, and background line test.
+    if (coOpSelectStTargetState(i_this, "e_st.pl_check", coOpStTargetMode(i_this), &targetState,
+                                &distance, NULL))
+    {
+        if (targetState.pos.y - a_this->current.pos.y >= 750.0f || dComIfGp_event_runCheck()) {
+            return FALSE;
+        }
+
+        if (distance < i_distance) {
+            cXyz pos_delta = targetState.pos - a_this->current.pos;
+            cXyz pos;
+            cMtx_XrotS(*calc_mtx, -i_this->field_0x69c.x);
+            cMtx_YrotM(*calc_mtx, -i_this->field_0x69c.y);
+            MtxPosition(&pos_delta, &pos);
+            s16 angle = a_this->current.angle.y - cM_atan2s(pos.x, pos.z);
+
+            if (angle < 0x6000 && angle > -0x6000 && !other_bg_check(i_this, targetState.actor)) {
+                return TRUE;
+            }
+        }
+
+        return FALSE;
+    }
+#endif
+
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
     cXyz pos_delta, pos;
 
@@ -704,6 +824,12 @@ static void e_st_wait(e_st_class* i_this) {
 }
 
 static s16 pl_angle_get(e_st_class* i_this) {
+#if TARGET_PC
+    // Co-op: chase/attack-facing uses the retained Skulltula combat target, transformed through
+    // the same wall/ceiling-local angle math as vanilla.
+    return coOpStLocalAngleToTarget(i_this, "e_st.pl_angle");
+#endif
+
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
     cXyz pos_delta, pos;
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
@@ -1148,7 +1274,11 @@ static void tail_line_calc(e_st_class* i_this) {
 
 static void e_st_hang(e_st_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+#else
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+#endif
     cXyz sp30, sp3c;
 
     switch (i_this->mActionPhase) {
@@ -1178,13 +1308,20 @@ static void e_st_hang(e_st_class* i_this) {
 
     cLib_addCalc2(&a_this->current.pos.y, i_this->mBgPos.y, 0.1f, a_this->speed.y);
     cLib_addCalc2(&a_this->speed.y, a_this->speedF, 1.0f, 0.5f);
-    cLib_addCalcAngleS2(&a_this->current.angle.y, fopAcM_searchPlayerAngleY(a_this), 0x10, 0x200);
+    cLib_addCalcAngleS2(&a_this->current.angle.y, pl_angle_get(i_this), 0x10, 0x200);
 
     if (i_this->arg1 == 0 && i_this->mTimers[1] == 0) {
         int _;
+#if TARGET_PC
+        if (!daPy_getPlayerActorClass()->getStCaught() &&
+            coOpStPlayerAboveAndInXZ(i_this, "e_st.hang_drop_check", 300.0f, &targetState))
+        {
+            if (a_this->current.pos.y - targetState.pos.y > 1000.0f) {
+#else
         if (!daPy_getPlayerActorClass()->getStCaught() && fopAcM_searchPlayerDistanceXZ(a_this) < 300.0f && a_this->current.pos.y - player->current.pos.y > 0.0f) {
             fopAc_ac_c* pla_2_p = dComIfGp_getPlayer(0);
             if (a_this->current.pos.y - pla_2_p->current.pos.y > 1000.0f) {
+#endif
                 i_this->mAction = ACTION_HANG_DROP;
                 i_this->field_0x750 = i_this->field_0x710;
                 i_this->field_0x720 = 2;
@@ -1204,8 +1341,20 @@ static void e_st_hang(e_st_class* i_this) {
 
 static void e_st_hang_shoot(e_st_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: hang-shoot continuation height follows the retained selected player.
+    if (!coOpSelectStTargetState(i_this, "e_st.hang_shoot", coOpStTargetMode(i_this), &targetState,
+                                 NULL, NULL) ||
+        a_this->current.pos.y - targetState.pos.y <= 0.0f)
+    {
+        i_this->mAction = ACTION_HANG;
+        i_this->mActionPhase = PHASE_INIT;
+        i_this->mTimers[1] = cM_rndF(20.0f) + 20.0f;
+        return;
+    }
+#else
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
-    cXyz sp40, sp4c;
 
     if (a_this->current.pos.y - player->current.pos.y <= 0.0f) {
         i_this->mAction = ACTION_HANG;
@@ -1213,6 +1362,8 @@ static void e_st_hang_shoot(e_st_class* i_this) {
         i_this->mTimers[1] = cM_rndF(20.0f) + 20.0f;
         return;
     }
+#endif
+    cXyz sp40, sp4c;
 
     switch (i_this->mActionPhase) {
         case PHASE_INIT:
@@ -1225,7 +1376,11 @@ static void e_st_hang_shoot(e_st_class* i_this) {
             }
 
             i_this->mActionPhase = HANG_SHOOT_PHASE_HANG;
+#if TARGET_PC
+            i_this->mBgPos.y = targetState.pos.y + 500.0f;
+#else
             i_this->mBgPos.y = player->current.pos.y + 500.0f;
+#endif
 
             if (i_this->mBgPos.y > i_this->field_0x744.y - 50.0f) {
                 i_this->mBgPos.y = i_this->field_0x744.y - 50.0f;
@@ -1280,7 +1435,7 @@ static void e_st_hang_shoot(e_st_class* i_this) {
     }
 
     cLib_addCalc2(&a_this->current.pos.y, i_this->mBgPos.y, 0.2f, 15.0f);
-    cLib_addCalcAngleS2(&a_this->current.angle.y, fopAcM_searchPlayerAngleY(a_this), 4, 0x1000);
+    cLib_addCalcAngleS2(&a_this->current.angle.y, pl_angle_get(i_this), 4, 0x1000);
 }
 
 static void e_st_hang_drop(e_st_class* i_this) {
@@ -1343,7 +1498,11 @@ static void e_st_hang_drop(e_st_class* i_this) {
 
 static s8 e_st_hang_2(e_st_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+#else
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
     cXyz pos, sp34;
     s8 rv = 0;
     s8 unk_flag = 0;
@@ -1370,7 +1529,15 @@ static s8 e_st_hang_2(e_st_class* i_this) {
                 rv = 1;
             }
 
-            if (fopAcM_searchPlayerDistanceXZ(a_this) < i_this->field_0x7d8 && a_this->current.pos.y - player->current.pos.y > 0.0f) {
+            if (
+#if TARGET_PC
+                coOpStPlayerAboveAndInXZ(i_this, "e_st.hang2_drop_check", i_this->field_0x7d8,
+                                         &targetState)
+#else
+                fopAcM_searchPlayerDistanceXZ(a_this) < i_this->field_0x7d8 &&
+                a_this->current.pos.y - player->current.pos.y > 0.0f
+#endif
+            ) {
                 i_this->mActionPhase = HANG_2_PHASE_2;
                 i_this->field_0x7ec = 20.0f;
                 i_this->field_0x7f0 = 0;
@@ -1380,11 +1547,21 @@ static s8 e_st_hang_2(e_st_class* i_this) {
             break;
         
         case HANG_2_PHASE_2:
+#if TARGET_PC
+            coOpSelectStTargetState(i_this, "e_st.hang2_height", coOpStTargetMode(i_this),
+                                    &targetState, NULL, NULL);
+            if (i_this->arg1 == 4) {
+                i_this->mBgPos.y = targetState.pos.y + 120.0f + 150.0f + YREG_F(7);
+            } else {
+                i_this->mBgPos.y = targetState.pos.y + 120.0f;
+            }
+#else
             if (i_this->arg1 == 4) {
                 i_this->mBgPos.y = player->current.pos.y + 120.0f + 150.0f + YREG_F(7);
             } else {
                 i_this->mBgPos.y = player->current.pos.y + 120.0f;
             }
+#endif
 
             pos.set(a_this->current.pos.x, a_this->current.pos.y, a_this->current.pos.z);
 
@@ -1406,7 +1583,14 @@ static s8 e_st_hang_2(e_st_class* i_this) {
 
             cLib_addCalc2(&a_this->current.pos.y, i_this->mBgPos.y, 1.0f, 50.0f);
 
-            if (!player->checkPlayerFly() && fabsf(a_this->current.pos.y - i_this->mBgPos.y) < 10.0f) {
+            if (
+#if TARGET_PC
+                (!targetState.available || !targetState.player || !targetState.player->checkPlayerFly()) &&
+#else
+                !player->checkPlayerFly() &&
+#endif
+                fabsf(a_this->current.pos.y - i_this->mBgPos.y) < 10.0f)
+            {
                 if (!daPy_getPlayerActorClass()->getStCaught() && i_this->arg1 == 4) {
                     i_this->mAction = ACTION_HANG_2_SHOOT;
                     i_this->mActionPhase = PHASE_INIT;
@@ -1430,7 +1614,15 @@ static s8 e_st_hang_2(e_st_class* i_this) {
 
             a_this->field_0x566 = 1;
             
-            if (i_this->mTimers[0] == 0 && (fopAcM_searchPlayerDistanceXZ(a_this) > i_this->field_0x7d8 + 50.0f || a_this->current.pos.y - player->current.pos.y <= 0.0f)) {
+            if (i_this->mTimers[0] == 0 &&
+#if TARGET_PC
+                !coOpStPlayerAboveAndInXZ(i_this, "e_st.hang2_hold_check", i_this->field_0x7d8 + 50.0f,
+                                          NULL))
+#else
+                (fopAcM_searchPlayerDistanceXZ(a_this) > i_this->field_0x7d8 + 50.0f ||
+                 a_this->current.pos.y - player->current.pos.y <= 0.0f))
+#endif
+            {
                 i_this->mActionPhase = HANG_2_PHASE_HANG;
                 anm_init(i_this, BCK_ST_HANG_UP, 5.0f, J3DFrameCtrl::EMode_LOOP, 1.0f);
             }
@@ -1449,7 +1641,7 @@ static s8 e_st_hang_2(e_st_class* i_this) {
             break;
     }
 
-    cLib_addCalcAngleS2(&a_this->current.angle.y, fopAcM_searchPlayerAngleY(a_this), 0x10, 0x400);
+    cLib_addCalcAngleS2(&a_this->current.angle.y, pl_angle_get(i_this), 0x10, 0x400);
 
     if (unk_flag || (daPy_getPlayerActorClass()->getStCaught() && fopAcM_GetParam(a_this) == 1)) {
         i_this->mSound.startCreatureSound(Z2SE_EN_ST_SILK_RELEASE, 0, -1);
@@ -1469,14 +1661,28 @@ static s8 e_st_hang_2(e_st_class* i_this) {
 
 static void e_st_hang_2_shoot(e_st_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: hang-2 shoot continuation is still the native "Skulltula is above player" gate,
+    // but the player facts come from the selected active target instead of P1.
+    if (!coOpSelectStTargetState(i_this, "e_st.hang2_shoot_height", coOpStTargetMode(i_this),
+                                 &targetState, NULL, NULL) ||
+        a_this->current.pos.y - targetState.pos.y <= 0.0f)
+    {
+        i_this->mAction = ACTION_HANG_2;
+        i_this->mActionPhase = PHASE_INIT;
+        return;
+    }
+#else
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
-    cXyz sp40, sp4c;
 
     if (a_this->current.pos.y - player->current.pos.y <= 0.0f) {
         i_this->mAction = ACTION_HANG_2;
         i_this->mActionPhase = PHASE_INIT;
         return;
     }
+#endif
+    cXyz sp40, sp4c;
 
     switch (i_this->mActionPhase) {
         case PHASE_INIT:
@@ -1508,7 +1714,7 @@ static void e_st_hang_2_shoot(e_st_class* i_this) {
             break;
     }
 
-    cLib_addCalcAngleS2(&a_this->current.angle.y, fopAcM_searchPlayerAngleY(a_this), 4, 0x1000);
+    cLib_addCalcAngleS2(&a_this->current.angle.y, pl_angle_get(i_this), 4, 0x1000);
 }
 
 static void e_st_s_damage(e_st_class* i_this) {
@@ -1529,7 +1735,13 @@ static void e_st_s_damage(e_st_class* i_this) {
             break;
     }
 
-    cLib_addCalcAngleS2(&a_this->current.angle.y, fopAcM_searchPlayerAngleY(a_this), 4, 0x1000);
+#if TARGET_PC
+    cLib_addCalcAngleS2(&a_this->current.angle.y,
+                        coOpStLocalAngleToTarget(i_this, "e_st.s_damage_angle"), 4, 0x1000);
+#else
+    cLib_addCalcAngleS2(&a_this->current.angle.y, fopAcM_searchPlayerAngleY(a_this), 4,
+                        0x1000);
+#endif
 
     if (i_this->field_0x7e0 > 0.1f) {
         cXyz sp1c, sp28;
@@ -1854,7 +2066,7 @@ static s8 e_st_g_fight(e_st_class* i_this) {
             // fallthrough
         case G_FIGHT_PHASE_MOVE:
             maxStep = 0x400;
-            i_this->mAngleFromPlayer = fopAcM_searchPlayerAngleY(a_this);
+            i_this->mAngleFromPlayer = pl_angle_get(i_this);
             target = (VREG_F(2) + 3.5f) * l_HIO.basic_size;
             if (pl_check(i_this, combat_start_dist)) {
                 i_this->mActionPhase = G_FIGHT_PHASE_WAIT02;
@@ -1865,7 +2077,7 @@ static s8 e_st_g_fight(e_st_class* i_this) {
         
         case G_FIGHT_PHASE_WAIT02:
             rv = true;
-            i_this->mAngleFromPlayer = fopAcM_searchPlayerAngleY(a_this);
+            i_this->mAngleFromPlayer = pl_angle_get(i_this);
 
             if (i_this->mTimers[0] == 0) {
                 anm_init(i_this, BCK_ST_ATTACKA, 5.0f, J3DFrameCtrl::EMode_NONE, 1.0f);
@@ -2641,7 +2853,18 @@ static void action(e_st_class* i_this) {
         i_this->field_0x6b0 = a_this->current.pos;
     }
 
-    if (i_this->arg0 == 0 && i_this->arg2 == 1 && a_this->current.pos.y - player->current.pos.y < 0.0f) {
+#if TARGET_PC
+    bool attentionHeightOk = true;
+    if (i_this->arg0 == 0 && i_this->arg2 == 1) {
+        attentionHeightOk =
+            coOpStPlayerAboveAndInXZ(i_this, "e_st.attention_height", l_HIO.pl_recognize_dist, NULL);
+    }
+    if (i_this->arg0 == 0 && i_this->arg2 == 1 && !attentionHeightOk)
+#else
+    if (i_this->arg0 == 0 && i_this->arg2 == 1 &&
+        a_this->current.pos.y - player->current.pos.y < 0.0f)
+#endif
+    {
         unk_flag_1 = 0;
     }
 
@@ -2685,7 +2908,16 @@ static int daE_ST_Execute(e_st_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
     cXyz pos, sph_center;
 
+#if TARGET_PC
+    f32 targetDistance = fopAcM_searchPlayerDistance(a_this);
+    // Co-op: this cached distance feeds downstream Skulltula state gates, so fill it from the
+    // active Combat/awareness target once per tick instead of leaving later states on P1.
+    coOpSelectStTargetState(i_this, "e_st.distance_cache", coOpStTargetMode(i_this), NULL,
+                            &targetDistance, NULL);
+    i_this->mPlayerDistance = targetDistance;
+#else
     i_this->mPlayerDistance = fopAcM_searchPlayerDistance(a_this);
+#endif
     f32 scale = l_HIO.basic_size;
     if (small) {
         scale = 1.0f;

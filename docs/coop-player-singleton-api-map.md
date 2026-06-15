@@ -44,6 +44,13 @@ running a new nearest-player selection. Group wake-up or battle-participation ch
 when the vanilla question is "is any active player close enough to this teammate?", use
 `player_query` directly instead of sticky combat targeting.
 
+`world_trigger` / switch activation answers **"which active player can trip this authored room
+trigger?"** These are wake or event gates that may run before an enemy's own AI. First distinguish
+an upstream trigger producer from an enemy-local authored wake gate. Patch known producers at the
+trigger. For an enemy-local gate, preserve native flow by opening the same room switch from the
+active-player predicate rather than skipping the gate. `world.switch` diagnostics record switch
+activations so room gates can be traced back to their source or to direct switch plumbing.
+
 `defender_owner` answers **"who did my attack touch?"** These are enemy-attack contact reads such as
 "which player blocked this swing?" They are separate from `damage_owner` because the enemy is the
 attacker and the player is the defender.
@@ -62,6 +69,12 @@ the same scream timer to animate nearby affected player slots.
 wolf player currently owns this bitten enemy?"** The hit that starts the bite is still resolved
 through `damage_owner`, but once the bite begins, release checks, left/right throw state, and
 mouth-matrix attachment must follow the retained wolf slot. Keese is the first proof surface.
+
+`retained_interaction_owner` answers the generic retained-object version of the same family:
+**"which player owns this ongoing attach/carry/hang interaction?"** Use it when the interaction is
+not the specialized Gibdo scream-stun or wolf-bite mouth hold. Ghost Rat uses it for body attachment,
+heavy-state counting, Midna rat-body routing, and joint attachment; Peahat uses it for hookshot
+carry/hang status, heavy-boots checks, and carry-offset writes.
 
 Gibdo currently preserves the vanilla single global scream owner (`m_cry_gi`) because that pointer
 also coordinates follow-up attacks between Gibdos. Dusk broadens the affected-player range for the
@@ -152,12 +165,13 @@ to the requesting player slot.
 | "Which active player is nearest or eligible by raw distance/angle facts?" | `dusk::coop::player_query` | Implemented |
 | "Who is this enemy fighting right now?" | `dusk::coop::enemy_targeting` | Implemented for scoped combat targeting |
 | "Who caused this hit?" | `dusk::coop::damage_owner` / narrow actor-local collision owner checks | Implemented for direct players and known owned items; Big Freezard added a bespoke direct-hit counter proof for enemies that bypass normal HP |
-| "What is the selected target's form/speed/guard/horse/swim/damage/status state?" | `dusk::coop::selected_target_state` | Initial implementation for target speed/facing/position/cut/horse facts; Chilfos added selected-target damage-wait and slot-local status bits such as `0x100` and iron-ball subject mode |
+| "What is the selected target's form/speed/guard/horse/swim/damage/status state?" | `dusk::coop::selected_target_state` | Initial implementation for target speed/facing/position/cut/horse facts; Chilfos added selected-target damage-wait and slot-local status bits such as `0x100` and iron-ball subject mode; Ghost Rat added owner-local wolf-sense visibility facts; Shadow Beast added owner-local wolf bark/threat facts |
 | "What position/angle should this enemy use for chase detours after it already selected a target?" | `dusk::coop::selected_target_state` | Bokoblin obstacle steering proof uses selected target facts instead of P1 globals |
 | "Is any active player near this enemy/teammate for group wake-up?" | `dusk::coop::player_query` | Bokoblin group battle participation uses nearest active-player facts |
+| "Which active player can trip this authored trigger or room switch?" | future `world_trigger` helpers plus `world.switch` diagnostics | Diagnostics implemented; Ghost Rat ceiling-drop gates exposed switches `227-229` in `D_MN10` room `10`; Ghost Rat now opens the native authored room switch when an active player satisfies the same local wake predicate |
 | "Who did this enemy attack touch, and was that player guarding/blocking?" | `dusk::coop::defender_owner` | Initial direct-player implementation for Bokoblin guard collision |
 | "Which player collided, rode, pushed, stood on, or picked this up?" | broader collision-owner helpers | Not implemented yet |
-| "Which player is caught, stunned, grabbed, carried, swallowed, or retained by this actor?" | `dusk::coop::caught_stun_owner` / `dusk::coop::wolf_catch_owner` / future caught-grab helpers | Gibdo scream stun uses `caught_stun_owner`; Keese wolf bite uses `wolf_catch_owner` |
+| "Which player is caught, stunned, grabbed, carried, swallowed, or retained by this actor?" | `dusk::coop::caught_stun_owner` / `dusk::coop::wolf_catch_owner` / `dusk::coop::retained_interaction_owner` / future caught-grab helpers | Gibdo scream stun uses `caught_stun_owner`; Keese and Skulltula wolf bites use `wolf_catch_owner`; Ghost Rat attach and Peahat hookshot carry use `retained_interaction_owner` |
 | "Which active player or owned item should this enemy notice immediately?" | `dusk::coop::item_awareness` / narrow active-player scans | Initial hookshot-awareness proof in White Wolfos; Keese boomerang wind uses `item_awareness` |
 | "Which player/camera owns this spawn intro, child facing, or presentation angle?" | future presentation/camera-owner helpers | White Wolfos uses a narrow helper; broader API deferred |
 | "Which target should this enemy-spawned weapon or child attack inherit?" | parent/master `enemy_targeting` scope plus local fallback | Chilfos thrown spear launch math inherits the parent Combat target when the parent is live |
@@ -191,7 +205,7 @@ to the requesting player slot.
   carried-object exceptions, and special death counters as damage/collision identity. Big Freezard's
   iron-ball counter is the proof case: direct active-player hits must match vanilla P1 behavior, while
   cannon-carry instant kill remains object-owned.
-- **Selected-target state:** form, speed, position, guard, swim, horse, damage-wait, camera/status
+- **Selected-target state:** form, speed, position, guard, swim, horse, damage-wait, wolf-sense, camera/status
   bits, or facing
   checks that modify behavior toward a known target. Route these through
   `dusk::coop::selected_target_state` once the target identity is known. Do not leave them
@@ -202,14 +216,19 @@ to the requesting player slot.
 - **Broader collision-owner:** contact-driven logic with no explicit search/chase surface, such as
   ride, push, stand-on, pickup, and object interaction. Keep it out of `enemy_targeting`; it needs
   its own ownership model.
-- **Caught/grab-owner / caught-stun-owner / wolf-catch-owner:** a retained interaction with one specific player. It
+- **Caught/grab-owner / caught-stun-owner / wolf-catch-owner / retained-interaction-owner:** a retained interaction with one specific player. It
   must not retarget to the nearest player while the grab/stun is active, and it must not borrow P1
   camera/body/controller state for P2. Gibdo scream stun now uses `caught_stun_owner`; Keese
-  wolf-bite hold now uses `wolf_catch_owner`; remaining swallow/carry/grab files need their own
-  retained-owner proof before conversion.
+  and Skulltula wolf-bite holds use `wolf_catch_owner`; Ghost Rat attach and Peahat hookshot carry
+  use `retained_interaction_owner`; remaining swallow/grab files need their own retained-owner proof
+  before conversion.
 - **Item awareness:** immediate item/tool reactions should ask `item_awareness` or a similarly
   scoped owner scan. Do not route boomerang, hookshot, bomb, or bait reaction checks through sticky
   combat targeting just because an enemy also has a combat target.
+- **World trigger/switch activation:** if an enemy is blocked before its action function by a room
+  switch, use `world.switch` diagnostics and enemy-local probes to identify whether the missing P2
+  path is an upstream producer or an enemy-local authored wake gate. Patch known producers at the
+  producer; for enemy-local gates, open the same native switch from the active-player predicate.
 - **Player attention:** ALINK lock-on, target actor, attention truth/release, and slot-local prompt
   candidates. Do not let P2 consume P1's `dAttention_c::Lockon()` as its own gameplay lock state.
 - **Player button status:** Do/A/R/Z, wolf X/Y, and 3D action availability consumed by ALINK

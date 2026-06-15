@@ -1431,6 +1431,7 @@ set(DUSK_FILES
         include/dusk/coop/interaction_owner.h
         include/dusk/coop/item_awareness.h
         include/dusk/coop/gibdo_state_probe.h
+        include/dusk/coop/ghost_rat_state_probe.h
         include/dusk/coop/input.h
         include/dusk/coop/midna_owner.h
         include/dusk/coop/player_attention.h
@@ -1439,6 +1440,7 @@ set(DUSK_FILES
         include/dusk/coop/player_item_selection.h
         include/dusk/coop/player_query.h
         include/dusk/coop/player_slots.h
+        include/dusk/coop/retained_interaction_owner.h
         include/dusk/coop/render_effects.h
         include/dusk/coop/render_materials.h
         include/dusk/coop/render_shadows.h
@@ -1446,6 +1448,7 @@ set(DUSK_FILES
         include/dusk/coop/selected_target_state.h
         include/dusk/coop/ui_owner.h
         include/dusk/coop/wolf_catch_owner.h
+        include/dusk/coop/world_switch_probe.h
         include/dusk/coop/young_gohma_state_probe.h
         include/dusk/diagnostics.h
         include/dusk/dvd_asset.hpp
@@ -1469,6 +1472,7 @@ set(DUSK_FILES
         src/dusk/coop/item_awareness.cpp
         src/dusk/coop/line_render_diagnostics.cpp
         src/dusk/coop/gibdo_state_probe.cpp
+        src/dusk/coop/ghost_rat_state_probe.cpp
         src/dusk/coop/message_owner.cpp
         src/dusk/coop/midna_owner.cpp
         src/dusk/coop/player_query.cpp
@@ -1476,6 +1480,7 @@ set(DUSK_FILES
         src/dusk/coop/player_button_status.cpp
         src/dusk/coop/player_camera_status.cpp
         src/dusk/coop/player_item_selection.cpp
+        src/dusk/coop/retained_interaction_owner.cpp
         src/dusk/coop/render_effects.cpp
         src/dusk/coop/render_materials.cpp
         src/dusk/coop/render_shadows.cpp
@@ -1483,6 +1488,7 @@ set(DUSK_FILES
         src/dusk/coop/selected_target_state.cpp
         src/dusk/coop/ui_owner.cpp
         src/dusk/coop/wolf_catch_owner.cpp
+        src/dusk/coop/world_switch_probe.cpp
         src/dusk/coop/young_gohma_state_probe.cpp
         src/dusk/coop/input.cpp
         src/dusk/coop/player_attention.cpp

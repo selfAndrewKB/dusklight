@@ -11,6 +11,14 @@
 #include "d/actor/d_a_player.h"
 #include "d/d_s_play.h"
 #include "f_op/f_op_camera_mng.h"
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/player_camera_status.h"
+#include "dusk/coop/player_query.h"
+#include "dusk/coop/retained_interaction_owner.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
 #include <cstring>
 
 #define PH_BMD 20
@@ -223,6 +231,12 @@ void daE_PH_c::SearchNearP() {
     }
 }
 
+#if TARGET_PC
+static bool coOpPeahatCarryStatus0(daE_PH_c* i_this, u32 flag, const char* label);
+static bool coOpPeahatCarryStatus1(daE_PH_c* i_this, u32 flag, const char* label);
+static void coOpPeahatSetCarryOffset(daE_PH_c* i_this, const char* label, const cXyz* offset);
+#endif
+
 void daE_PH_c::FlyAnm() {
     if (mAnmID == ANM_DAMAGE_ARROW || mAnmID == ANM_HANG_START || mAnmID == ANM_HANG_WAIT) {
         if (mpMorf->isStop()) {
@@ -237,7 +251,12 @@ void daE_PH_c::FlyAnm() {
     }
 
     if (mAnmID == ANM_HANG_START || mAnmID == ANM_WAIT) {
-        if (fopAcM_checkHookCarryNow(this) && dComIfGp_checkPlayerStatus1(0, 0x10000)) {
+#if TARGET_PC
+        const bool hookshotHangActive = coOpPeahatCarryStatus1(this, 0x10000, "e_ph.fly_hang");
+#else
+        const bool hookshotHangActive = dComIfGp_checkPlayerStatus1(0, 0x10000);
+#endif
+        if (fopAcM_checkHookCarryNow(this) && hookshotHangActive) {
             field_0x630 = -10.0f - BREG_F(0);
             field_0x5ae = 15;
             field_0x616 = 0x1000;
@@ -247,7 +266,12 @@ void daE_PH_c::FlyAnm() {
             SetAnm(ANM_WAIT, J3DFrameCtrl::EMode_LOOP, 5.0f, mAnmSpeed);
         }
     } else if (mAnmID == ANM_HANG_WAIT) {
-        if (!fopAcM_checkHookCarryNow(this) || !dComIfGp_checkPlayerStatus1(0, 0x10000)) {
+#if TARGET_PC
+        const bool hookshotHangActive = coOpPeahatCarryStatus1(this, 0x10000, "e_ph.fly_end");
+#else
+        const bool hookshotHangActive = dComIfGp_checkPlayerStatus1(0, 0x10000);
+#endif
+        if (!fopAcM_checkHookCarryNow(this) || !hookshotHangActive) {
             SetAnm(ANM_HANG_END, J3DFrameCtrl::EMode_NONE, 5.0f, mAnmSpeed);
         }
     } else if (mAnmID == ANM_HANG_END) {
@@ -260,6 +284,112 @@ void daE_PH_c::FlyAnm() {
 static u8 initialized;
 
 static daE_PH_HIO_c l_HIO;
+
+#if TARGET_PC
+static bool coOpPeahatSelectTargetState(
+    daE_PH_c* i_this, const char* label,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = dusk::coop::EnemyTargetMode::ImmediateAcquire;
+    context.label = label;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    return true;
+}
+
+static bool coOpPeahatTargetBlockedOrFar(daE_PH_c* i_this, const char* label, f32 maxDistance) {
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    f32 distance = 0.0f;
+    // Co-op: Peahat attention and hookshot eligibility are awareness questions, so use the
+    // nearest active player for range/LOS instead of hiding the target because P1 is elsewhere.
+    if (coOpPeahatSelectTargetState(i_this, label, &targetState, &distance)) {
+        return distance > maxDistance || other_bg_check(i_this, targetState.actor);
+    }
+
+    daPy_py_c* player_p = daPy_getPlayerActorClass();
+    return fopAcM_searchPlayerDistance(i_this) > maxDistance || other_bg_check(i_this, player_p);
+}
+
+static bool coOpPeahatAnyStatus0(u32 flag) {
+    bool found = false;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot slot, fopAc_ac_c*) {
+        if (dusk::coop::player_camera_status::checkStatus0(slot, flag) != 0) {
+            found = true;
+        }
+    });
+    return found;
+}
+
+static bool coOpPeahatAnyStatus1(u32 flag) {
+    bool found = false;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot slot, fopAc_ac_c*) {
+        if (dusk::coop::player_camera_status::checkStatus1(slot, flag) != 0) {
+            found = true;
+        }
+    });
+    return found;
+}
+
+static dusk::coop::retained_interaction_owner::RetainedInteractionState
+coOpPeahatCarryOwner(daE_PH_c* i_this, const char* label) {
+    return dusk::coop::retained_interaction_owner::updateRetainedInteraction(
+        label, i_this, dusk::coop::retained_interaction_owner::RetainedInteractionScope::Carry);
+}
+
+static daPy_py_c* coOpPeahatCarryPlayer(daE_PH_c* i_this, const char* label) {
+    // Co-op: hookshot carry/hang is retained by the player who hooked this Peahat, not P1.
+    dusk::coop::retained_interaction_owner::RetainedInteractionState owner =
+        coOpPeahatCarryOwner(i_this, label);
+    return owner.found ? owner.localPlayer : daPy_getPlayerActorClass();
+}
+
+static bool coOpPeahatCarryStatus0(daE_PH_c* i_this, u32 flag, const char* label) {
+    dusk::coop::retained_interaction_owner::RetainedInteractionState owner =
+        coOpPeahatCarryOwner(i_this, label);
+    if (!owner.found) {
+        // Co-op: before a hookshot hit establishes carry ownership, eligibility bits may belong
+        // to any active player currently aiming/firing the hookshot.
+        return coOpPeahatAnyStatus0(flag);
+    }
+    return dusk::coop::player_camera_status::checkStatus0(owner.slot, flag) != 0;
+}
+
+static bool coOpPeahatCarryStatus1(daE_PH_c* i_this, u32 flag, const char* label) {
+    // Co-op: hookshot/hang camera status bits belong to the retained carry slot, not P1.
+    dusk::coop::retained_interaction_owner::RetainedInteractionState owner =
+        coOpPeahatCarryOwner(i_this, label);
+    if (!owner.found) {
+        return coOpPeahatAnyStatus1(flag);
+    }
+    return dusk::coop::player_camera_status::checkStatus1(owner.slot, flag) != 0;
+}
+
+static void coOpPeahatSetCarryOffset(daE_PH_c* i_this, const char* label, const cXyz* offset) {
+    daPy_py_c* player = coOpPeahatCarryPlayer(i_this, label);
+    if (player != NULL) {
+        player->setHookshotCarryOffset(fopAcM_GetID(i_this), offset);
+    }
+}
+#endif
 
 void daE_PH_c::SetShapeAngle() {
     mHeadRotX += field_0x612 * mAnmSpeed;
@@ -348,7 +478,11 @@ void daE_PH_c::DownBoots() {
     mSound.startCreatureSoundLevel(Z2SE_EN_PH_PROPELLER, (f32)field_0x612 * mAnmSpeed, -1);
     speed.y = 0.0f;
 
+#if TARGET_PC
+    daPy_py_c* player_p = coOpPeahatCarryPlayer(this, "e_ph.down_boots");
+#else
     daPy_py_c* player_p = daPy_getPlayerActorClass();
+#endif
     speedF = 0.0f;
     current.pos.y += -10.0f;
 
@@ -362,7 +496,11 @@ void daE_PH_c::DownBoots() {
 }
 
 void daE_PH_c::UpBoots() {
+#if TARGET_PC
+    daPy_py_c* player_p = coOpPeahatCarryPlayer(this, "e_ph.up_boots");
+#else
     daPy_py_c* player_p = daPy_getPlayerActorClass();
+#endif
     mHeadRotX += 0x1000;
 
     mSound.startCreatureSoundLevel(Z2SE_EN_PH_PROPELLER, field_0x612 * mAnmSpeed, -1);
@@ -384,7 +522,11 @@ void daE_PH_c::UpBoots() {
 }
 
 void daE_PH_c::C_Action() {
+#if TARGET_PC
+    daPy_py_c* player_p = coOpPeahatCarryPlayer(this, "e_ph.c_action");
+#else
     daPy_py_c* player_p = daPy_getPlayerActorClass();
+#endif
 
     switch (mCAction) {
     case 0:
@@ -570,9 +712,17 @@ void daE_PH_c::FlyAnm2() {
     }
 
     if (mAnmID == ANM_WAIT) {
-        if (fopAcM_searchPlayerDistance(this) < 1000.0f &&
-            dComIfGp_checkPlayerStatus1(0, 0x10000))
-        {
+#if TARGET_PC
+        const bool hookshotHangActive = coOpPeahatCarryStatus1(this, 0x10000, "e_ph.hang_enter");
+        f32 hookshotDistance = 0.0f;
+        const bool playerNear =
+            coOpPeahatSelectTargetState(this, "e_ph.hang_enter_range", NULL, &hookshotDistance) &&
+            hookshotDistance < 1000.0f;
+#else
+        const bool hookshotHangActive = dComIfGp_checkPlayerStatus1(0, 0x10000);
+        const bool playerNear = fopAcM_searchPlayerDistance(this) < 1000.0f;
+#endif
+        if (playerNear && hookshotHangActive) {
             attention_info.flags = 0;
             field_0x630 = -10.0f - BREG_F(0);
             field_0x5ae = 15;
@@ -587,7 +737,12 @@ void daE_PH_c::FlyAnm2() {
     } else if (mAnmID == ANM_HANG_WAIT) {
         attention_info.flags = 0;
 
-        if (!fopAcM_checkHookCarryNow(this) || !dComIfGp_checkPlayerStatus1(0, 0x10000)) {
+#if TARGET_PC
+        const bool hookshotHangActive = coOpPeahatCarryStatus1(this, 0x10000, "e_ph.hang_exit");
+#else
+        const bool hookshotHangActive = dComIfGp_checkPlayerStatus1(0, 0x10000);
+#endif
+        if (!fopAcM_checkHookCarryNow(this) || !hookshotHangActive) {
             SetAnm(ANM_HANG_END, J3DFrameCtrl::EMode_NONE, 5.0f, mAnmSpeed);
         }
     } else if (mAnmID == ANM_HANG_END) {
@@ -613,7 +768,11 @@ void daE_PH_c::S_Action() {
 }
 
 void daE_PH_c::StopAction() {
+#if TARGET_PC
+    daPy_py_c* player_p = coOpPeahatCarryPlayer(this, "e_ph.stop_action");
+#else
     daPy_py_c* player_p = daPy_getPlayerActorClass();
+#endif
 
     switch (mCAction) {
     case 0:
@@ -655,7 +814,9 @@ void daE_PH_c::StopAction() {
 }
 
 void daE_PH_c::Action() {
+#if !TARGET_PC
     daPy_py_c* player_p = daPy_getPlayerActorClass();
+#endif
 
     switch (mAction) {
     case 1:
@@ -663,7 +824,11 @@ void daE_PH_c::Action() {
         fopAcM_posMoveF(this, mCcStts.GetCCMoveP());
         AttentionSet();
 
+#if TARGET_PC
+        if (coOpPeahatTargetBlockedOrFar(this, "e_ph.action_carry", 2000.0f)) {
+#else
         if (fopAcM_searchPlayerDistance(this) > 2000.0f || other_bg_check(this, player_p)) {
+#endif
             attention_info.flags = 0;
         }
         break;
@@ -671,7 +836,11 @@ void daE_PH_c::Action() {
         if (field_0x5b2) {
             StopAction();
 
+#if TARGET_PC
+            if (coOpPeahatTargetBlockedOrFar(this, "e_ph.action_stop", 3000.0f)) {
+#else
             if (fopAcM_searchPlayerDistance(this) > 3000.0f || other_bg_check(this, player_p)) {
+#endif
                 attention_info.flags = 0;
             }
 
@@ -705,7 +874,11 @@ void daE_PH_c::Action() {
         mCcSph.OnCoSetBit();
         break;
     default:
+#if TARGET_PC
+        if (coOpPeahatTargetBlockedOrFar(this, "e_ph.action_default", 2000.0f)) {
+#else
         if (fopAcM_searchPlayerDistance(this) > 2000.0f || other_bg_check(this, player_p)) {
+#endif
             attention_info.flags = 0;
         }
 
@@ -907,8 +1080,15 @@ void daE_PH_c::DemoAction() {
 void daE_PH_c::ToumeiAction() {
     cXyz hs_offset;
 
+#if TARGET_PC
+    // Co-op: transparent Peahat attention can be suppressed by any active hookshot/hang player
+    // state, while range/LOS still follows the nearest active player.
+    if (coOpPeahatTargetBlockedOrFar(this, "e_ph.toumei_attention", XREG_F(1) + 2300.0f) ||
+        coOpPeahatAnyStatus1(0x10000))
+#else
     if (fopAcM_searchPlayerDistance(this) > XREG_F(1) + 2300.0f ||
         dComIfGp_checkPlayerStatus1(0, 0x10000))
+#endif
     {
         attention_info.flags = 0;
     }
@@ -928,9 +1108,19 @@ void daE_PH_c::ToumeiAction() {
     field_0x5ae--;
     if (field_0x5ae <= 0) {
         field_0x5ae = 0;
+#if TARGET_PC
+        dusk::coop::retained_interaction_owner::clearRetainedInteraction(
+            "e_ph.toumei_timer", this,
+            dusk::coop::retained_interaction_owner::RetainedInteractionScope::Carry);
+#endif
     } else {
         hs_offset.set(0.0f, l_HIO.mHangPos - 80.0f, 0.0f);
+#if TARGET_PC
+        // Co-op: hookshot carry offset must be written to the player who hooked this Peahat.
+        coOpPeahatSetCarryOffset(this, "e_ph.toumei_offset", &hs_offset);
+#else
         daPy_getPlayerActorClass()->setHookshotCarryOffset(fopAcM_GetID(this), &hs_offset);
+#endif
     }
 
     mStopTimer--;
@@ -987,7 +1177,9 @@ int daE_PH_c::Execute() {
 }
 
 void daE_PH_c::AttentionSet() {
+#if !TARGET_PC
     daPy_py_c* player_p = daPy_getPlayerActorClass();
+#endif
     cXyz sp38;
 
     if (mAnmID != ANM_HANG_START && mAnmID != ANM_HANG_WAIT && mAnmID != ANM_HANG_END) {
@@ -998,6 +1190,24 @@ void daE_PH_c::AttentionSet() {
         }
 
         attention_info.flags = fopAc_AttnFlag_BATTLE_e;
+#if TARGET_PC
+    } else {
+        f32 distance = 0.0f;
+        const bool farFromActivePlayer =
+            !coOpPeahatSelectTargetState(this, "e_ph.attention_hang", NULL, &distance) ||
+            distance > 1000.0f;
+        if (farFromActivePlayer) {
+            if (strcmp(dComIfGp_getStartStageName(), "D_MN07A") == 0) {
+                attention_info.distances[fopAc_attn_BATTLE_e] = 0x52;
+            } else {
+                attention_info.distances[fopAc_attn_BATTLE_e] = 0x53;
+            }
+        } else {
+            attention_info.distances[fopAc_attn_BATTLE_e] = 0;
+            attention_info.flags = 0;
+        }
+    }
+#else
     } else if (current.pos.absXZ(fopAcM_GetPosition(player_p)) > 1000.0f) {
         if (strcmp(dComIfGp_getStartStageName(), "D_MN07A") == 0) {
             attention_info.distances[fopAc_attn_BATTLE_e] = 0x52;
@@ -1008,8 +1218,14 @@ void daE_PH_c::AttentionSet() {
         attention_info.distances[fopAc_attn_BATTLE_e] = 0;
         attention_info.flags = 0;
     }
+#endif
 
+#if TARGET_PC
+    daPy_py_c* carryPlayer = coOpPeahatCarryPlayer(this, "e_ph.attention_dragon_hang");
+    if (carryPlayer != NULL && carryPlayer->checkDragonHangRide()) {
+#else
     if (player_p->checkDragonHangRide()) {
+#endif
         attention_info.distances[fopAc_attn_BATTLE_e] = 0;
         attention_info.flags = 0;
     }
@@ -1023,14 +1239,23 @@ void daE_PH_c::ObjHit() {
 
     cXyz hs_offset(0.0f, y + KREG_F(8), 0.0f);
 
+#if TARGET_PC
+    if (coOpPeahatCarryStatus0(this, 0x4000, "e_ph.obj_status0")) {
+#else
     if (dComIfGp_checkPlayerStatus0(0, 0x4000)) {
+#endif
         mCcSph.OffTgShield();
     } else {
         mCcSph.OnTgShield();
     }
 
     if (field_0x5ae > 0) {
+#if TARGET_PC
+        // Co-op: Peahat hookshot carry offset belongs to the retained hookshot owner.
+        coOpPeahatSetCarryOffset(this, "e_ph.obj_offset", &hs_offset);
+#else
         daPy_getPlayerActorClass()->setHookshotCarryOffset(fopAcM_GetID(this), &hs_offset);
+#endif
         cLib_chaseAngleS(&shape_angle.x, 0, 0x100);
         cLib_chaseF(&field_0x630, BREG_F(0) + 0.0f, 1.0f);
         cLib_chaseF(&mAnmSpeed, yREG_F(10) + 2.0f, yREG_F(11) + 0.5f);
@@ -1050,6 +1275,19 @@ void daE_PH_c::ObjHit() {
             field_0x618 = 0x1000;
 
             if (hit_obj->ChkAtType(AT_TYPE_HOOKSHOT)) {
+#if TARGET_PC
+                // Co-op: hookshot carry/hang ownership starts from the player who fired the
+                // hookshot, then remains retained while Peahat sends carry offsets.
+                const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+                    dusk::coop::damage_owner::resolveDamageOwner(this, hit_obj);
+                dusk::coop::damage_owner::recordDamageOwnerHit("e_ph.hookshot", this, damageOwner,
+                                                               &mAtInfo, mAction);
+                dusk::coop::retained_interaction_owner::beginRetainedInteraction(
+                    "e_ph.carry", this,
+                    dusk::coop::retained_interaction_owner::RetainedInteractionScope::Carry,
+                    damageOwner.localPlayerActor,
+                    dusk::coop::retained_interaction_owner::RetainedInteractionReason::DirectPlayer);
+#endif
                 field_0x616 = 0x1000;
                 field_0x618 = 0x1000;
                 SetAnm(ANM_HANG_START, J3DFrameCtrl::EMode_NONE, 1.0f, 1.0f);
@@ -1094,6 +1332,11 @@ void daE_PH_c::EyeSet() {
 }
 
 int daE_PH_c::Delete() {
+#if TARGET_PC
+    // Co-op: clear target and retained hookshot carry state when the native Peahat actor is deleted.
+    dusk::coop::clearAllEnemyTargets(this);
+    dusk::coop::retained_interaction_owner::clearAllRetainedInteractions(this);
+#endif
     dComIfG_resDelete(&mPhase, "E_PH");
     if (mInitializedHIO) {
         initialized = 0;

@@ -15,6 +15,7 @@
 #include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/event_presentation.h"
 #include "dusk/coop/gibdo_state_probe.h"
+#include "dusk/coop/ghost_rat_state_probe.h"
 #include "dusk/coop/hud_diagnostics.h"
 #include "dusk/coop/horse_owner.h"
 #include "dusk/coop/input.h"
@@ -27,6 +28,7 @@
 #include "dusk/coop/player_slots.h"
 #include "dusk/coop/selected_target_state.h"
 #include "dusk/coop/wolf_catch_owner.h"
+#include "dusk/coop/world_switch_probe.h"
 #include "dusk/coop/young_gohma_state_probe.h"
 #include "dusk/dusk.h"
 #include "dusk/game_clock.h"
@@ -591,6 +593,10 @@ json selectedTargetStateDecisionEventKey(const json& decision) {
         {"damage_waiting", decision.value("damage_waiting", false)},
         {"cut_active", decision.value("cut_active", false)},
         {"cut_type", decision.value("cut_type", -1)},
+        {"wolf", decision.value("wolf", false)},
+        {"wolf_sense_active", decision.value("wolf_sense_active", false)},
+        {"wolf_bark", decision.value("wolf_bark", false)},
+        {"wolf_threat", decision.value("wolf_threat", false)},
         {"horse_ride", decision.value("horse_ride", false)},
         {"status0_0x100", decision.value("status0_0x100", false)},
         {"status0_0x4000", decision.value("status0_0x4000", false)},
@@ -931,6 +937,62 @@ void emitYoungGohmaStateProbeEvents(const Provider& provider, const json& data) 
         };
         emitProviderEvent(provider, probe.value("loop_suspect", false) ? "loop_suspect" : "state",
                           eventData);
+    }
+}
+
+void emitGhostRatStateProbeEvents(const Provider& provider, const json& data) {
+    if (!data.contains("probes") || !data["probes"].is_array()) {
+        return;
+    }
+
+    for (const json& probe : data["probes"]) {
+        const u64 eventId = probe.value("event_id", 0ull);
+        if (eventId == 0) {
+            continue;
+        }
+
+        const json eventKey = {
+            {"event_id", eventId},
+        };
+        const std::string stateKey = fmt::format(
+            FMT_STRING("ghost_rat.state:{}"), static_cast<unsigned long long>(eventId));
+        if (provider.emitOnChange && !shouldEmitProviderEvent(stateKey, eventKey)) {
+            continue;
+        }
+
+        const json eventData = {
+            {"schema_version", data.value("schema_version", 1)},
+            {"probe", probe},
+        };
+        emitProviderEvent(provider, "state", eventData);
+    }
+}
+
+void emitWorldSwitchEvents(const Provider& provider, const json& data) {
+    if (!data.contains("records") || !data["records"].is_array()) {
+        return;
+    }
+
+    for (const json& record : data["records"]) {
+        const u64 eventId = record.value("event_id", 0ull);
+        if (eventId == 0) {
+            continue;
+        }
+
+        const json eventKey = {
+            {"event_id", eventId},
+        };
+        const std::string stateKey = fmt::format(
+            FMT_STRING("world.switch:{}"), static_cast<unsigned long long>(eventId));
+        if (provider.emitOnChange && !shouldEmitProviderEvent(stateKey, eventKey)) {
+            continue;
+        }
+
+        const json eventData = {
+            {"schema_version", data.value("schema_version", 1)},
+            {"record", record},
+        };
+        emitProviderEvent(provider, "switch_on", eventData);
     }
 }
 
@@ -2095,6 +2157,11 @@ json selectedTargetStateSummary(
         {"cut_type", state.cutType},
         {"cut_count", state.cutCount},
         {"cut_active", state.cutActive},
+        {"wolf", state.wolf},
+        {"wolf_eye_up", state.wolfEyeUp},
+        {"wolf_sense_active", state.wolfSenseActive},
+        {"wolf_bark", state.wolfBark},
+        {"wolf_threat", state.wolfThreat},
         {"horse_ride", state.horseRide},
         {"status0_0x100", state.status0_0x100},
         {"status0_0x4000", state.status0_0x4000},
@@ -2590,6 +2657,87 @@ json youngGohmaStateProbeSummary(
     };
 }
 
+json ghostRatStateProbeSummary(
+    const coop::ghost_rat_state_probe::GhostRatStateProbe& probe) {
+    return {
+        {"event_id", static_cast<unsigned long long>(probe.eventId)},
+        {"sim_frame", static_cast<unsigned int>(probe.simFrame)},
+        {"actor", ptrString(probe.actor)},
+        {"actor_id", probe.actorId},
+        {"label", probe.label != nullptr ? probe.label : ""},
+        {"action", probe.action},
+        {"sub_action", probe.subAction},
+        {"bck", probe.bck},
+        {"anim_frame", probe.animFrame},
+        {"wake_slot", probe.wakeSlot != coop::PlayerSlot::Invalid
+                          ? static_cast<int>(probe.wakeSlot)
+                          : -1},
+        {"wake_found", probe.wakeFound},
+        {"wake_distance", probe.wakeDistance},
+        {"wake_distance_xz", probe.wakeDistanceXZ},
+        {"wake_angle_y", static_cast<int>(probe.wakeAngleY)},
+        {"angle_diff", static_cast<int>(probe.angleDiff)},
+        {"check_range", probe.checkRange},
+        {"range_gate", probe.rangeGate},
+        {"cone_gate", probe.coneGate},
+        {"body_slot_available", probe.bodySlotAvailable},
+        {"attack_frame_gate", probe.attackFrameGate},
+        {"attack_started", probe.attackStarted},
+        {"switch_no", probe.switchNo},
+        {"switch_gate_active", probe.switchGateActive},
+        {"switch_on", probe.switchOn},
+        {"reached_action", probe.reachedAction},
+    };
+}
+
+json collectGhostRatStateProbe() {
+    const coop::ghost_rat_state_probe::GhostRatStateProbeDebugState& state =
+        coop::ghost_rat_state_probe::getGhostRatStateProbeDebugState();
+    json probes = json::array();
+    for (int i = 0; i < state.probeCount; i++) {
+        if (state.probes[i].eventId == 0) {
+            continue;
+        }
+        probes.push_back(ghostRatStateProbeSummary(state.probes[i]));
+    }
+
+    return {
+        {"schema_version", 1},
+        {"probes", probes},
+    };
+}
+
+json worldSwitchRecordSummary(const coop::world_switch_probe::WorldSwitchRecord& record) {
+    return {
+        {"event_id", static_cast<unsigned long long>(record.eventId)},
+        {"sim_frame", static_cast<unsigned int>(record.simFrame)},
+        {"source_actor", ptrString(record.sourceActor)},
+        {"source_actor_id", record.sourceActorId},
+        {"source_profile", record.sourceProfile},
+        {"source_room", record.sourceRoom},
+        {"switch_no", record.switchNo},
+        {"room_no", record.roomNo},
+        {"was_on_before", record.wasOnBefore},
+        {"actor_source", record.actorSource},
+        {"source", record.source != nullptr ? record.source : ""},
+    };
+}
+
+json collectWorldSwitchProbe() {
+    const coop::world_switch_probe::WorldSwitchDebugState& state =
+        coop::world_switch_probe::getWorldSwitchDebugState();
+    json records = json::array();
+    for (int i = 0; i < state.recordCount; i++) {
+        records.push_back(worldSwitchRecordSummary(state.records[i]));
+    }
+
+    return {
+        {"schema_version", 1},
+        {"current_sim_frame", static_cast<unsigned int>(state.currentSimFrame)},
+        {"records", records},
+    };
+}
+
 json collectYoungGohmaStateProbe() {
     const coop::young_gohma_state_probe::YoungGohmaStateProbeDebugState& state =
         coop::young_gohma_state_probe::getYoungGohmaStateProbeDebugState();
@@ -2885,6 +3033,8 @@ Provider s_providers[] = {
     {"bokoblin.attack", 1, "cheap", 1, true, 240, 8192, collectBokoblinAttackProbe},
     {"bokoblin.steering", 1, "cheap", 1, true, 240, 8192, collectBokoblinSteeringProbe},
     {"gibdo.state", 1, "cheap", 1, true, 240, 8192, collectGibdoStateProbe},
+    {"ghost_rat.state", 1, "cheap", 1, true, 240, 8192, collectGhostRatStateProbe},
+    {"world.switch", 1, "cheap", 1, true, 600, 8192, collectWorldSwitchProbe},
     {"young_gohma.state", 1, "cheap", 1, true, 240, 8192, collectYoungGohmaStateProbe},
     {"coop.probes", 2, "cheap", 30, true, 20, 4096, collectCoopProbes},
     {"alink.secondary", 4, "cheap", 1, true, 120, 8192, collectAlinkSecondary},
@@ -3075,6 +3225,14 @@ void tick(u32 frame) {
         }
         if (std::string(provider.name) == "gibdo.state") {
             emitGibdoStateProbeEvents(provider, data);
+            continue;
+        }
+        if (std::string(provider.name) == "ghost_rat.state") {
+            emitGhostRatStateProbeEvents(provider, data);
+            continue;
+        }
+        if (std::string(provider.name) == "world.switch") {
+            emitWorldSwitchEvents(provider, data);
             continue;
         }
         if (std::string(provider.name) == "young_gohma.state") {

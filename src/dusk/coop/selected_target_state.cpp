@@ -1,7 +1,9 @@
 #include "dusk/coop/selected_target_state.h"
 
+#include "d/actor/d_a_alink.h"
 #include "d/actor/d_a_player.h"
 #include "dusk/coop/player_camera_status.h"
+#include "f_pc/f_pc_name.h"
 #include "f_op/f_op_actor_mng.h"
 
 #include <cstdio>
@@ -92,6 +94,16 @@ SelectedTargetState stateForSlot(PlayerSlot slot, fopAc_ac_c* actor) {
     state.cutType = static_cast<int>(player->getCutType());
     state.cutCount = static_cast<int>(player->getCutCount());
     state.cutActive = player->getCutType() != daPy_py_c::CUT_TYPE_NONE;
+    state.wolf = player->checkWolf() != 0;
+    if (fopAcM_GetProfName(actor) == fpcNm_ALINK_e) {
+        daAlink_c* alink = static_cast<daAlink_c*>(actor);
+        state.wolfEyeUp = alink->checkWolfEyeUp();
+    }
+    state.wolfBark = player->checkWolfBark() != 0;
+    state.wolfThreat = player->checkWolfThreat() != 0;
+    // Co-op: wolf-sense visibility is owner-local player state. Ghost-like actors should ask the
+    // active slot that owns sense state instead of P1's global checkNowWolfPowerUp() helper.
+    state.wolfSenseActive = state.wolf && state.wolfEyeUp != 0;
     state.horseRide = player->checkHorseRide();
     state.damageWaiting = state.damageWaitTimer != 0;
     // Co-op: these are slot-local camera/status gates that several enemies use after they

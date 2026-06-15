@@ -34,9 +34,11 @@
 #include "dusk/coop/defender_owner.h"
 #include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/gibdo_state_probe.h"
+#include "dusk/coop/ghost_rat_state_probe.h"
 #include "dusk/coop/item_awareness.h"
 #include "dusk/coop/midna_owner.h"
 #include "dusk/coop/wolf_catch_owner.h"
+#include "dusk/coop/world_switch_probe.h"
 #include "dusk/coop/young_gohma_state_probe.h"
 #include <dusk/gamepad_color.h>
 #include <dusk/autosave.h>
@@ -860,6 +862,10 @@ void fapGm_Execute() {
     dusk::coop::bokoblin_attack_probe::advanceBokoblinAttackProbeFrame(sExecCount);
     // Co-op: Gibdo diagnostics track native wake/chase/scream gates by simulation frame.
     dusk::coop::gibdo_state_probe::advanceGibdoStateProbeFrame(sExecCount);
+    // Co-op: Ghost Rat diagnostics track native wake/drop gates by simulation frame.
+    dusk::coop::ghost_rat_state_probe::advanceGhostRatStateProbeFrame(sExecCount);
+    // Co-op: world switch probes identify authored trigger gates before enemy AI runs.
+    dusk::coop::world_switch_probe::advanceWorldSwitchProbeFrame(sExecCount);
     // Co-op: Young Gohma diagnostics track native range/cone/LOS gates by simulation frame.
     dusk::coop::young_gohma_state_probe::advanceYoungGohmaStateProbeFrame(sExecCount);
 #endif

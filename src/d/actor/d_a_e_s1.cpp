@@ -16,6 +16,13 @@
 #include "f_op/f_op_camera_mng.h"
 #include "dusk/frame_interpolation.h"
 #include "dusk/settings.h"
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#include "dusk/coop/wolf_catch_owner.h"
+#include "dusk/coop/world_switch_probe.h"
+#endif
 #include <cstring>
 
 class daE_S1_HIO_c {
@@ -36,6 +43,16 @@ public:
     /* 0x28 */ s16 mReactionTime;
     /* 0x2A */ u8 mInvincible;
 };
+
+#if TARGET_PC
+// Co-op: Skulltula's native helpers live above the local target wrappers, so forward-declare the
+// wrappers used to route wake/drop/chase checks through the selected active player.
+static dusk::coop::EnemyTargetMode coOpS1TargetMode(e_s1_class* i_this);
+static bool coOpSelectS1TargetState(
+    e_s1_class* i_this, const char* label, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance, s16* angle_y);
+static s16 coOpS1TargetAngleY(e_s1_class* i_this, const char* label);
+#endif
 
 #define ANM_ATTACK 5
 #define ANM_ATTACK_02 6
@@ -181,6 +198,30 @@ static int daE_S1_Draw(e_s1_class* i_this) {
 }
 
 static BOOL pl_check(e_s1_class* i_this, f32 i_check_range) {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    s16 angle_y = 0;
+    // Co-op: Skulltula wake/continuation checks use the selected active player while preserving
+    // vanilla's home-distance, cone, and background-line gates.
+    if (coOpSelectS1TargetState(i_this, "e_s1.pl_check", coOpS1TargetMode(i_this), &targetState,
+                                NULL, &angle_y))
+    {
+        f32 x_dist = targetState.pos.x - i_this->home.pos.x;
+        f32 z_dist = targetState.pos.z - i_this->home.pos.z;
+
+        if (JMAFastSqrt(x_dist * x_dist + z_dist * z_dist) < i_check_range) {
+            s16 angle_dist = i_this->shape_angle.y - angle_y;
+            if (angle_dist < 0x7000 && angle_dist > -0x7000 &&
+                !fopAcM_otherBgCheck(i_this, targetState.actor))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+#endif
+
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
     f32 x_dist = player->current.pos.x - i_this->home.pos.x;
     f32 z_dist = player->current.pos.z - i_this->home.pos.z;
@@ -198,6 +239,16 @@ static BOOL pl_check(e_s1_class* i_this, f32 i_check_range) {
 }
 
 static BOOL pl_at_check(e_s1_class* i_this, f32 i_check_range) {
+#if TARGET_PC
+    f32 distance = 0.0f;
+    // Co-op: close attack gates should test distance to the retained combat target, not P1.
+    if (coOpSelectS1TargetState(i_this, "e_s1.pl_at_check", coOpS1TargetMode(i_this), NULL,
+                                &distance, NULL))
+    {
+        return distance < i_check_range;
+    }
+#endif
+
     return fopAcM_searchPlayerDistance(i_this) < i_check_range;
 }
 
@@ -205,6 +256,164 @@ static u8 l_no_fail;  // when enabled, enemy will never revive after defeated
 static u8 hio_set;
 
 static daE_S1_HIO_c l_HIO;
+
+#if TARGET_PC
+static dusk::coop::EnemyTargetMode coOpS1TargetMode(e_s1_class* i_this) {
+    switch (i_this->mAction) {
+    case ACT_WAIT:
+    case ACT_ROOF:
+    case ACT_PATH:
+        return dusk::coop::EnemyTargetMode::ImmediateAcquire;
+    default:
+        return dusk::coop::EnemyTargetMode::StickyCombat;
+    }
+}
+
+static bool coOpSelectS1TargetState(
+    e_s1_class* i_this, const char* label, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance, s16* angle_y) {
+    fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
+
+    dusk::coop::EnemyTargetContext context;
+    context.observer = a_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = i_this->mAction == ACT_FIGHT;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        a_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    return true;
+}
+
+static s16 coOpS1TargetAngleY(e_s1_class* i_this, const char* label) {
+    s16 angle_y = fopAcM_searchPlayerAngleY(i_this);
+    // Co-op: fight-facing should follow the retained Skulltula combat target, not P1.
+    coOpSelectS1TargetState(i_this, label, coOpS1TargetMode(i_this), NULL, NULL, &angle_y);
+    return angle_y;
+}
+
+static void coOpS1RecordPassiveAwareness(e_s1_class* i_this) {
+    switch (i_this->mAction) {
+    case ACT_WAIT:
+    case ACT_ROOF:
+    case ACT_PATH:
+        // Co-op: passive Skulltula states can sit behind timers, path waits, or switch/drop gates
+        // before the vanilla code reaches pl_check(). Publish the same active-player awareness
+        // decision used by those gates so the overlay and diagnostics show whether P2 is eligible.
+        coOpSelectS1TargetState(i_this, "e_s1.passive_awareness",
+                                dusk::coop::EnemyTargetMode::ImmediateAcquire, NULL, NULL, NULL);
+        break;
+    default:
+        break;
+    }
+}
+
+static bool coOpS1RoofDropReady(e_s1_class* i_this, const char* label) {
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: roof drops are vanilla XZ proximity gates. Keep the vertical ceiling offset out of
+    // the test so P2 satisfies the same ground-range condition P1 used through
+    // fopAcM_searchPlayerDistanceXZ().
+    if (!coOpSelectS1TargetState(i_this, label, dusk::coop::EnemyTargetMode::ImmediateAcquire,
+                                 &targetState, NULL, NULL))
+    {
+        return false;
+    }
+
+    return i_this->current.pos.absXZ(targetState.pos) < i_this->mPrm1 * 100.0f;
+}
+
+static bool coOpTryS1RoofSwitchWake(e_s1_class* i_this, int switchNo, int roomNo) {
+    fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
+    // Co-op: switch-gated roof Skulltulas wait for an authored wake switch before their normal
+    // drop state runs. If an active player satisfies the same roof proximity fact, raise that
+    // native switch instead of bypassing the state machine.
+    if (!coOpS1RoofDropReady(i_this, "e_s1.switch_wake")) {
+        return false;
+    }
+
+    const bool wasOnBefore = dComIfGs_isSwitch(switchNo, roomNo) != 0;
+    dusk::coop::world_switch_probe::recordSwitchOn(a_this, switchNo, roomNo, wasOnBefore,
+                                                   "e_s1.switch_wake");
+    dusk::coop::world_switch_probe::suppressNextDirectSwitchOn(switchNo, roomNo);
+    dComIfGs_onSwitch(switchNo, roomNo);
+    return true;
+}
+
+static bool coOpS1WolfThreatReactionReady(
+    e_s1_class* i_this, dusk::coop::selected_target_state::SelectedTargetState* outState,
+    s16* outAngleY) {
+    fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
+    dusk::coop::selected_target_state::SelectedTargetState bestState;
+    s16 bestAngleY = 0;
+    f32 bestDistance = 0.0f;
+
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot slot, fopAc_ac_c* actor) {
+        dusk::coop::selected_target_state::SelectedTargetState state =
+            dusk::coop::selected_target_state::stateForSlot(slot, actor);
+        if (!state.available || (!state.wolfBark && !state.wolfThreat)) {
+            return;
+        }
+
+        const f32 distance = fopAcM_searchActorDistance(a_this, actor);
+        if (distance >= l_HIO.mReactionDist) {
+            return;
+        }
+
+        const s16 angleY = fopAcM_searchActorAngleY(a_this, actor);
+        const s16 angleToEnemy = actor->shape_angle.y - (angleY + 0x8000);
+        // 182.04 is close to the degree -> short constant, but not quite,
+        // maybe someone calculated it on their own and rounded it off?
+        const s16 bibiriAngle = 182.04f * l_HIO.mReactionAngle;
+        if (angleToEnemy >= bibiriAngle || angleToEnemy <= (s16)-bibiriAngle) {
+            return;
+        }
+
+        if (!bestState.available || distance < bestDistance) {
+            bestState = state;
+            bestAngleY = angleY;
+            bestDistance = distance;
+        }
+    });
+
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        a_this, "e_s1.wolf_threat", bestState,
+        bestState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::FilteredNearest
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::NoMatch);
+
+    if (!bestState.available) {
+        return false;
+    }
+
+    if (outState != NULL) {
+        *outState = bestState;
+    }
+    if (outAngleY != NULL) {
+        *outAngleY = bestAngleY;
+    }
+    return true;
+}
+#endif
 
 static BOOL path_check(e_s1_class* i_this) {
     static u8 check_index[255];
@@ -330,7 +539,9 @@ static void* s_last_sub(void* i_actor, void* i_data) {
 
 static void damage_check(e_s1_class* i_this) {
     fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
+#if !TARGET_PC
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
 
     if (i_this->mHitInvincibilityTimer == 0) {
         i_this->mCcStts.Move();
@@ -345,14 +556,41 @@ static void damage_check(e_s1_class* i_this) {
             if (i_this->mCcSph[i].ChkTgHit()) {
                 i_this->mHitInvincibilityTimer = 6;
                 i_this->mAtInfo.mpCollider = i_this->mCcSph[i].GetTgHitObj();
+#if TARGET_PC
+                // Co-op: wolf-bite hang ownership starts from the player who actually hit this
+                // Skulltula, then remains retained for the hang lifetime.
+                const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+                    dusk::coop::damage_owner::resolveDamageOwner(a_this, i_this->mAtInfo.mpCollider);
+                dusk::coop::damage_owner::recordDamageOwnerHit("e_s1.damage", a_this, damageOwner,
+                                                               &i_this->mAtInfo, i_this->mAction);
+                daPy_py_c* ownerPlayer = damageOwner.localPlayer;
+                const bool ownerWolf = ownerPlayer != NULL && ownerPlayer->checkWolf();
+#endif
 
-                if (player->getCutType() != daPy_py_c::CUT_TYPE_WOLF_B_LEFT && player->getCutType() != daPy_py_c::CUT_TYPE_WOLF_B_RIGHT &&
+                if (
+#if TARGET_PC
+                    ownerPlayer != NULL &&
+                    damageOwner.cutType != daPy_py_c::CUT_TYPE_WOLF_B_LEFT &&
+                    damageOwner.cutType != daPy_py_c::CUT_TYPE_WOLF_B_RIGHT &&
+#else
+                    player->getCutType() != daPy_py_c::CUT_TYPE_WOLF_B_LEFT && player->getCutType() != daPy_py_c::CUT_TYPE_WOLF_B_RIGHT &&
+#endif
                     i_this->mAtInfo.mpCollider->ChkAtType(AT_TYPE_WOLF_ATTACK))
                 {
-                    if (!player->onWolfEnemyHangBite(a_this)) {
+                    if (
+#if TARGET_PC
+                        !ownerPlayer->onWolfEnemyHangBite(a_this)
+#else
+                        !player->onWolfEnemyHangBite(a_this)
+#endif
+                    ) {
                         return;
                     }
 
+#if TARGET_PC
+                    dusk::coop::wolf_catch_owner::beginWolfCatchFromDamageOwner(
+                        "e_s1.wolfbite", a_this, damageOwner);
+#endif
                     OS_REPORT("S1 PL BITE HANG \n");
                     i_this->mAction = ACT_WOLFBITE;
                     i_this->mMode = 0;
@@ -381,7 +619,13 @@ static void damage_check(e_s1_class* i_this) {
                         i_this->field_0x6ac = TREG_F(1) + 65.0f;
                     }
                 } else {
-                    if (i_this->mAtInfo.mAttackPower >= 60 && daPy_py_c::checkNowWolf()) {
+                    if (i_this->mAtInfo.mAttackPower >= 60 &&
+#if TARGET_PC
+                        ownerWolf
+#else
+                        daPy_py_c::checkNowWolf()
+#endif
+                    ) {
                         i_this->mAtInfo.field_0x18 = 36;
                     } else {
                         i_this->mAtInfo.field_0x18 = 0;
@@ -400,7 +644,13 @@ static void damage_check(e_s1_class* i_this) {
 
                     if (i_this->mAtInfo.mAttackPower < 20) {
                         i_this->field_0x6ac = TREG_F(0) + 20.0f;
-                    } else if (i_this->mAtInfo.mAttackPower >= 60 && daPy_py_c::checkNowWolf()) {
+                    } else if (i_this->mAtInfo.mAttackPower >= 60 &&
+#if TARGET_PC
+                               ownerWolf
+#else
+                               daPy_py_c::checkNowWolf()
+#endif
+                    ) {
                         i_this->field_0x6ac = 0.0f;
                         a_this->health = 0;
 
@@ -413,7 +663,13 @@ static void damage_check(e_s1_class* i_this) {
                         MtxPosition(&offset, &pos);
 
                         cXyz size(l_HIO.mBaseSize, l_HIO.mBaseSize, l_HIO.mBaseSize);
-                        csXyz angle(player->shape_angle);
+                        csXyz angle(
+#if TARGET_PC
+                            ownerPlayer->shape_angle
+#else
+                            player->shape_angle
+#endif
+                        );
                         angle.y -= 0x8000;
 
                         dComIfGp_particle_set(0x8248, &pos, &angle, &size);
@@ -424,7 +680,13 @@ static void damage_check(e_s1_class* i_this) {
                     }
 
                     if (!l_no_fail) {
-                        if (i_this->mAtInfo.mAttackPower >= 60 && daPy_py_c::checkNowWolf()) {
+                        if (i_this->mAtInfo.mAttackPower >= 60 &&
+#if TARGET_PC
+                            ownerWolf
+#else
+                            daPy_py_c::checkNowWolf()
+#endif
+                        ) {
                             i_this->mAction = ACT_FAIL_WAIT;
                             i_this->mHitInvincibilityTimer = 10;
                             i_this->mSound.startCreatureVoice(Z2SE_EN_NS_V_DEATH, -1);
@@ -464,7 +726,14 @@ static void damage_check(e_s1_class* i_this) {
 
                 i_this->mMode = 0;
                 a_this->speedF = 0.0f;
+#if TARGET_PC
+                // Co-op: damage reaction facing follows the player that caused the hit, not P1.
+                i_this->field_0x6b0 = ownerPlayer != NULL ?
+                                           fopAcM_searchActorAngleY(a_this, ownerPlayer) :
+                                           fopAcM_searchPlayerAngleY(a_this);
+#else
                 i_this->field_0x6b0 = fopAcM_searchPlayerAngleY(a_this);
+#endif
                 i_this->mDrawShadow = true;
                 break;
             }
@@ -566,16 +835,32 @@ static void e_s1_roof(e_s1_class* i_this) {
         anm_init(i_this, ANM_STICK, 1.0f, J3DFrameCtrl::EMode_LOOP, 1.0f);
         i_this->mMode = 1;
         /* fallthrough */
-    case 1:
+    case 1: {
         roof_wait = true;
         if (i_this->mSwBit != 0xFF) {
-            if (dComIfGs_isSwitch(i_this->mSwBit, dComIfGp_roomControl_getStayNo())) {
+            int room_no = dComIfGp_roomControl_getStayNo();
+            if (dComIfGs_isSwitch(i_this->mSwBit, room_no)) {
+#if TARGET_PC
+                i_this->mMode = 2;
+            } else if (coOpTryS1RoofSwitchWake(i_this, i_this->mSwBit, room_no)) {
+#endif
                 i_this->mMode = 2;
             }
+#if TARGET_PC
+        } else {
+            // Co-op: ceiling-drop Skulltulas wake from any active player under the roof spawn,
+            // while retaining the native XZ drop distance.
+            if (coOpS1RoofDropReady(i_this, "e_s1.roof_drop")) {
+                i_this->mMode = 2;
+            }
+        }
+#else
         } else if (fopAcM_searchPlayerDistanceXZ(a_this) < i_this->mPrm1 * 100.0f) {
             i_this->mMode = 2;
         }
+#endif
         break;
+    }
     case 2:
         i_this->mSound.startCreatureSound(Z2SE_EN_NS_FALLTREE, 0, -1);
         i_this->mMode = 3;
@@ -620,7 +905,13 @@ static void e_s1_fight_run(e_s1_class* i_this) {
         i_this->mMode = 1;
         /* fallthrough */
     case 1:
-        cLib_addCalcAngleS2(&a_this->current.angle.y, fopAcM_searchPlayerAngleY(a_this), 4, 0x1000);
+#if TARGET_PC
+        cLib_addCalcAngleS2(&a_this->current.angle.y,
+                            coOpS1TargetAngleY(i_this, "e_s1.fight_run_angle"), 4, 0x1000);
+#else
+        cLib_addCalcAngleS2(&a_this->current.angle.y, fopAcM_searchPlayerAngleY(a_this), 4,
+                            0x1000);
+#endif
         cLib_addCalc2(&a_this->speedF, l_HIO.mDashSpeed, 1.0f, l_HIO.mDashSpeed * 0.333f);
         break;
     }
@@ -692,7 +983,12 @@ static void e_s1_fight(e_s1_class* i_this) {
         break;
     }
 
+#if TARGET_PC
+    cLib_addCalcAngleS2(&a_this->current.angle.y,
+                        coOpS1TargetAngleY(i_this, "e_s1.fight_angle"), 4, 0x800);
+#else
     cLib_addCalcAngleS2(&a_this->current.angle.y, fopAcM_searchPlayerAngleY(a_this), 4, 0x800);
+#endif
     cLib_addCalc2(&a_this->speedF, target_speed, 1.0f, 10.0f);
 }
 
@@ -708,7 +1004,12 @@ static void e_s1_bibiri(e_s1_class* i_this) {
         /* fallthrough */
     case 1:
         if (pl_at_check(i_this, 10.0f + l_HIO.mReactionDist)) {
+#if TARGET_PC
+            // Co-op: bibiri/fear hold is selected-player wolf state, not P1's global wolf action.
+            if (coOpS1WolfThreatReactionReady(i_this, NULL, NULL)) {
+#else
             if (daPy_getPlayerActorClass()->checkWolfThreat()) {
+#endif
                 i_this->mTimers[0] = l_HIO.mReactionTime + cM_rndF(10.0f);
             }
         }
@@ -727,7 +1028,12 @@ static void e_s1_bibiri(e_s1_class* i_this) {
     }
 
     cLib_addCalc0(&a_this->speedF, 1.0f, 3.0f);
+#if TARGET_PC
+    cLib_addCalcAngleS2(&a_this->current.angle.y,
+                        coOpS1TargetAngleY(i_this, "e_s1.bibiri_angle"), 4, 0x1000);
+#else
     cLib_addCalcAngleS2(&a_this->current.angle.y, fopAcM_searchPlayerAngleY(a_this), 4, 0x1000);
+#endif
 }
 
 static void e_s1_damage(e_s1_class* i_this) {
@@ -1334,7 +1640,16 @@ static void ke_move(e_s1_class* i_this, mDoExt_3DlineMat0_c* i_line, s1_ke_s* i_
 
 static void e_s1_wolfbite(e_s1_class* i_this) {
     fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
+#if TARGET_PC
+    // Co-op: once a Skulltula is in wolf-bite hang, all release/damage checks follow the
+    // retained wolf owner instead of falling back to P1.
+    dusk::coop::wolf_catch_owner::WolfCatchOwnerState catchOwner =
+        dusk::coop::wolf_catch_owner::updateWolfCatch("e_s1.wolfbite", a_this);
+    daPy_py_c* player =
+        catchOwner.found ? catchOwner.localPlayer : (daPy_py_c*)dComIfGp_getPlayer(0);
+#else
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
     fopEn_enemy_c* e_this = (fopEn_enemy_c*)a_this;
     i_this->mHitInvincibilityTimer = 10;
 
@@ -1368,6 +1683,9 @@ static void e_s1_wolfbite(e_s1_class* i_this) {
 
             if (i_this->health <= 0) {
                 player->offWolfEnemyHangBite();
+#if TARGET_PC
+                dusk::coop::wolf_catch_owner::clearWolfCatch("e_s1.wolfbite_dead", a_this);
+#endif
                 if (i_this->mGroupID == 0xFF) {
                     i_this->mAction = ACT_FAIL;
                 } else {
@@ -1384,6 +1702,9 @@ static void e_s1_wolfbite(e_s1_class* i_this) {
             i_this->field_0x6bb++;
             if (i_this->field_0x6bb >= 5) {
                 player->offWolfEnemyHangBite();
+#if TARGET_PC
+                dusk::coop::wolf_catch_owner::clearWolfCatch("e_s1.wolfbite_brush2", a_this);
+#endif
                 anm_init(i_this, ANM_HANG_BRUSH2, 1.0f, 0, 1.0f);
                 i_this->mSound.startCreatureVoice(Z2SE_EN_NS_V_HANGEDBRUSH2, -1);
                 i_this->mMode = 3;
@@ -1395,6 +1716,9 @@ static void e_s1_wolfbite(e_s1_class* i_this) {
         if (!player->checkWolfEnemyBiteAllOwn(a_this)) {
             anm_init(i_this, ANM_HANG_BRUSH, 3.0f, 0, 1.0f);
             i_this->mSound.startCreatureVoice(Z2SE_EN_NS_V_HANGEDBRUSH, -1);
+#if TARGET_PC
+            dusk::coop::wolf_catch_owner::clearWolfCatch("e_s1.wolfbite_release", a_this);
+#endif
             i_this->mMode = 3;
         }
         break;
@@ -1423,6 +1747,10 @@ static void action(e_s1_class* i_this) {
     s8 on_search_sound = false;
 
     i_this->offHeadLockFlg();
+
+#if TARGET_PC
+    coOpS1RecordPassiveAwareness(i_this);
+#endif
 
     switch (i_this->mAction) {
     case ACT_WAIT:
@@ -1517,8 +1845,18 @@ static void action(e_s1_class* i_this) {
         i_this->mAction = ACT_SHOUT;
         i_this->mMode = 0;
 
+#if TARGET_PC
+        // Co-op: group shout interrupts the wolf actually hanging from this Skulltula, not P1.
+        dusk::coop::wolf_catch_owner::WolfCatchOwnerState catchOwner =
+            dusk::coop::wolf_catch_owner::getWolfCatch(a_this);
+        daPy_py_c* player =
+            catchOwner.found ? catchOwner.localPlayer : (daPy_py_c*)dComIfGp_getPlayer(0);
+        player->offWolfEnemyHangBite();
+        dusk::coop::wolf_catch_owner::clearWolfCatch("e_s1.shout_interrupt", a_this);
+#else
         daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
         player->offWolfEnemyHangBite();
+#endif
     }
 
     if (on_attention) {
@@ -1529,7 +1867,22 @@ static void action(e_s1_class* i_this) {
         i_this->attention_info.flags = 0;
     }
 
-    if (can_bibiri && (daPy_getPlayerActorClass()->checkWolfBark() || daPy_getPlayerActorClass()->checkWolfThreat()) && pl_at_check(i_this, l_HIO.mReactionDist)) {     
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState threatState;
+    s16 threatAngleY = 0;
+    // Co-op: Shadow Beast fear should react to any active wolf player barking/threatening within
+    // the same native reaction range and facing cone, not only P1's global wolf state.
+    if (can_bibiri && coOpS1WolfThreatReactionReady(i_this, &threatState, &threatAngleY)) {
+        (void)threatState;
+        i_this->mAction = ACT_BIBIRI;
+        i_this->mMode = 0;
+
+        i_this->field_0x6ac = 40.0f + JREG_F(11);
+        i_this->field_0x6b0 = threatAngleY;
+        i_this->mSound.startCreatureVoice(Z2SE_EN_NS_V_HIRUMU, -1);
+    }
+#else
+    if (can_bibiri && (daPy_getPlayerActorClass()->checkWolfBark() || daPy_getPlayerActorClass()->checkWolfThreat()) && pl_at_check(i_this, l_HIO.mReactionDist)) {
         fopAc_ac_c* player = dComIfGp_getPlayer(0);
         s16 angle_to_player = player->shape_angle.y - (fopAcM_searchPlayerAngleY(a_this) + 0x8000);
         // 182.04 is close to the degree -> short constant, but not quite,
@@ -1545,6 +1898,7 @@ static void action(e_s1_class* i_this) {
             i_this->mSound.startCreatureVoice(Z2SE_EN_NS_V_HIRUMU, -1);
         }
     }
+#endif
 
     cLib_addCalcAngleS2(&a_this->shape_angle.y, a_this->current.angle.y, 4, 0x2000);
     cLib_addCalcAngleS2(&a_this->shape_angle.x, a_this->current.angle.x, 4, 0x1000);
@@ -2078,6 +2432,11 @@ static int daE_S1_IsDelete(e_s1_class* i_this) {
 
 static int daE_S1_Delete(e_s1_class* i_this) {
     fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
+#if TARGET_PC
+    // Co-op: clear target and wolf-bite sidecar state when the native Skulltula actor is deleted.
+    dusk::coop::clearAllEnemyTargets(a_this);
+    dusk::coop::wolf_catch_owner::clearWolfCatch("e_s1.delete", a_this);
+#endif
     dComIfG_resDelete(&i_this->mPhase, "E_S2");
 
     if (i_this->mInitHIO) {

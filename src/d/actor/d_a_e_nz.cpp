@@ -11,6 +11,18 @@
 #include "Z2AudioLib/Z2Instances.h"
 #include "f_op/f_op_actor_enemy.h"
 
+#if TARGET_PC
+#include "d/actor/d_a_alink.h"
+#include "d/actor/d_a_midna.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/ghost_rat_state_probe.h"
+#include "dusk/coop/midna_owner.h"
+#include "dusk/coop/player_query.h"
+#include "dusk/coop/retained_interaction_owner.h"
+#include "dusk/coop/selected_target_state.h"
+#include "dusk/coop/world_switch_probe.h"
+#endif
+
 class daE_NZ_HIO_c : public JORReflexible {
 public:
     daE_NZ_HIO_c();
@@ -135,6 +147,210 @@ static daE_NZ_HIO_c l_HIO;
 
 static u8 data_8072C454[4];
 
+#if TARGET_PC
+static dusk::coop::selected_target_state::SelectedTargetState s_CoOpTargetState;
+static dusk::coop::ghost_rat_state_probe::GhostRatStateProbe s_CoOpWakeProbe;
+
+// Co-op: Ghost Rat's native states consume cached player distance/angle fields; fill them from
+// the Combat owner once per tick so attack and stick setup agree on the same selected player.
+static bool coOpSelectGhostRatTarget(e_nz_class* i_this, const char* label,
+                                     dusk::coop::EnemyTargetMode mode, bool committed) {
+    fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->enemy;
+
+    dusk::coop::EnemyTargetContext context;
+    context.observer = a_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    s_CoOpTargetState = dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        a_this, label, s_CoOpTargetState,
+        s_CoOpTargetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+
+    if (!s_CoOpTargetState.available) {
+        return false;
+    }
+
+    i_this->mPlayerDistance = target.distance;
+    i_this->mPlayerAngleY = target.angleY;
+    return true;
+}
+
+// Co-op: Ghost Rat's ceiling wake/drop gate is a vanilla awareness cache, not a retained combat
+// target. Select the nearest active player in XZ so P2 underneath a ceiling rat can fill the same
+// cached distance/angle fields that vanilla fills from P1, then let pl_check() keep the original
+// full-distance and cone thresholds.
+static bool coOpSelectGhostRatWakeTarget(e_nz_class* i_this, const char* label, f32 range) {
+    fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->enemy;
+    s_CoOpWakeProbe = {};
+    s_CoOpWakeProbe.actor = reinterpret_cast<uintptr_t>(a_this);
+    s_CoOpWakeProbe.actorId = fopAcM_GetID(a_this);
+    s_CoOpWakeProbe.action = i_this->mAction;
+    s_CoOpWakeProbe.subAction = i_this->mSubAction;
+    s_CoOpWakeProbe.bck = i_this->field_0x5e4;
+    s_CoOpWakeProbe.animFrame = i_this->mpMorf != NULL ? i_this->mpMorf->getFrame() : 0.0f;
+    s_CoOpWakeProbe.checkRange = range;
+    s_CoOpWakeProbe.label = label;
+
+    dusk::coop::PlayerSlot bestSlot = dusk::coop::PlayerSlot::Invalid;
+    fopAc_ac_c* bestActor = NULL;
+    f32 bestDistance = 0.0f;
+    f32 bestDistanceXZ = 0.0f;
+    s16 bestAngleY = 0;
+    bool found = false;
+
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot slot, fopAc_ac_c* actor) {
+        const f32 distanceXZ = fopAcM_searchActorDistanceXZ(a_this, actor);
+        if (distanceXZ >= range) {
+            return;
+        }
+
+        if (!found || distanceXZ < bestDistanceXZ) {
+            found = true;
+            bestSlot = slot;
+            bestActor = actor;
+            bestDistance = fopAcM_searchActorDistance(a_this, actor);
+            bestDistanceXZ = distanceXZ;
+            bestAngleY = fopAcM_searchActorAngleY(a_this, actor);
+        }
+    });
+
+    if (!found) {
+        s_CoOpTargetState = dusk::coop::selected_target_state::SelectedTargetState{};
+        dusk::coop::selected_target_state::recordSelectedTargetState(
+            a_this, label, s_CoOpTargetState,
+            dusk::coop::selected_target_state::SelectedTargetStateReason::NoMatch);
+        return false;
+    }
+
+    const s16 angleDiff = a_this->shape_angle.y - bestAngleY;
+    s_CoOpWakeProbe.wakeSlot = bestSlot;
+    s_CoOpWakeProbe.wakeFound = true;
+    s_CoOpWakeProbe.wakeDistance = bestDistance;
+    s_CoOpWakeProbe.wakeDistanceXZ = bestDistanceXZ;
+    s_CoOpWakeProbe.wakeAngleY = bestAngleY;
+    s_CoOpWakeProbe.angleDiff = angleDiff;
+    s_CoOpWakeProbe.rangeGate = bestDistance < range;
+    s_CoOpWakeProbe.coneGate = angleDiff < 0x5000 && angleDiff > -0x5000;
+
+    s_CoOpTargetState = dusk::coop::selected_target_state::stateForSlot(bestSlot, bestActor);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        a_this, label, s_CoOpTargetState,
+        dusk::coop::selected_target_state::SelectedTargetStateReason::FilteredNearest);
+    i_this->mPlayerDistance = bestDistance;
+    i_this->mPlayerAngleY = bestAngleY;
+    (void)bestDistanceXZ;
+    return true;
+}
+
+static bool coOpGhostRatHasFreeBodySlot() {
+    if (data_8072C454[0] == 0xff) {
+        return false;
+    }
+
+    for (int i = 0; i < 8; i++) {
+        if ((data_8072C454[0] & stick_bit[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void coOpRecordGhostRatWakeProbe(e_nz_class* i_this, bool bodySlotAvailable,
+                                        bool attackFrameGate, bool attackStarted) {
+    fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->enemy;
+    s_CoOpWakeProbe.actor = reinterpret_cast<uintptr_t>(a_this);
+    s_CoOpWakeProbe.actorId = fopAcM_GetID(a_this);
+    s_CoOpWakeProbe.action = i_this->mAction;
+    s_CoOpWakeProbe.subAction = i_this->mSubAction;
+    s_CoOpWakeProbe.bck = i_this->field_0x5e4;
+    s_CoOpWakeProbe.animFrame = i_this->mpMorf != NULL ? i_this->mpMorf->getFrame() : 0.0f;
+    s_CoOpWakeProbe.bodySlotAvailable = bodySlotAvailable;
+    s_CoOpWakeProbe.attackFrameGate = attackFrameGate;
+    s_CoOpWakeProbe.attackStarted = attackStarted;
+    s_CoOpWakeProbe.reachedAction = true;
+    // Co-op: diagnostics only. This records why the native Ghost Rat wake/drop branch did or did
+    // not transition after the active-player cache was filled.
+    dusk::coop::ghost_rat_state_probe::recordGhostRatStateProbe(s_CoOpWakeProbe);
+}
+
+static void coOpRecordGhostRatSwitchProbe(e_nz_class* i_this, bool switchOn) {
+    fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->enemy;
+    dusk::coop::ghost_rat_state_probe::GhostRatStateProbe probe;
+    probe.actor = reinterpret_cast<uintptr_t>(a_this);
+    probe.actorId = fopAcM_GetID(a_this);
+    probe.action = i_this->mAction;
+    probe.subAction = i_this->mSubAction;
+    probe.bck = i_this->field_0x5e4;
+    probe.animFrame = i_this->mpMorf != NULL ? i_this->mpMorf->getFrame() : 0.0f;
+    probe.switchNo = i_this->field_0x5b8;
+    probe.switchGateActive = i_this->field_0x5b8 != 0;
+    probe.switchOn = switchOn;
+    probe.label = "e_nz.switch_gate";
+    // Co-op: diagnostics only. Some placed Ghost Rats are gated before the wake branch, so record
+    // the native switch status separately from the player-distance wake probe.
+    dusk::coop::ghost_rat_state_probe::recordGhostRatStateProbe(probe);
+}
+
+static bool coOpTryGhostRatSwitchGateWake(e_nz_class* i_this, int switchNo, int roomNo) {
+    fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->enemy;
+
+    // Co-op: some ceiling Ghost Rats are blocked before action() by an authored room switch. If
+    // that gate is still closed, let the same active-player wake predicate open the same switch
+    // instead of bypassing the gate; this preserves the native group switch/state
+    // machine flow while allowing P2 to be the player who satisfies the authored wake facts.
+    const bool selectedTarget = coOpSelectGhostRatWakeTarget(i_this, "e_nz.switch_wake", 700.0f);
+    const bool canWake =
+        selectedTarget && data_8072C454[0] != 0xff && pl_check(i_this, 700.0f);
+
+    dusk::coop::ghost_rat_state_probe::GhostRatStateProbe probe = s_CoOpWakeProbe;
+    probe.switchNo = switchNo;
+    probe.switchGateActive = true;
+    probe.switchOn = canWake;
+    probe.reachedAction = false;
+    probe.bodySlotAvailable = coOpGhostRatHasFreeBodySlot();
+    probe.label = "e_nz.switch_wake";
+    dusk::coop::ghost_rat_state_probe::recordGhostRatStateProbe(probe);
+
+    if (!canWake) {
+        return false;
+    }
+
+    const bool wasOnBefore = dComIfGs_isSwitch(switchNo, roomNo) != 0;
+    dusk::coop::world_switch_probe::recordSwitchOn(a_this, switchNo, roomNo, wasOnBefore,
+                                                   "e_nz.switch_wake");
+    dusk::coop::world_switch_probe::suppressNextDirectSwitchOn(switchNo, roomNo);
+    dComIfGs_onSwitch(switchNo, roomNo);
+    return true;
+}
+
+static void coOpReleaseGhostRatAttach(e_nz_class* i_this, const char* label) {
+    fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->enemy;
+    // Co-op: native stick bits only track occupied body slots; clear the retained player owner
+    // alongside the vanilla bit so detached rats stop affecting that slot.
+    dusk::coop::retained_interaction_owner::clearRetainedInteraction(
+        label, a_this, dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach);
+}
+
+// Co-op: Ghost Rat visibility is a world/sense question, so any active wolf-sense player should
+// reveal it instead of requiring P1's wolf-sense state.
+static bool coOpAnyPlayerWolfSenseActive(e_nz_class* i_this) {
+    fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->enemy;
+    const dusk::coop::selected_target_state::SelectedTargetState senseState =
+        dusk::coop::selected_target_state::findNearestPlayerState(
+            a_this, "e_nz.wolf_sense",
+            [](const dusk::coop::selected_target_state::SelectedTargetState& state) {
+                return state.wolfSenseActive;
+            });
+    return senseState.available;
+}
+#endif
+
 static void e_nz_normal(e_nz_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->enemy;
     f32 dVar9 = 0.0f;
@@ -197,7 +413,16 @@ static void e_nz_normal(e_nz_class* i_this) {
         break;
     }
 
-    if (data_8072C454[0] != 0xff && pl_check(i_this, 700.0f)) {
+    const bool canWake = data_8072C454[0] != 0xff && pl_check(i_this, 700.0f);
+#if TARGET_PC
+    const bool bodySlotAvailable = coOpGhostRatHasFreeBodySlot();
+    const bool attackFrameGate =
+        i_this->mPlayerDistance < 400.0f &&
+        (i_this->field_0x5e4 == 8 ||
+         ((i_this->field_0x5e4 == 9 && i_this->mpMorf->checkFrame(10.0f))));
+    bool attackStarted = false;
+#endif
+    if (canWake) {
         i_this->field_0x5d4 = i_this->mPlayerAngleY;
         if (i_this->mPlayerDistance < 400.0f &&
             (i_this->field_0x5e4 == 8 ||
@@ -207,13 +432,28 @@ static void e_nz_normal(e_nz_class* i_this) {
                 if ((data_8072C454[0] & stick_bit[i]) == 0) {
                     data_8072C454[0] |= stick_bit[i];
                     i_this->field_0x6ac = i + 1;
+#if TARGET_PC
+                    // Co-op: once a Ghost Rat reserves a body slot, retain that player through
+                    // the attack/stick lifetime instead of recomputing nearest player later.
+                    dusk::coop::retained_interaction_owner::beginRetainedInteraction(
+                        "e_nz.stick", a_this,
+                        dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach,
+                        s_CoOpTargetState.actor,
+                        dusk::coop::retained_interaction_owner::RetainedInteractionReason::EnemyTarget);
+#endif
                     break;
                 }
             }
             i_this->mAction = ACTION_ATTACK;
             i_this->mSubAction = 0;
+#if TARGET_PC
+            attackStarted = true;
+#endif
         }
     }
+#if TARGET_PC
+    coOpRecordGhostRatWakeProbe(i_this, bodySlotAvailable, attackFrameGate, attackStarted);
+#endif
     cLib_addCalcAngleS2(&a_this->current.angle.y, i_this->field_0x5d4, 2, 0x2000);
     cLib_addCalc2(&a_this->speedF, dVar9, 1.0f, l_HIO.mSpeed * 0.25f);
 }
@@ -275,6 +515,9 @@ static s8 e_nz_attack(e_nz_class* i_this) {
             i_this->mSubAction = 2;
             anm_init(i_this, 8, 3.0f, 2, 1.0f);
             a_this->current.angle.x = 0;
+#if TARGET_PC
+            coOpReleaseGhostRatAttach(i_this, "e_nz.attack_miss");
+#endif
             data_8072C454[0] &= ~stick_bit[i_this->field_0x6ac - 1];
             i_this->field_0x6ac = 0;
         }
@@ -285,7 +528,10 @@ static s8 e_nz_attack(e_nz_class* i_this) {
 }
 
 static void e_nz_stick(e_nz_class* i_this) {
+#if !TARGET_PC
     s8 cVar4 = 0;
+#endif
+    fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->enemy;
 
     switch(i_this->mSubAction) {
     case 0:
@@ -297,6 +543,23 @@ static void e_nz_stick(e_nz_class* i_this) {
         if (i_this->mpMorf->checkFrame(2.0f)) {
             i_this->mSound.startCreatureSound(Z2SE_EN_NZ_BITE, 0, -1);
         }
+#if TARGET_PC
+        {
+            // Co-op: heavy-state is caused by rats retained on a specific player's body, not by
+            // the global P1 rat counter.
+            dusk::coop::retained_interaction_owner::RetainedInteractionState owner =
+                dusk::coop::retained_interaction_owner::updateRetainedInteraction(
+                    "e_nz.stick", a_this,
+                    dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach);
+            if (owner.found &&
+                dusk::coop::retained_interaction_owner::countRetainedInteractions(
+                    owner.slot,
+                    dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach) >= 3)
+            {
+                owner.localPlayer->onHeavyState();
+            }
+        }
+#else
         for (int i = 0; i < 8; i++) {
             if ((data_8072C454[0] & stick_bit[i]) != 0) {
                 cVar4++;
@@ -305,6 +568,7 @@ static void e_nz_stick(e_nz_class* i_this) {
         if (cVar4 >= 3) {
             daPy_getLinkPlayerActorClass()->onHeavyState();
         }
+#endif
         break;
     }
 }
@@ -362,6 +626,9 @@ static void e_nz_damage(e_nz_class* i_this) {
                 i_this->mSubAction = 0;
                 i_this->mMaterialAlpha = 0.0f;
                 if (i_this->field_0x6ac != 0) {
+#if TARGET_PC
+                    coOpReleaseGhostRatAttach(i_this, "e_nz.damage_reset");
+#endif
                     data_8072C454[0] &= ~stick_bit[i_this->field_0x6ac - 1];
                     i_this->field_0x6ac = 0;
                 }
@@ -405,8 +672,26 @@ static s8 action(e_nz_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->enemy;
     cXyz local_74;
     cXyz local_80;
+#if TARGET_PC
+    bool selectedTarget = false;
+    if (i_this->mAction == ACTION_NORMAL) {
+        selectedTarget = coOpSelectGhostRatWakeTarget(i_this, "e_nz.wake", 700.0f);
+    } else {
+        // Co-op: keep Ghost Rat's native player-distance/angle cache, but source it from the
+        // selected Combat target so P2 can be attacked and attached consistently after wake-up.
+        const bool committed = i_this->mAction == ACTION_ATTACK || i_this->mAction == ACTION_STICK;
+        selectedTarget = coOpSelectGhostRatTarget(i_this, "e_nz.action",
+                                                  dusk::coop::EnemyTargetMode::StickyCombat,
+                                                  committed);
+    }
+    if (!selectedTarget) {
+        i_this->mPlayerDistance = fopAcM_searchPlayerDistance(a_this);
+        i_this->mPlayerAngleY = fopAcM_searchPlayerAngleY(a_this);
+    }
+#else
     i_this->mPlayerDistance = fopAcM_searchPlayerDistance(a_this);
     i_this->mPlayerAngleY = fopAcM_searchPlayerAngleY(a_this);
+#endif
     damage_check(i_this);
     s8 action_result = 0;
     s8 is_active = 0;
@@ -424,9 +709,27 @@ static s8 action(e_nz_class* i_this) {
         break;
 
     case ACTION_STICK:
+#if TARGET_PC
+        {
+            // Co-op: Midna's rat-body panic belongs to the player the rat is retained on.
+            dusk::coop::retained_interaction_owner::RetainedInteractionState owner =
+                dusk::coop::retained_interaction_owner::updateRetainedInteraction(
+                    "e_nz.stick", a_this,
+                    dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach);
+            if (owner.found) {
+                if (daMidna_c* midna =
+                        dusk::coop::midna_owner::getMidnaForPlayer(
+                            static_cast<daAlink_c*>(owner.localPlayerActor)))
+                {
+                    midna->onRatBody(0);
+                }
+            }
+        }
+#else
         if (daPy_py_c::getMidnaActor()) {
             daPy_py_c::getMidnaActor()->onRatBody(0);
         }
+#endif
         e_nz_stick(i_this);
         action_result = 3;
         is_active = 1;
@@ -524,7 +827,11 @@ static int daE_NZ_Execute(e_nz_class* i_this) {
     
     f32 alphaTarget = 0.0f;
     f32 alphaStep = l_HIO.mVanishingAlphaSpeed;
+#if TARGET_PC
+    if (coOpAnyPlayerWolfSenseActive(i_this)) {
+#else
     if (daPy_py_c::checkNowWolfPowerUp()) {
+#endif
         if (i_this->field_0x6a2[3] == 0) {
             alphaTarget = 255.0f;
             alphaStep = l_HIO.mCurrentAlphaSpeed;
@@ -544,7 +851,19 @@ static int daE_NZ_Execute(e_nz_class* i_this) {
     cXyz local_70;
     
     if (i_this->field_0x5b8 != 0) {
-        if (dComIfGs_isSwitch(i_this->field_0x5b8, fopAcM_GetRoomNo(a_this))) {
+        const int switchNo = i_this->field_0x5b8;
+        const int roomNo = fopAcM_GetRoomNo(a_this);
+        bool switchOn = dComIfGs_isSwitch(switchNo, roomNo);
+#if TARGET_PC
+        if (!switchOn) {
+            switchOn = coOpTryGhostRatSwitchGateWake(i_this, switchNo, roomNo);
+        } else {
+            coOpRecordGhostRatSwitchProbe(i_this, switchOn);
+        }
+#else
+        (void)switchNo;
+#endif
+        if (switchOn) {
             i_this->field_0x5b8 = 0;
         } else {
             return 1;
@@ -566,7 +885,17 @@ static int daE_NZ_Execute(e_nz_class* i_this) {
     J3DModel* model = i_this->mpMorf->getModel();
     
     if (i_this->mAction == ACTION_STICK || i_this->mAction == ACTION_ATTACK) {
+#if TARGET_PC
+        // Co-op: attached rats follow the retained player's body joint, not P1's joint matrix.
+        dusk::coop::retained_interaction_owner::RetainedInteractionState owner =
+            dusk::coop::retained_interaction_owner::updateRetainedInteraction(
+                "e_nz.attach_matrix", a_this,
+                dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach);
+        daPy_py_c* player =
+            owner.found ? owner.localPlayer : daPy_getLinkPlayerActorClass();
+#else
         daPy_py_c* player = daPy_getLinkPlayerActorClass();
+#endif
         MtxP joint_mtx = player->getModelJointMtx(stick_d[i_this->field_0x6ac - 1].field_0x0);
         MTXCopy(joint_mtx, *calc_mtx);
         cMtx_YrotM(*calc_mtx, stick_d[i_this->field_0x6ac - 1].field_0x2);
@@ -655,9 +984,17 @@ static int daE_NZ_Delete(e_nz_class* i_this) {
     }
 
     if (i_this->field_0x6ac != 0) {
+#if TARGET_PC
+        coOpReleaseGhostRatAttach(i_this, "e_nz.delete");
+#endif
         data_8072C454[0] &= ~stick_bit[i_this->field_0x6ac - 1];
         i_this->field_0x6ac = 0;
     }
+#if TARGET_PC
+    // Co-op: delete can run after non-attached states too, so clear any remaining retained owner.
+    dusk::coop::retained_interaction_owner::clearAllRetainedInteractions(a_this);
+    dusk::coop::ghost_rat_state_probe::clearGhostRatStateProbe(a_this);
+#endif
     return 1;
 }
 
