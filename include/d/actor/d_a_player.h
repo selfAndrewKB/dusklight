@@ -67,7 +67,10 @@ public:
 class daPy_boomerangMove_c {
 public:
     void initOffset(const cXyz* i_pos);
-    void initOffset(const cXyz* i_pos, const dCcD_GObjInf*) { initOffset(i_pos); }
+    void initOffset(const cXyz* i_pos, const dCcD_GObjInf*);
+#if TARGET_PC
+    void initOffsetForOwner(const cXyz* i_pos, fopAc_ac_c* i_owner);
+#endif
     int posMove(cXyz* o_pos, s16* o_rotY, fopAc_ac_c* i_objActor, s16 i_rotStep);
     void bgCheckAfterOffset(const cXyz* i_pos);
 

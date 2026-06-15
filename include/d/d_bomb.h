@@ -69,6 +69,23 @@ public:
                                               NULL, NULL);
     }
 
+#if TARGET_PC
+    static fopAc_ac_c* createEnemyBombBoomerangForOwner(cXyz* i_pos, csXyz* i_angle, int i_roomNo,
+                                                       fopAc_ac_c* i_owner) {
+        // Co-op: enemy bombs produced by a player-owned item need the owner before NBOMB create()
+        // runs, because create() immediately chooses owner-local carry/boomerang behavior.
+        const fpc_ProcID ownerId = i_owner != NULL ? fopAcM_GetID(i_owner) : fpcM_ERROR_PROCESS_ID_e;
+        fopAcM_prm_class* append =
+            createAppend(0xFFFF, PRM_ENEMY_BOMB_BOOMERANG, i_pos, i_roomNo, i_angle, NULL, -1,
+                         ownerId);
+        if (append == NULL) {
+            return NULL;
+        }
+
+        return (fopAc_ac_c*)fpcM_FastCreate(fpcNm_NBOMB_e, NULL, NULL, append);
+    }
+#endif
+
     static fopAc_ac_c* createWaterBombExplode(cXyz* i_pos) {
         return (fopAc_ac_c*)fopAcM_fastCreate(fpcNm_NBOMB_e, 18, i_pos, -1, NULL, NULL, -1, NULL,
                                               NULL);
@@ -93,6 +110,23 @@ public:
         return (fopAc_ac_c*)fopAcM_fastCreate(fpcNm_NBOMB_e, 13, i_pos, i_roomNo, i_angle, NULL, -1,
                                               NULL, NULL);
     }
+
+#if TARGET_PC
+    static fopAc_ac_c* createEnemyBombHookshotForOwner(cXyz* i_pos, csXyz* i_angle, int i_roomNo,
+                                                      fopAc_ac_c* i_owner) {
+        // Co-op: pass the player/item owner through parentActorID so NBOMB can bind owner-local
+        // hookshot carry before vanilla create-time setup asks for the Link actor.
+        const fpc_ProcID ownerId = i_owner != NULL ? fopAcM_GetID(i_owner) : fpcM_ERROR_PROCESS_ID_e;
+        fopAcM_prm_class* append =
+            createAppend(0xFFFF, PRM_ENEMY_BOMB_HOOKSHOT, i_pos, i_roomNo, i_angle, NULL, -1,
+                         ownerId);
+        if (append == NULL) {
+            return NULL;
+        }
+
+        return (fopAc_ac_c*)fpcM_FastCreate(fpcNm_NBOMB_e, NULL, NULL, append);
+    }
+#endif
 
     static fopAc_ac_c* createEnemyBomb(cXyz* i_pos, csXyz* i_angle, int i_roomNo) {
         return (fopAc_ac_c*)fopAcM_fastCreate(fpcNm_NBOMB_e, 0xB, i_pos, i_roomNo, i_angle, NULL, -1,

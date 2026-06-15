@@ -212,7 +212,19 @@ static void damage_check(e_bi_class* i_this) {
             cc_at_check(actor, &i_this->at_info);
 
             if (i_this->at_info.mpCollider->ChkAtType(AT_TYPE_HOOKSHOT)) {
+#if TARGET_PC
+                // Co-op: the enemy bomb created from a hookshot hit belongs to the player whose
+                // hookshot caused the hit, so NBOMB can bind carry/lifetime state to that slot.
+                dusk::coop::damage_owner::DamageOwnerResult owner =
+                    dusk::coop::damage_owner::resolveDamageOwner(actor, i_this->at_info.mpCollider);
+                dusk::coop::damage_owner::recordDamageOwnerHit("e_bi.bomb_hookshot", actor, owner,
+                                                               &i_this->at_info);
+                player = dBomb_c::createEnemyBombHookshotForOwner(
+                    &actor->eyePos, &actor->current.angle, fopAcM_GetRoomNo(actor),
+                    owner.localPlayerActor);
+#else
                 player = dBomb_c::createEnemyBombHookshot(&actor->eyePos, &actor->current.angle, fopAcM_GetRoomNo(actor));
+#endif
                 if (player != NULL) {
                     child_actor = fopAcM_SearchByID(i_this->child_no);
                     if (child_actor != NULL) {
@@ -222,7 +234,19 @@ static void damage_check(e_bi_class* i_this) {
                     i_this->leaf_id = 1;
                 }
             }else if (i_this->at_info.mpCollider->ChkAtType(AT_TYPE_BOOMERANG)) {
+#if TARGET_PC
+                // Co-op: boomerang-created enemy bombs inherit the boomerang owner's slot instead
+                // of falling back to P1 during NBOMB's create-time owner setup.
+                dusk::coop::damage_owner::DamageOwnerResult owner =
+                    dusk::coop::damage_owner::resolveDamageOwner(actor, i_this->at_info.mpCollider);
+                dusk::coop::damage_owner::recordDamageOwnerHit("e_bi.bomb_boomerang", actor, owner,
+                                                               &i_this->at_info);
+                player = dBomb_c::createEnemyBombBoomerangForOwner(
+                    &actor->eyePos, &actor->current.angle, fopAcM_GetRoomNo(actor),
+                    owner.localPlayerActor);
+#else
                 player = dBomb_c::createEnemyBombBoomerang(&actor->eyePos, &actor->current.angle, fopAcM_GetRoomNo(actor));
+#endif
                 if (player != NULL) {
                     child_actor = fopAcM_SearchByID(i_this->child_no);
                     if (child_actor != NULL) {

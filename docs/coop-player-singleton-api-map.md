@@ -99,6 +99,19 @@ patching old switch/fallthrough/goto-heavy enemy code, hide nontrivial selected-
 file-scope helpers and keep switch cases to primitive assignments so C++ lifetime rules do not fight
 the decompiled control flow.
 
+Bomb Bug added the item-hit-spawned object version: when a player-owned hookshot or boomerang hit
+creates an enemy bomb, the spawned NBOMB needs the damage owner before its `create()` method runs,
+because create-time logic immediately chooses owner-local hookshot carry, boomerang movement,
+lifetime, and later damage-owner behavior. Use owner-aware creation or parent/owner plumbing at the
+spawn boundary; setting ownership after create may be too late for native setup.
+
+Boomerang-carried object movement is a retained item-owner path. The vanilla shared
+`daPy_boomerangMove_c` helper asks P1's thrown boomerang and P1's catch/carry state when it moves
+an actor around the Gale Boomerang. In co-op, the helper must retain the throwing slot from the hit
+collider or from the spawned object's owner, then use that slot's thrown boomerang and
+`checkBoomerangCarry()` lifecycle until the carried object is released. This is why a P2-owned
+Bomb Bug enemy bomb needs both owner-aware NBOMB creation and owner-aware boomerang movement.
+
 Hookshot, boomerang, bomb, bait, and similar item-awareness checks are also their own question:
 "which active player or owned item should this enemy react to?" White Wolfos side-step awareness
 proved that these can be active-player scans without changing combat target ownership. Do not answer
@@ -178,7 +191,8 @@ player who owns the accepted catch event, so it routes through `event_owner`.
 | "Which player is caught, stunned, grabbed, carried, swallowed, or retained by this actor?" | `dusk::coop::caught_stun_owner` / `dusk::coop::wolf_catch_owner` / `dusk::coop::retained_interaction_owner` / future caught-grab helpers | Gibdo scream stun uses `caught_stun_owner`; Keese and Skulltula wolf bites use `wolf_catch_owner`; Ghost Rat attach and Peahat hookshot carry use `retained_interaction_owner` |
 | "Which active player or owned item should this enemy notice immediately?" | `dusk::coop::item_awareness` / narrow active-player scans | Initial hookshot-awareness proof in White Wolfos; Keese boomerang wind uses `item_awareness` |
 | "Which player/camera owns this spawn intro, child facing, or presentation angle?" | future presentation/camera-owner helpers | White Wolfos uses a narrow helper; broader API deferred |
-| "Which target should this enemy-spawned weapon or child attack inherit?" | parent/master `enemy_targeting` scope plus local fallback | Chilfos thrown spear launch math inherits the parent Combat target when the parent is live |
+| "Which target or owner should this enemy-spawned weapon/object inherit?" | parent/master `enemy_targeting` scope, `damage_owner`, or retained interaction owner depending on the source | Chilfos thrown spear launch math inherits the parent Combat target when the parent is live; Bomb Bug hookshot/boomerang-created bombs inherit the player/item damage owner before NBOMB create-time setup |
+| "Which player owns this boomerang-carried object until it is released?" | retained item-owner plumbing on `daPy_boomerangMove_c` / item movement helpers | Bomb Bug NBOMB boomerang movement retains the throwing player so carry/catch/drop position uses P2 when P2 threw the boomerang |
 | "Which player owns this item/tool instance?" | item-owner helpers / owner keeps | Partially implemented by item ownership patches |
 | "What is this player slot locked onto or allowed to target?" | `dusk::coop::player_attention` | V1 gives additional ALINK actors their own `dAttention_c`; lock acquisition/status gating, owner target-capability masks, owner camera gameplay, cursor drawing, and actor-observed "am I locked-on?" checks use the same attention owner while P1 remains on global attention for HUD/story compatibility |
 | "What Do/A/R/Z, wolf X/Y, or 3D action status should this ALINK consume?" | `dusk::coop::player_button_status` | Implemented for ALINK gameplay prompt state; P1 forwards to vanilla globals and additional slots store sidecar values |

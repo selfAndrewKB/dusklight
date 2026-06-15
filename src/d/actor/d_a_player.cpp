@@ -12,11 +12,14 @@
 #include "d/actor/d_a_alink.h"
 #include "m_Do/m_Do_lib.h"
 #include "d/actor/d_a_boomerang.h"
+#include "d/d_cc_d.h"
 #include "d/actor/d_a_midna.h"
 #include "d/actor/d_a_spinner.h"
 #if TARGET_PC
 #include "dusk/coop/camera.h"
+#include "dusk/coop/player_slots.h"
 #include "dusk/coop/ui_owner.h"
+#include <vector>
 #endif
 
 bool daPy_frameCtrl_c::checkAnmEnd() {
@@ -53,8 +56,155 @@ void daPy_frameCtrl_c::setFrameCtrl(u8 i_attribute, s16 i_start, s16 i_end, f32 
     offEndFlg();
 }
 
+#if TARGET_PC
+namespace {
+struct BoomerangMoveOwner {
+    daPy_boomerangMove_c* move = NULL;
+    fpc_ProcID ownerId = fpcM_ERROR_PROCESS_ID_e;
+    fpc_ProcID boomerangId = fpcM_ERROR_PROCESS_ID_e;
+};
+
+std::vector<BoomerangMoveOwner> s_boomerangMoveOwners;
+
+daAlink_c* coOpFindBoomerangOwner(daBoomerang_c* i_boomerang) {
+    if (i_boomerang == NULL) {
+        return NULL;
+    }
+
+    const fpc_ProcID boomerang_id = fopAcM_GetID(i_boomerang);
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        fopAc_ac_c* actor = dusk::coop::getPlayer(static_cast<dusk::coop::PlayerSlot>(i));
+        if (actor == NULL || fopAcM_GetName(actor) != fpcNm_ALINK_e) {
+            continue;
+        }
+
+        daAlink_c* player = static_cast<daAlink_c*>(actor);
+        daPy_actorKeep_c* throw_keep = player->getThrowBoomerangAcKeep();
+        if (throw_keep->getActor() == i_boomerang || throw_keep->getID() == boomerang_id ||
+            player->getItemID() == boomerang_id)
+        {
+            return player;
+        }
+    }
+
+    return NULL;
+}
+
+daBoomerang_c* coOpResolveHitBoomerang(const dCcD_GObjInf* i_hitObj) {
+    if (i_hitObj == NULL) {
+        return NULL;
+    }
+
+    fopAc_ac_c* hit_actor = const_cast<dCcD_GObjInf*>(i_hitObj)->GetAc();
+    if (hit_actor == NULL || fopAcM_GetName(hit_actor) != fpcNm_BOOMERANG_e) {
+        return NULL;
+    }
+
+    return static_cast<daBoomerang_c*>(hit_actor);
+}
+
+daBoomerang_c* coOpPlayerThrowBoomerang(daAlink_c* i_player) {
+    if (i_player == NULL) {
+        return NULL;
+    }
+
+    fopAc_ac_c* actor = i_player->getThrowBoomerangAcKeep()->getActor();
+    if (actor == NULL || fopAcM_GetName(actor) != fpcNm_BOOMERANG_e) {
+        return NULL;
+    }
+
+    return static_cast<daBoomerang_c*>(actor);
+}
+
+daAlink_c* coOpResolveLiveAlink(fpc_ProcID i_ownerId) {
+    if (i_ownerId == fpcM_ERROR_PROCESS_ID_e) {
+        return NULL;
+    }
+
+    fopAc_ac_c* actor = fopAcM_SearchByID(i_ownerId);
+    if (actor == NULL || fopAcM_GetName(actor) != fpcNm_ALINK_e) {
+        return NULL;
+    }
+
+    return static_cast<daAlink_c*>(actor);
+}
+
+BoomerangMoveOwner* coOpFindBoomerangMoveOwner(daPy_boomerangMove_c* i_move, bool i_create) {
+    for (std::vector<BoomerangMoveOwner>::iterator it = s_boomerangMoveOwners.begin();
+         it != s_boomerangMoveOwners.end(); ++it)
+    {
+        if (it->move == i_move) {
+            return &*it;
+        }
+    }
+
+    if (!i_create) {
+        return NULL;
+    }
+
+    s_boomerangMoveOwners.push_back(BoomerangMoveOwner());
+    return &s_boomerangMoveOwners.back();
+}
+
+void coOpRecordBoomerangMoveOwner(daPy_boomerangMove_c* i_move, daAlink_c* i_owner,
+                                  daBoomerang_c* i_boomerang) {
+    BoomerangMoveOwner* owner = coOpFindBoomerangMoveOwner(i_move, true);
+    if (owner == NULL) {
+        return;
+    }
+
+    owner->move = i_move;
+    owner->ownerId = i_owner != NULL ? fopAcM_GetID(i_owner) : fpcM_ERROR_PROCESS_ID_e;
+    owner->boomerangId = i_boomerang != NULL ? fopAcM_GetID(i_boomerang) : fpcM_ERROR_PROCESS_ID_e;
+}
+
+daAlink_c* coOpBoomerangMovePlayer(daPy_boomerangMove_c* i_move) {
+    BoomerangMoveOwner* owner = coOpFindBoomerangMoveOwner(i_move, false);
+    if (owner != NULL) {
+        daAlink_c* player = coOpResolveLiveAlink(owner->ownerId);
+        if (player != NULL) {
+            return player;
+        }
+    }
+
+    return daAlink_getAlinkActorClass();
+}
+
+daBoomerang_c* coOpBoomerangMoveActor(daPy_boomerangMove_c* i_move) {
+    BoomerangMoveOwner* owner = coOpFindBoomerangMoveOwner(i_move, false);
+    if (owner != NULL) {
+        daAlink_c* player = coOpResolveLiveAlink(owner->ownerId);
+        if (player != NULL && owner->boomerangId != fpcM_ERROR_PROCESS_ID_e) {
+            // Co-op: once the owner has caught the boomerang, the thrown keep clears.
+            // Return NULL then so posMove() can run that player's checkBoomerangCarry() handoff.
+            daPy_actorKeep_c* throw_keep = player->getThrowBoomerangAcKeep();
+            if (throw_keep->getID() == owner->boomerangId) {
+                fopAc_ac_c* actor = throw_keep->getActor();
+                if (actor != NULL && fopAcM_GetName(actor) == fpcNm_BOOMERANG_e) {
+                    return static_cast<daBoomerang_c*>(actor);
+                }
+            }
+        }
+
+        return NULL;
+    }
+
+    daAlink_c* player = coOpBoomerangMovePlayer(i_move);
+    if (player != NULL) {
+        return coOpPlayerThrowBoomerang(player);
+    }
+
+    return daPy_py_c::getThrowBoomerangActor();
+}
+}  // namespace
+#endif
+
 void daPy_boomerangMove_c::initOffset(const cXyz* i_pos) {
+#if TARGET_PC
+    daBoomerang_c* boomerang_p = coOpBoomerangMoveActor(this);
+#else
     daBoomerang_c* boomerang_p = daPy_py_c::getThrowBoomerangActor();
+#endif
 
     if (boomerang_p != NULL) {
         bgCheckAfterOffset(i_pos);
@@ -68,6 +218,36 @@ void daPy_boomerangMove_c::initOffset(const cXyz* i_pos) {
     field_0x0 = 0;
 }
 
+void daPy_boomerangMove_c::initOffset(const cXyz* i_pos, const dCcD_GObjInf* i_hitObj) {
+#if TARGET_PC
+    daBoomerang_c* boomerang = coOpResolveHitBoomerang(i_hitObj);
+    daAlink_c* owner = coOpFindBoomerangOwner(boomerang);
+    if (owner != NULL) {
+        // Co-op: boomerang-carried actors must finish at the throwing player's hand/feet.
+        // The shared move helper has no actor owner field, so keep process-local owner
+        // identity beside it instead of changing every embedded native struct.
+        coOpRecordBoomerangMoveOwner(this, owner, boomerang);
+    }
+#endif
+    initOffset(i_pos);
+}
+
+#if TARGET_PC
+void daPy_boomerangMove_c::initOffsetForOwner(const cXyz* i_pos, fopAc_ac_c* i_owner) {
+    daAlink_c* owner = NULL;
+    if (i_owner != NULL && fopAcM_GetName(i_owner) == fpcNm_ALINK_e) {
+        owner = static_cast<daAlink_c*>(i_owner);
+    }
+
+    if (owner != NULL) {
+        daBoomerang_c* boomerang = coOpPlayerThrowBoomerang(owner);
+        coOpRecordBoomerangMoveOwner(this, owner, boomerang);
+    }
+
+    initOffset(i_pos);
+}
+#endif
+
 daMidna_c* daPy_py_c::m_midnaActor;
 
 s16 daPy_boomerangMove_c::m_dropAngleY;
@@ -75,7 +255,11 @@ s16 daPy_boomerangMove_c::m_dropAngleY;
 s16 daPy_boomerangMove_c::m_eventKeepFlg;
 
 int daPy_boomerangMove_c::posMove(cXyz* o_pos, s16* o_rotY, fopAc_ac_c* i_objActor, s16 i_rotStep) {
+#if TARGET_PC
+    daBoomerang_c* boomerang_p = coOpBoomerangMoveActor(this);
+#else
     daBoomerang_c* boomerang_p = daPy_py_c::getThrowBoomerangActor();
+#endif
 
     field_0x2 -= i_rotStep;
     *o_rotY -= i_rotStep;
@@ -108,7 +292,11 @@ int daPy_boomerangMove_c::posMove(cXyz* o_pos, s16* o_rotY, fopAc_ac_c* i_objAct
         return 1;
     }
 
+#if TARGET_PC
+    daAlink_c* player_p = coOpBoomerangMovePlayer(this);
+#else
     daAlink_c* player_p = daAlink_getAlinkActorClass();
+#endif
     if ((i_objActor == NULL || !player_p->checkBoomerangCarry(i_objActor)) &&
         (m_eventKeepFlg == 0 || field_0x0 != 0))
     {
@@ -123,7 +311,11 @@ int daPy_boomerangMove_c::posMove(cXyz* o_pos, s16* o_rotY, fopAc_ac_c* i_objAct
 }
 
 void daPy_boomerangMove_c::bgCheckAfterOffset(const cXyz* i_pos) {
+#if TARGET_PC
+    daBoomerang_c* boomerang_p = coOpBoomerangMoveActor(this);
+#else
     daBoomerang_c* boomerang_p = daPy_py_c::getThrowBoomerangActor();
+#endif
     if (boomerang_p != NULL) {
         m_offsetY = i_pos->y - boomerang_p->current.pos.y;
         m_offsetXZ = boomerang_p->current.pos.absXZ(*i_pos);

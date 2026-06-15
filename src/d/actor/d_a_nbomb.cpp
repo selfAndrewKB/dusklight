@@ -29,7 +29,7 @@ static daAlink_c* daNbomb_getOwner(daNbomb_c* i_bomb) {
 void daNbomb_c::coHitCallback(fopAc_ac_c* i_hitActor) {
     if (fopAcM_GetGroup(i_hitActor) == fopAc_ENEMY_e ||
         (checkStateFlg0(FLG0_INSECT_BOMB) &&
-         (!checkStateFlg0(FLG0_NO_HIT_PLAYER) || i_hitActor != daAlink_getAlinkActorClass())))
+         (!checkStateFlg0(FLG0_NO_HIT_PLAYER) || i_hitActor != daNbomb_getOwner(this))))
     {
         onStateFlg0(FLG0_BOMB_HIT);
     }
@@ -178,6 +178,17 @@ int daNbomb_c::create() {
     fopAcM_GetID(this);
     fopAcM_ct(this, daNbomb_c);
 
+#if TARGET_PC
+    if (parentActorID != fpcM_ERROR_PROCESS_ID_e) {
+        fopAc_ac_c* owner = fopAcM_SearchByID(parentActorID);
+        if (owner != NULL && fopAcM_GetName(owner) == fpcNm_ALINK_e) {
+            // Co-op: owner-aware enemy-bomb factories pass the item owner as parentActorID so
+            // create-time carry, boomerang, lifetime, and damage-owner reads bind to that slot.
+            setOwner(owner);
+        }
+    }
+#endif
+
     BOOL is_octaeel_bomb = false;
 
     if (fopAcM_GetParam(this) == PRM_FLOWER_BOMB) {
@@ -252,7 +263,7 @@ int daNbomb_c::create() {
     mSph2.SetR(110.0f);
     mSph2.SetTgHitCallback(daNbomb_tgHitCallback);
 
-    daAlink_c* player = daAlink_getAlinkActorClass();
+    daAlink_c* player = daNbomb_getOwner(this);
     gravity = player->getBombGravity();
     maxFallSpeed = player->getBombMaxFallSpeed();
     mExTime = player->getBombExplodeTime();
@@ -530,7 +541,7 @@ void daNbomb_c::setEffect() {
 }
 
 void daNbomb_c::setHookshotOffset() {
-    daAlink_c* player = daAlink_getAlinkActorClass();
+    daAlink_c* player = daNbomb_getOwner(this);
 
     cXyz offset = player->current.pos - current.pos;
     offset.y = 0.0f;
@@ -784,7 +795,7 @@ BOOL daNbomb_c::procCarryInit() {
     if (checkStateFlg0(FLG0_INSECT_BOMB)) {
         mpBck->init((J3DAnmTransform*)dComIfG_getObjectRes(daAlink_c::getAlinkArcName(), 0x15),
                     TRUE, -1, 1.0f, 0, -1, true);
-        shape_angle.set(0, daAlink_getAlinkActorClass()->shape_angle.y, 0);
+        shape_angle.set(0, daNbomb_getOwner(this)->shape_angle.y, 0);
         mDoMtx_copy(cMtx_getIdentity(), field_0xa40);
     }
 
@@ -796,7 +807,7 @@ BOOL daNbomb_c::procCarryInit() {
 }
 
 BOOL daNbomb_c::procCarry() {
-    daAlink_c* player = daAlink_getAlinkActorClass();
+    daAlink_c* player = daNbomb_getOwner(this);
 
     cLib_chaseF(&field_0xbb0, 0.0f, 1.0f);
 
@@ -856,9 +867,8 @@ BOOL daNbomb_c::procCarry() {
     setRoomInfo();
 
     if (fopAcM_GetParam(this) == 1) {
-        if (daAlink_getAlinkActorClass()->getGrabActorID() == fopAcM_GetID(this)) {
-            daAlink_getAlinkActorClass()->setGrabCollisionOffset(current.pos.x - sp40.x,
-                                                                 current.pos.z - sp40.z, NULL);
+        if (player->getGrabActorID() == fopAcM_GetID(this)) {
+            player->setGrabCollisionOffset(current.pos.x - sp40.x, current.pos.z - sp40.z, NULL);
         }
     }
 
@@ -1104,7 +1114,7 @@ BOOL daNbomb_c::procFlowerWait() {
     return true;
 }
 
-BOOL daNbomb_c::procBoomerangMoveInit(dCcD_GObjInf* unused) {
+BOOL daNbomb_c::procBoomerangMoveInit(dCcD_GObjInf* i_hitObj) {
     if (mProcFunc == &daNbomb_c::procBoomerangMove) {
         return false;
     }
@@ -1125,8 +1135,18 @@ BOOL daNbomb_c::procBoomerangMoveInit(dCcD_GObjInf* unused) {
     mCcSph.SetCoHitCallback(daNbomb_coHitCallback);
     speedF = 0.0f;
 
+#if TARGET_PC
+    if (i_hitObj != NULL) {
+        mBoomerangMove.initOffset(&current.pos, i_hitObj);
+    } else {
+        // Co-op: owner-aware enemy-bomb factories set the bomb owner before create-time
+        // boomerang movement starts, so the return/carry handoff follows that slot.
+        mBoomerangMove.initOffsetForOwner(&current.pos, getOwner());
+    }
+#else
     mBoomerangMove.initOffset(&current.pos);
-    mExTime = daAlink_getAlinkActorClass()->getBombExplodeTime() * 1.5f;
+#endif
+    mExTime = daNbomb_getOwner(this)->getBombExplodeTime() * 1.5f;
     return true;
 }
 
@@ -1135,7 +1155,7 @@ BOOL daNbomb_c::procBoomerangMove() {
         return true;
     }
 
-    daAlink_c* player = daAlink_getAlinkActorClass();
+    daAlink_c* player = daNbomb_getOwner(this);
 
     fopAc_ac_c* var_r29;
     if (checkStateFlg0(FLG0_FROZEN)) {
