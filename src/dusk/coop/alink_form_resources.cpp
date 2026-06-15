@@ -230,11 +230,15 @@ void applyDesiredFormOnCreate(daAlink_c* player) {
     }
 
     const PlayerSlot slot = slotForPlayer(player);
-    if (!state->desiredKnown) {
+    if (slot == PlayerSlot::Primary) {
+        // Co-op: P1's form on create is owned by the native save/startup path. The retained
+        // desired-form cache exists for runtime additional slots and must not force a later
+        // wolf save back to a stale human state.
+        state->desiredWolf = player->checkWolf();
+        state->desiredKnown = true;
+    } else if (!state->desiredKnown) {
         daAlink_c* primary = static_cast<daAlink_c*>(getPrimaryPlayer());
-        state->desiredWolf = slot != PlayerSlot::Primary && primary != nullptr ?
-                                  primary->checkWolf() :
-                                  player->checkWolf();
+        state->desiredWolf = primary != nullptr ? primary->checkWolf() : player->checkWolf();
         state->desiredKnown = true;
     }
 
@@ -344,11 +348,18 @@ bool canInstallModelDataOwner(daAlink_c* player) {
 }
 
 void resetRuntime() {
-    for (SlotState& slot : s_slots) {
+    for (int i = 0; i < kPlayerSlotCount; i++) {
+        SlotState& slot = s_slots[i];
         slot.actor = nullptr;
         slot.currentArc = nullptr;
         slot.pendingReleaseArc = nullptr;
         slot.swapping = false;
+        if (i == slotIndex(PlayerSlot::Primary)) {
+            // Co-op: additional-slot desired forms are session intent, but P1 form is reloaded
+            // from native save/startup state on each primary actor create.
+            slot.desiredWolf = false;
+            slot.desiredKnown = false;
+        }
     }
 
     for (ArcState& arc : s_arcs) {
