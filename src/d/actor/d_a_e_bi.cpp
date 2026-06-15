@@ -16,6 +16,7 @@
 #if TARGET_PC
 #include "dusk/coop/damage_owner.h"
 #include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/player_camera_status.h"
 #include "dusk/coop/selected_target_state.h"
 #endif
 
@@ -176,19 +177,24 @@ static BOOL pl_check(e_bi_class* i_this, f32 search_area) {
 
         return FALSE;
     }
-#endif
-
+    return FALSE;
+#else
     fopAc_ac_c* pl = dComIfGp_getPlayer(0);
     if (i_this->dis < search_area && !fopAcM_otherBgCheck(actor, pl)) {
         return TRUE;
     }
 
     return FALSE;
+#endif
 }
 
 static void damage_check(e_bi_class* i_this) {
     fopAc_ac_c* actor = &i_this->actor;
+#if TARGET_PC
+    fopAc_ac_c* player = NULL;
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     fopAc_ac_c* child_actor;
 
     if (i_this->damage_time == 0) {
@@ -241,12 +247,15 @@ static void damage_check(e_bi_class* i_this) {
                         dusk::coop::damage_owner::resolveDamageOwner(actor, i_this->at_info.mpCollider);
                     dusk::coop::damage_owner::recordDamageOwnerHit("e_bi.damage", actor, owner,
                                                                    &i_this->at_info);
-                    if (owner.localPlayerActor != NULL) {
-                        player = owner.localPlayerActor;
-                    }
 #endif
                     // Co-op: stun knockback follows the player who caused this hit, not global P1.
+#if TARGET_PC
+                    player = owner.localPlayerActor;
+                    i_this->field_0x6a6 =
+                        player != NULL ? player->shape_angle.y : i_this->target_angle + 0x8000;
+#else
                     i_this->field_0x6a6 = player->shape_angle.y;
+#endif
                 } else {
                     i_this->field_0x6a6 = i_this->target_angle + 0x8000;
                 }
@@ -366,12 +375,14 @@ static void e_bi_move(e_bi_class* i_this) {
             i_this->target = i_this->target_angle;
 
             {
-                f32 attack_distance = fopAcM_searchPlayerDistance(actor);
 #if TARGET_PC
+                f32 attack_distance = KREG_F(7) + 151.0f;
                 // Co-op: close attack gate uses the retained combat target from the same scope.
                 coOpSelectCombatTargetState(i_this, "e_bi.move", false,
                                             dusk::coop::EnemyTargetMode::StickyCombat, NULL,
                                             &attack_distance, NULL);
+#else
+                f32 attack_distance = fopAcM_searchPlayerDistance(actor);
 #endif
                 if (attack_distance < KREG_F(7) + 150.0f) {
                     i_this->mode = 2;
@@ -589,7 +600,13 @@ static BOOL water_check(e_bi_class* i_this) {
 
 static void action(e_bi_class* i_this) {
     fopAc_ac_c* actor = &i_this->actor;
+#if TARGET_PC
+    fopAc_ac_c* player = NULL;
+    fopAc_ac_c* visibilityPlayer = NULL;
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+    fopAc_ac_c* visibilityPlayer = player;
+#endif
     cXyz mae, ato;
 
 #if TARGET_PC
@@ -606,9 +623,10 @@ static void action(e_bi_class* i_this) {
                                         &i_this->target_angle))
         {
             i_this->dis = (actor->home.pos - targetState.pos).abs();
+            visibilityPlayer = targetState.actor;
         } else {
-            i_this->target_angle = fopAcM_searchPlayerAngleY(actor);
-            i_this->dis = (actor->home.pos - player->current.pos).abs();
+            i_this->target_angle = actor->current.angle.y;
+            i_this->dis = l_HIO.track_range + 1.0f;
         }
     }
 #else
@@ -658,7 +676,12 @@ static void action(e_bi_class* i_this) {
 
     if (fopAcM_GetRoomNo(actor) == 3) {
         dBgS_LinChk lin_chk;
-        mae = player->current.pos;
+        // Co-op: this room-specific attention hide check follows the selected target's sightline.
+        if (visibilityPlayer != NULL) {
+            mae = visibilityPlayer->current.pos;
+        } else {
+            mae = actor->current.pos;
+        }
         mae.y += 150.0f;
         lin_chk.Set(&mae, &actor->eyePos, actor);
 
@@ -890,9 +913,22 @@ static int daE_BI_Execute(e_bi_class* i_this) {
     actor->attention_info.position.y += KREG_F(3) + 45.0f;
 
     f32 center = 0.0f;
+#if TARGET_PC
+    // Co-op: the enlarged player-status collision band is selected-target state, not a P1 global.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    if (coOpSelectCombatTargetState(i_this, "e_bi.collision_status", i_this->action == ACTION_EX,
+                                    dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL,
+                                    NULL) &&
+        dusk::coop::player_camera_status::checkStatus0(targetState.slot,
+                                                       fopAcStts_UNK_0x80000_e))
+    {
+        center = 100.0f;
+    }
+#else
     if (dComIfGp_checkPlayerStatus0(0, fopAcStts_UNK_0x80000_e)) {
         center = 100.0f;
     }
+#endif
 
     ato = actor->current.pos;
 

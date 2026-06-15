@@ -290,7 +290,8 @@ bool daE_DK_c::checkPlayerSearch() {
 
         return 1;
     }
-#endif
+    return 0;
+#else
 
     if (daPy_getPlayerActorClass()->current.pos.abs(home.pos) > l_HIO.player_detection_range) {
         return 0;
@@ -301,15 +302,22 @@ bool daE_DK_c::checkPlayerSearch() {
     }
 
     return 1;
+#endif
 }
 
 int daE_DK_c::checkPlayerAttack(f32 param_0) {
     if (field_0x69c == 0) {
-        f32 dist = fopAcM_searchPlayerDistance(this);
 #if TARGET_PC
+        f32 dist = 0.0f;
         // Co-op: attack gates use the retained combat target selected by search/chase.
-        coOpSelectCombatTargetState(this, "e_dk.attack_gate", false,
-                                    dusk::coop::EnemyTargetMode::StickyCombat, NULL, &dist, NULL);
+        if (!coOpSelectCombatTargetState(this, "e_dk.attack_gate", false,
+                                         dusk::coop::EnemyTargetMode::StickyCombat, NULL, &dist,
+                                         NULL))
+        {
+            return 0;
+        }
+#else
+        f32 dist = fopAcM_searchPlayerDistance(this);
 #endif
         if (field_0x690 == 0 && dist < l_HIO.first_attack_range) {
             if (dist > 8.0f) {
@@ -537,7 +545,7 @@ void daE_DK_c::executeChase() {
         if (mpMorfSO->checkFrame(70.0f) != 0 || mpMorfSO->checkFrame(150.0f) != 0) {
 #if TARGET_PC
             dusk::coop::selected_target_state::SelectedTargetState targetState;
-            s16 targetAngle = fopAcM_searchPlayerAngleY(this);
+            s16 targetAngle = current.angle.y;
             // Co-op: chase hop direction and facing follow the retained Combat target.
             if (coOpSelectCombatTargetState(this, "e_dk.chase", false,
                                             dusk::coop::EnemyTargetMode::StickyCombat,
@@ -548,8 +556,12 @@ void daE_DK_c::executeChase() {
             } else
 #endif
             {
+#if TARGET_PC
+                dirFromHome = current.pos - home.pos;
+#else
                 dirFromHome = current.pos - daPy_getPlayerActorClass()->current.pos;
                 current.angle.y = fopAcM_searchActorAngleY(this, daPy_getPlayerActorClass());
+#endif
             }
             if (std::abs(dirFromHome.y) < 50.0f) {
                 field_0x6ac = 5.0f;
@@ -638,11 +650,13 @@ void daE_DK_c::executeAttack() {
         const bool hasCoOpTarget = coOpSelectCombatTargetState(
             this, "e_dk.attack", true, dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
             NULL, NULL);
-        daPy_py_c* electricPlayer =
-            hasCoOpTarget && targetState.player != NULL ? targetState.player : daPy_getPlayerActorClass();
+        daPy_py_c* electricPlayer = hasCoOpTarget ? targetState.player : NULL;
 #else
         daPy_py_c* electricPlayer = daPy_getPlayerActorClass();
 #endif
+        if (electricPlayer == NULL) {
+            break;
+        }
         if (mMoveMode == 2) {
             if (field_0x698 == 0) {
                 field_0x69c = 150;
@@ -858,14 +872,19 @@ void daE_DK_c::action() {
 
     fopAcM_OnStatus(this, fopAcStts_UNK_0x80000_e);
 
-    f32 firstAttackDistance = fopAcM_searchPlayerDistance(this);
 #if TARGET_PC
+    f32 firstAttackDistance = 0.0f;
     // Co-op: the first-attack cooldown reset follows the active Combat target's distance.
-    coOpSelectCombatTargetState(this, "e_dk.action", mActionMode == ACTION_MODE_ATTACK,
-                                mActionMode == ACTION_MODE_WAIT
-                                    ? dusk::coop::EnemyTargetMode::ImmediateAcquire
-                                    : dusk::coop::EnemyTargetMode::StickyCombat,
-                                NULL, &firstAttackDistance, NULL);
+    if (!coOpSelectCombatTargetState(this, "e_dk.action", mActionMode == ACTION_MODE_ATTACK,
+                                     mActionMode == ACTION_MODE_WAIT
+                                         ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                                         : dusk::coop::EnemyTargetMode::StickyCombat,
+                                     NULL, &firstAttackDistance, NULL))
+    {
+        firstAttackDistance = l_HIO.first_attack_range + 1.0f;
+    }
+#else
+    f32 firstAttackDistance = fopAcM_searchPlayerDistance(this);
 #endif
     if (firstAttackDistance > l_HIO.first_attack_range) {
         field_0x690 = 0x0;

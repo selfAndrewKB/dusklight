@@ -5,6 +5,7 @@
 
 #include "d/dolzel_rel.h" // IWYU pragma: keep
 
+#include "d/actor/d_a_player.h"
 #include "d/actor/d_a_e_sm2.h"
 #include "d/d_item.h"
 #include "Z2AudioLib/Z2Instances.h"
@@ -15,7 +16,9 @@
 #include <cstring>
 
 #if TARGET_PC
+#include "dusk/coop/event_owner.h"
 #include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/player_query.h"
 #include "dusk/frame_interpolation.h"
 #endif
 
@@ -276,9 +279,9 @@ static bool coOpSelectCombatTarget(e_sm2_class* i_this, const char* label, bool 
 
 static BOOL pl_check(e_sm2_class* i_this, f32 i_range) {
     fopAc_ac_c* actor = &i_this->enemy;
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
 
 #if TARGET_PC
+    fopAc_ac_c* player = NULL;
     // Co-op: Chuchu awareness checks line of sight against the active combat target, not P1.
     if (!coOpSelectCombatTarget(i_this, "e_sm2.pl_check", i_this->action == ACTION_ATTACK,
                                 dusk::coop::EnemyTargetMode::ImmediateAcquire, &player,
@@ -286,6 +289,8 @@ static BOOL pl_check(e_sm2_class* i_this, f32 i_range) {
     {
         return FALSE;
     }
+#else
+    fopAc_ac_c* player = dComIfGp_getPlayer(0);
 #endif
 
     if (i_this->dist_to_pl < i_range + (100.0f * i_this->size) && !fopAcM_otherBgCheck(actor, player)) {
@@ -331,7 +336,6 @@ static bool coOpSelectCombatTarget(e_sm2_class* i_this, const char* label, bool 
 
 static void normal_move(e_sm2_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
     cXyz unused;
     cXyz unused_2;
     f32 move_speed = 0.0f;
@@ -416,7 +420,6 @@ static void normal_move(e_sm2_class* i_this) {
 
 static void attack(e_sm2_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
     cXyz unused;
     cXyz unused_2;
     f32 move_speed = 0.0f;
@@ -494,7 +497,6 @@ static void attack(e_sm2_class* i_this) {
 
 static s8 combine(e_sm2_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
     cXyz work;
     cXyz unused;
 
@@ -582,7 +584,6 @@ static s8 combine(e_sm2_class* i_this) {
 
 static s8 roof(e_sm2_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
     cXyz unused;
     cXyz unused_2;
     s8 do_pos_crr = FALSE;
@@ -615,7 +616,15 @@ static s8 roof(e_sm2_class* i_this) {
                 i_this->timers[0] = 2.0f + cM_rndF(50.0f);
                 i_this->timers[1] = i_this->timers[0] + 50;
             }
+#if TARGET_PC
+        } else {
+            // Co-op: roof drops preserve the native horizontal proximity gate across active players.
+            const dusk::coop::PlayerQueryResult target =
+                dusk::coop::findNearestPlayer(actor, "e_sm2.roof_drop");
+            if (target.found && target.distanceXZ < (100.0f * i_this->field_0x5b6)) {
+#else
         } else if (fopAcM_searchPlayerDistanceXZ(actor) < (100.0f * i_this->field_0x5b6)) {
+#endif
             i_this->mode = 2;
             if (strcmp(dComIfGp_getStartStageName(), "D_SB07") == 0) {
                 i_this->timers[0] = 2.0f + cM_rndF(50.0f);
@@ -623,6 +632,9 @@ static s8 roof(e_sm2_class* i_this) {
                 i_this->timers[0] = 2;
             }
             i_this->timers[1] = i_this->timers[0] + 50;
+#if TARGET_PC
+            }
+#endif
         }
         break;
     case 2:
@@ -799,7 +811,13 @@ static void fail(e_sm2_class* i_this) {
     }
 
     if (i_this->mode == 2 && i_this->timers[0] == 1) {
+#if TARGET_PC
+        // Co-op: the bottle catch effect is owned by the accepted event requester.
+        daPy_py_c* catchPlayer = dusk::coop::event_owner::ownerPlayerForActor(actor);
+        MTXCopy(catchPlayer->getLeftItemMatrix(), *calc_mtx);
+#else
         MTXCopy(daPy_getPlayerActorClass()->getLeftItemMatrix(), *calc_mtx);
+#endif
         work.set(0.0f, 0.0f, 0.0f);
         MtxPosition(&work, &pos);
         f32 size = 0.1f + TREG_F(14);
@@ -1492,7 +1510,8 @@ static int daE_SM2_Execute(e_sm2_class* i_this) {
     action(i_this);
 
     if (i_this->field_0x83e != 0) {
-        fopAc_ac_c* player = dComIfGp_getPlayer(0);
+        // Co-op: this is camera/presentation cleanup; keep the native camera-0 visibility test until
+        // render/presentation ownership audits this captured surface.
         camera_process_class* camera = dComIfGp_getCamera(0);
         cXyz start;
         cXyz end;

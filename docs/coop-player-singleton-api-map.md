@@ -155,6 +155,10 @@ question is "which player started this accepted event?" Door demos are the first
 prompt eligibility may still be interaction-owned, but the accepted door animation/placement belongs
 to the requesting player slot.
 
+Accepted event/catch presentation details can show up inside enemy files too. Chuchu 2's bottle
+catch effect matrix is not targeting, damage ownership, or nearest-player state; it belongs to the
+player who owns the accepted catch event, so it routes through `event_owner`.
+
 ## Routing Table
 
 | Question the callsite is asking | Use | Current status |
@@ -165,7 +169,7 @@ to the requesting player slot.
 | "Which active player is nearest or eligible by raw distance/angle facts?" | `dusk::coop::player_query` | Implemented |
 | "Who is this enemy fighting right now?" | `dusk::coop::enemy_targeting` | Implemented for scoped combat targeting |
 | "Who caused this hit?" | `dusk::coop::damage_owner` / narrow actor-local collision owner checks | Implemented for direct players and known owned items; Big Freezard added a bespoke direct-hit counter proof for enemies that bypass normal HP |
-| "What is the selected target's form/speed/guard/horse/swim/damage/status state?" | `dusk::coop::selected_target_state` | Initial implementation for target speed/facing/position/cut/horse facts; Chilfos added selected-target damage-wait and slot-local status bits such as `0x100` and iron-ball subject mode; Ghost Rat added owner-local wolf-sense visibility facts; Shadow Beast added owner-local wolf bark/threat facts |
+| "What is the selected target's form/speed/guard/horse/swim/damage/status state?" | `dusk::coop::selected_target_state` | Initial implementation for target speed/facing/position/cut/horse facts; Chilfos added selected-target damage-wait and slot-local status bits such as `0x100` and iron-ball subject mode; Bomb Bug added selected-target collision-status band checks through `player_camera_status`; Ghost Rat added owner-local wolf-sense visibility facts; Shadow Beast added owner-local wolf bark/threat facts |
 | "What position/angle should this enemy use for chase detours after it already selected a target?" | `dusk::coop::selected_target_state` | Bokoblin obstacle steering proof uses selected target facts instead of P1 globals |
 | "Is any active player near this enemy/teammate for group wake-up?" | `dusk::coop::player_query` | Bokoblin group battle participation uses nearest active-player facts |
 | "Which active player can trip this authored trigger or room switch?" | future `world_trigger` helpers plus `world.switch` diagnostics | Diagnostics implemented; Ghost Rat ceiling-drop gates exposed switches `227-229` in `D_MN10` room `10`; Ghost Rat now opens the native authored room switch when an active player satisfies the same local wake predicate |

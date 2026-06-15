@@ -160,8 +160,7 @@ static BOOL pl_check(e_cr_class* a_this, f32 i_range, s16 i_angle) {
 
         return FALSE;
     }
-#endif
-
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
     
     if (a_this->dist_to_pl < i_range) {
@@ -172,11 +171,11 @@ static BOOL pl_check(e_cr_class* a_this, f32 i_range, s16 i_angle) {
     }
 
     return FALSE;
+#endif
 }
 
 static void damage_check(e_cr_class* a_this) {
     fopAc_ac_c* actor = &a_this->enemy;
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
 
     if (a_this->invulnerabilityTimer == 0) {
         a_this->ccStts.Move();
@@ -286,7 +285,7 @@ static void e_cr_move(e_cr_class* a_this) {
 
         if (a_this->timers[1] == 0) {
 #if TARGET_PC
-            s16 targetAngle = fopAcM_searchPlayerAngleY(actor);
+            s16 targetAngle = a_this->angle_to_pl;
             // Co-op: evasive chase angles orbit around the selected active player, not P1.
             coOpSelectCombatTargetState(a_this, "e_cr.chase_angle", false,
                                         dusk::coop::EnemyTargetMode::StickyCombat, NULL,
@@ -409,13 +408,9 @@ static void action(e_cr_class* a_this) {
 
 #if TARGET_PC
     // Co-op: action-wide metrics keep movement awareness on the selected active player.
-    if (!coOpSelectCombatTargetState(a_this, "e_cr.action", false,
-                                     dusk::coop::EnemyTargetMode::StickyCombat, NULL,
-                                     &a_this->dist_to_pl, &a_this->angle_to_pl))
-    {
-        a_this->angle_to_pl = fopAcM_searchPlayerAngleY(actor);
-        a_this->dist_to_pl = fopAcM_searchPlayerDistance(actor);
-    }
+    coOpSelectCombatTargetState(a_this, "e_cr.action", false,
+                                dusk::coop::EnemyTargetMode::StickyCombat, NULL,
+                                &a_this->dist_to_pl, &a_this->angle_to_pl);
 #else
     a_this->angle_to_pl = fopAcM_searchPlayerAngleY(actor);
     a_this->dist_to_pl = fopAcM_searchPlayerDistance(actor);
