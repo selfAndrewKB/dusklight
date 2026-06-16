@@ -135,6 +135,24 @@ presentation wrinkle: if a dive/staging gate compares target angle to camera ang
 slot's presentation camera when available instead of P1's camera. Do not collapse those families
 into one broader "flying enemy" helper unless more validated enemies prove the same narrower shape.
 
+Rat (`E_MS`) and Goose (`E_YG`) define the batchable small-ground wolf-bite pattern: fill the native
+angle/distance dispatcher cache from the Combat owner, answer wolf-bark fear with an active-player
+`selected_target_state` predicate scan, start wolf-bite ownership from `damage_owner`, then keep
+release, throw direction, and mouth-matrix attachment in `wolf_catch_owner`. Their skull/dokuro
+searches are object-owned behavior and should not be converted as player targeting.
+
+Poe (`E_HP`) shows that ghost visibility and vulnerability can be selected/active-player state
+without becoming combat targeting. Wake, move, attack, and down-state steering use the Combat owner;
+wolf-form and wolf-sense reveal gates scan active players. Soul pull-out drawing, item-get, and
+death presentation are separate down/soul-owner or event/presentation surfaces and should stay
+documented until a specific owner API exists.
+
+Stalfos (`E_SF`) is the regular-humanoid-with-authored-demo boundary. Combat, guard contact, and
+damage reactions can use the existing targeting, defender, and damage-owner families, but first
+contact intro cameras, `changeOriginalDemo()`, and `setPlayerPosAndAngle()` are authored
+presentation/protagonist paths. Do not route those through enemy targeting just because the same file
+also has ordinary combat AI.
+
 Static/ranged enemies follow the same identity split but need stricter callsite policy: wake/LOS
 may acquire immediately, while breath, bullet, or spawned-child attack continuation should read the
 retained Combat target through `selected_target_state`. Big Freezard (`E_FB`) uses this for vertical

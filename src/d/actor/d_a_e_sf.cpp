@@ -11,6 +11,12 @@
 #include "f_op/f_op_actor_enemy.h"
 #include "f_op/f_op_camera_mng.h"
 #include "Z2AudioLib/Z2Instances.h"
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/defender_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
 #include <cstring>
 
 enum E_sf_RES_File_ID {
@@ -272,7 +278,21 @@ static BOOL other_bg_check(e_sf_class* i_this, fopAc_ac_c* i_actor) {
 
 static BOOL player_way_check(e_sf_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
+#if TARGET_PC
+    dusk::coop::EnemyTargetContext context;
+    context.observer = a_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = dusk::coop::EnemyTargetMode::StickyCombat;
+    context.label = "e_sf.player_way";
+    dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    fopAc_ac_c* player = target.localActor;
+#else
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+#endif
+
+    if (player == NULL) {
+        return FALSE;
+    }
 
     s16 angle_delta = a_this->shape_angle.y - player->shape_angle.y;
     if (angle_delta < 0) {
@@ -285,6 +305,55 @@ static BOOL player_way_check(e_sf_class* i_this) {
 
     return TRUE;
 }
+
+#if TARGET_PC
+// Co-op: Stalfos has one combat target; callsite labels explain why vanilla asks for target facts.
+static bool coOpSelectSfTargetState(
+    e_sf_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance_xz,
+    s16* angle_y, s16* angle_x) {
+    fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
+
+    dusk::coop::EnemyTargetContext context;
+    context.observer = a_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        a_this, label, targetState,
+        target.found ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+                     : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance_xz != NULL) {
+        *distance_xz = target.distanceXZ;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    if (angle_x != NULL) {
+        cXyz delta = targetState.pos - a_this->current.pos;
+        *angle_x = cM_atan2s(delta.y, delta.absXZ());
+    }
+    return target.found;
+}
+
+static dusk::coop::defender_owner::DefenderOwnerResult coOpRecordSfGuardedAttackHit(
+    e_sf_class* i_this, const char* label) {
+    fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
+    const dusk::coop::defender_owner::DefenderOwnerResult defender =
+        dusk::coop::defender_owner::resolveDefenderOwner(a_this, &i_this->mAtSph);
+    dusk::coop::defender_owner::recordDefenderOwnerContact(label, a_this, defender);
+    return defender;
+}
+#endif
 
 static BOOL way_bg_check(e_sf_class* i_this, f32 param_2, f32 param_3) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
@@ -310,6 +379,21 @@ static BOOL way_bg_check(e_sf_class* i_this, f32 param_2, f32 param_3) {
 
 static int pl_check(e_sf_class* i_this, f32 i_distance, s16 param_3) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    f32 targetDistance = i_this->mPlayerDistanceXZ;
+    s16 targetAngle = i_this->mPlayerAngleY;
+    if (coOpSelectSfTargetState(i_this, "e_sf.pl_check", false,
+                                dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState,
+                                &targetDistance, &targetAngle, NULL) &&
+        targetDistance < i_distance) {
+        s16 angle_delta = a_this->shape_angle.y - targetAngle;
+        if (angle_delta < param_3 && angle_delta > (s16)-param_3 &&
+            !other_bg_check(i_this, targetState.actor)) {
+            return 1;
+        }
+    }
+#else
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
 
     if (i_this->mPlayerDistanceXZ < i_distance) {
@@ -318,6 +402,7 @@ static int pl_check(e_sf_class* i_this, f32 i_distance, s16 param_3) {
             return 1;
         }
     }
+#endif
 
     for (int i = 0; i <= 2; i++) {
         if (i_this->mCcSphs[i].ChkCoHit()) {
@@ -399,7 +484,14 @@ static void e_sf_normal(e_sf_class* i_this) {
 
 static void e_sf_drawback(e_sf_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectSfTargetState(i_this, "e_sf.drawback", false,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL, NULL,
+                            NULL);
+#else
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+#endif
 
     switch (i_this->mActionPhase) {
         case PHASE_INIT:
@@ -408,7 +500,12 @@ static void e_sf_drawback(e_sf_class* i_this) {
             a_this->speedF = KREG_F(4) + -5.0f;
             i_this->mInvulnerabilityTimer = 10;
             i_this->mSound.startCreatureVoice(Z2SE_EN_SF_V_DRAWBACK, -1);
+#if TARGET_PC
+            // Co-op: drawback should face away from the current combat target, not P1.
+            i_this->mAngleYOffset = targetState.shapeAngleY + 0x8000;
+#else
             i_this->mAngleYOffset = player->shape_angle.y + 0x8000;
+#endif
             break;
 
         case DRAWBACK_PHASE_END:
@@ -578,7 +675,14 @@ static void e_sf_attack_0(e_sf_class* i_this) {
     if (i_this->mHitCheckFlag) {
         fopAc_ac_c* actor_p = at_hit_check(i_this);
         if (actor_p != NULL && fopAcM_GetName(actor_p) == fpcNm_ALINK_e) {
+#if TARGET_PC
+            // Co-op: enemy attack guard checks belong to the defender the sword touched.
+            const dusk::coop::defender_owner::DefenderOwnerResult defender =
+                coOpRecordSfGuardedAttackHit(i_this, "e_sf.attack_0_guard");
+            if (defender.guarded) {
+#else
             if (daPy_getPlayerActorClass()->checkPlayerGuard()) {
+#endif
                 i_this->mpModelMorf->setPlaySpeed(0.0f);
                 i_this->mAction = ACTION_FIGHT_RUN;
                 i_this->mActionPhase = FIGHT_RUN_PHASE_0;
@@ -631,7 +735,14 @@ static void e_sf_attack(e_sf_class* i_this) {
     if (i_this->mHitCheckFlag) {
         fopAc_ac_c* actor_p = at_hit_check(i_this);
         if (actor_p != NULL && fopAcM_GetName(actor_p) == fpcNm_ALINK_e) {
+#if TARGET_PC
+            // Co-op: enemy attack guard checks belong to the defender the sword touched.
+            const dusk::coop::defender_owner::DefenderOwnerResult defender =
+                coOpRecordSfGuardedAttackHit(i_this, "e_sf.attack_guard");
+            if (defender.guarded) {
+#else
             if (daPy_getPlayerActorClass()->checkPlayerGuard()) {
+#endif
                 i_this->mpModelMorf->setPlaySpeed(0.0f);
                 i_this->mAction = ACTION_FIGHT_RUN;
                 i_this->mActionPhase = FIGHT_RUN_PHASE_0;
@@ -939,7 +1050,9 @@ static void crash_eff(e_sf_class* i_this) {
 
 static void damage_check(e_sf_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
+#if !TARGET_PC
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
 
     i_this->mStts.Move();
 
@@ -955,6 +1068,21 @@ static void damage_check(e_sf_class* i_this) {
         if (i_this->mCcSphs[i].ChkTgHit()) {
             i_this->mAtInfo.mpCollider = i_this->mCcSphs[i].GetTgHitObj();
             cc_at_check(a_this, &i_this->mAtInfo);
+#if TARGET_PC
+            // Co-op: Stalfos cut/head-jump reactions follow the player who hit it.
+            const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+                dusk::coop::damage_owner::resolveDamageOwner(a_this, i_this->mAtInfo.mpCollider);
+            dusk::coop::damage_owner::recordDamageOwnerHit("e_sf.damage", a_this, damageOwner,
+                                                           &i_this->mAtInfo);
+            daPy_py_c* ownerPlayer =
+                dusk::coop::damage_owner::resolveDamageOwnerPlayer(damageOwner);
+            int ownerCutType = damageOwner.cutType;
+            int ownerCutCount = damageOwner.cutCount;
+#else
+            daPy_py_c* ownerPlayer = player;
+            int ownerCutType = daPy_getPlayerActorClass()->getCutType();
+            int ownerCutCount = daPy_getPlayerActorClass()->getCutCount();
+#endif
 
             if (i_this->mAtInfo.mHitType == 0x10) {
                 if (i_this->mAtInfo.mpCollider->ChkAtType(AT_TYPE_BOOMERANG)) {
@@ -975,7 +1103,7 @@ static void damage_check(e_sf_class* i_this) {
                     unkFlag2 = true;
                 }
 
-                if (i_this->mAtInfo.mpCollider->ChkAtType(AT_TYPE_BOMB) || (daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_HEAD_JUMP || i_this->mAtInfo.mpCollider->ChkAtType(AT_TYPE_IRON_BALL))) {
+                if (i_this->mAtInfo.mpCollider->ChkAtType(AT_TYPE_BOMB) || (ownerCutType == daPy_py_c::CUT_TYPE_HEAD_JUMP || i_this->mAtInfo.mpCollider->ChkAtType(AT_TYPE_IRON_BALL))) {
                     if (i_this->mAction == ACTION_CRASH || i_this->mAtInfo.mpCollider->ChkAtType(AT_TYPE_BOMB)) {
                         fopAcM_createDisappear(a_this, &a_this->current.pos, 15, 0, 0x29);
                         fopAcM_delete(a_this);
@@ -992,7 +1120,7 @@ static void damage_check(e_sf_class* i_this) {
 
                 if (i_this->mAtInfo.mpCollider->ChkAtType(AT_TYPE_UNK)) {
                     i_this->mInvulnerabilityTimer = 20;
-                } else if (player->getCutType() == daPy_py_c::CUT_TYPE_JUMP && player->checkCutJumpCancelTurn()) {
+                } else if (ownerPlayer != NULL && ownerPlayer->getCutType() == daPy_py_c::CUT_TYPE_JUMP && ownerPlayer->checkCutJumpCancelTurn()) {
                     i_this->mInvulnerabilityTimer = 3;
                     i_this->field_0x6ad = 1;
                 } else {
@@ -1010,7 +1138,7 @@ static void damage_check(e_sf_class* i_this) {
                     i_this->mHitDirectionY = i_this->mAtInfo.mHitDirection.y;
 
                     if (i_this->arg3 != 0xFF) {
-                        if (daPy_getPlayerActorClass()->getCutCount() >= 4) {
+                        if (ownerCutCount >= 4) {
                             i_this->mInvulnerabilityTimer = 40;
                             i_this->mTimers[1] = 40;
                         }
@@ -1037,13 +1165,28 @@ static void damage_check(e_sf_class* i_this) {
 
 static void action(e_sf_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
+#if !TARGET_PC
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+#endif
     cXyz spcc, spd8;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+#endif
 
     i_this->field_0x6ae = 0;
+#if TARGET_PC
+    // Co-op: the native dispatcher cache feeds Stalfos chase, spacing, and attack gates.
+    coOpSelectSfTargetState(i_this, "e_sf.action",
+                            i_this->mAction == ACTION_ATTACK ||
+                                i_this->mAction == ACTION_ATTACK_0,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
+                            &i_this->mPlayerDistanceXZ, &i_this->mPlayerAngleY,
+                            &i_this->mPlayerAngleX);
+#else
     i_this->mPlayerDistanceXZ = fopAcM_searchPlayerDistanceXZ(a_this);
     i_this->mPlayerAngleY = fopAcM_searchPlayerAngleY(a_this);
     i_this->mPlayerAngleX = fopAcM_searchPlayerAngleX(a_this);
+#endif
     i_this->mRecognizeDist = l_HIO.p_recognize_dist_m;
     damage_check(i_this);
     s8 unkFlag1 = 0;
@@ -1199,12 +1342,27 @@ static void action(e_sf_class* i_this) {
                 i_this->mTargetHeadBobAngleY = cM_rndFX(2500.0f);
             }
         } else {
+#if TARGET_PC
+            // Co-op: head tracking follows the same retained combat target as the action cache.
+            cXyz targetEye = a_this->eyePos;
+            if (targetState.actor != NULL) {
+                targetEye = targetState.actor->eyePos;
+            }
+#endif
             if (i_this->field_0x6ae == 1) {
+#if TARGET_PC
+                spcc = targetEye - a_this->current.pos;
+#else
                 spcc = player->eyePos - a_this->current.pos;
+#endif
             } else if (i_this->field_0x6ae == 2) {
                 spcc = i_this->field_0x6f8 - a_this->current.pos;
             } else {
+#if TARGET_PC
+                spcc = targetEye - a_this->current.pos;
+#else
                 spcc = player->eyePos - a_this->current.pos;
+#endif
             }
             spcc.y += -(TREG_F(2) + 150.0f) * l_HIO.basic_size;
             s16 targetAngleY = cM_atan2s(spcc.x, spcc.z) - a_this->shape_angle.y;
@@ -1681,6 +1839,10 @@ static int daE_SF_IsDelete(e_sf_class* i_this) {
 static int daE_SF_Delete(e_sf_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
 
+#if TARGET_PC
+    // Co-op: remove retained combat target/debug state before actor storage can be reused.
+    dusk::coop::clearAllEnemyTargets(a_this);
+#endif
     fopAcM_GetID(a_this);
     dComIfG_resDelete(&i_this->mPhase, "E_sf");
 

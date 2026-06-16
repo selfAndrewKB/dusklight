@@ -9,6 +9,11 @@
 #include "d/actor/d_a_alink.h"
 #include "d/d_debug_viewer.h"
 #include "f_op/f_op_actor_enemy.h"
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
 #include <cstring>
 
 class daE_HP_HIO_c : public JORReflexible {
@@ -36,6 +41,56 @@ daE_HP_HIO_c::daE_HP_HIO_c() {
     attackDelayOnApproach = 50;
     rangeDisplay = 0;
 }
+
+#if TARGET_PC
+// Co-op: Poe target facts and wolf-sense gates come from active co-op slots, not P1 globals.
+static bool coOpSelectHpTargetState(
+    daE_HP_c* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance,
+    s16* angle_y) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        target.found ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+                     : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    return target.found;
+}
+
+static bool coOpHpWolfPredicate(
+    const dusk::coop::selected_target_state::SelectedTargetState& state) {
+    return state.wolf;
+}
+
+static bool coOpHpWolfSensePredicate(
+    const dusk::coop::selected_target_state::SelectedTargetState& state) {
+    return state.wolfSenseActive;
+}
+
+static dusk::coop::selected_target_state::SelectedTargetState coOpFindHpWolfSensePlayer(
+    daE_HP_c* i_this, const char* label) {
+    return dusk::coop::selected_target_state::findNearestPlayerState(
+        i_this, label, coOpHpWolfSensePredicate, i_this->mDisHani);
+}
+#endif
 
 #if DEBUG
 void daE_HP_HIO_c::genMessage(JORMContext* ctx) {
@@ -303,17 +358,35 @@ void daE_HP_c::setActionMode(int param_0, int i_mode) {
 }
 
 bool daE_HP_c::mChkDistance(f32 param_0) {
+#if TARGET_PC
+    f32 targetDistance = 0.0f;
+    if (coOpSelectHpTargetState(this, "e_hp.distance", false,
+                                dusk::coop::EnemyTargetMode::StickyCombat, NULL,
+                                &targetDistance, NULL) &&
+        targetDistance < param_0) {
+        return true;
+    }
+#else
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
     cXyz vecToPlayer = player->current.pos - current.pos;
     if (vecToPlayer.abs() < param_0) {
         return true;
-    } else {
-        return false;
     }
+#endif
+
+    return false;
 }
 
 void daE_HP_c::damage_check() {
-    if (health <= 1 || !daPy_py_c::checkNowWolf() || field_0x71e != 0 || field_0x790 < 250.0f ||
+#if TARGET_PC
+    const dusk::coop::selected_target_state::SelectedTargetState wolfState =
+        dusk::coop::selected_target_state::findNearestPlayerState(this, "e_hp.damage_wolf",
+                                                                  coOpHpWolfPredicate, mDisHani);
+    const bool anyWolf = wolfState.available;
+#else
+    const bool anyWolf = daPy_py_c::checkNowWolf();
+#endif
+    if (health <= 1 || !anyWolf || field_0x71e != 0 || field_0x790 < 250.0f ||
         mAction == 5 || mAction == 6)
     {
         return;
@@ -337,6 +410,12 @@ void daE_HP_c::damage_check() {
         mAtInfo.mpCollider = mCyl1.GetTgHitObj();
         mAtInfo.field_0x18 = 31;
         cc_at_check(this, &mAtInfo);
+#if TARGET_PC
+        // Co-op: Poe hit diagnostics and owner-sensitive shared cc_at_check reads follow the hit owner.
+        const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+            dusk::coop::damage_owner::resolveDamageOwner(this, mAtInfo.mpCollider);
+        dusk::coop::damage_owner::recordDamageOwnerHit("e_hp.damage", this, damageOwner, &mAtInfo);
+#endif
 
         unkXyz1 = current.pos - *mCyl1.GetTgHitPosP();
         unkXyz2.set(*mCyl1.GetTgHitPosP());
@@ -360,7 +439,9 @@ void daE_HP_c::damage_check() {
 }
 
 void daE_HP_c::executeWait() {
+#if !TARGET_PC
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     cXyz homeToPlayer;
 
     switch (movemode) {
@@ -372,7 +453,18 @@ void daE_HP_c::executeWait() {
 
         movemode = 1;
     case 1:
+#if TARGET_PC
+        // Co-op: Poe wake range checks use the nearest active player, preserving the native radius.
+        {
+            dusk::coop::selected_target_state::SelectedTargetState targetState;
+            coOpSelectHpTargetState(this, "e_hp.wait", false,
+                                    dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState,
+                                    NULL, NULL);
+            homeToPlayer = home.pos - targetState.pos;
+        }
+#else
         homeToPlayer = home.pos - player->current.pos;
+#endif
         if (homeToPlayer.abs() < mDisHani) {
             mStts.SetWeight(100);
 
@@ -429,7 +521,13 @@ void daE_HP_c::executeMove() {
             setActionMode(0, 100);
         } else {
             if (mChkDistance(300.0f + NREG_F(7))) {
-                if (!daPy_py_c::checkNowWolfPowerUp()) {
+#if TARGET_PC
+                const bool wolfSenseActive =
+                    coOpFindHpWolfSensePlayer(this, "e_hp.move_wolf_sense").available;
+#else
+                const bool wolfSenseActive = daPy_py_c::checkNowWolfPowerUp();
+#endif
+                if (!wolfSenseActive) {
                     field_0x71f++;
                     if (field_0x71f < l_HIO.attackDelayOnApproach) {
                         speedF = 0.0f;
@@ -444,7 +542,15 @@ void daE_HP_c::executeMove() {
         break;
     }
 
+#if TARGET_PC
+    // Co-op: movement steering follows the retained combat target, not P1.
+    s16 targetAngle = current.angle.y;
+    coOpSelectHpTargetState(this, "e_hp.move", false,
+                            dusk::coop::EnemyTargetMode::StickyCombat, NULL, NULL, &targetAngle);
+    cLib_addCalcAngleS2(&current.angle.y, targetAngle, 4, 0x800);
+#else
     cLib_addCalcAngleS2(&current.angle.y, fopAcM_searchPlayerAngleY(this), 4, 0x800);
+#endif
 }
 
 void daE_HP_c::executeRetMove() {
@@ -465,7 +571,13 @@ void daE_HP_c::executeRetMove() {
         vecToHome.y = 0.0f;
 
         if (vecToHome.abs() < mDisHani * 0.5f && mChkDistance(300.0f + NREG_F(7)) != 0) {
-            if (daPy_py_c::checkNowWolfPowerUp() == 0) {
+#if TARGET_PC
+            const bool wolfSenseActive =
+                coOpFindHpWolfSensePlayer(this, "e_hp.ret_move_wolf_sense").available;
+#else
+            const bool wolfSenseActive = daPy_py_c::checkNowWolfPowerUp() != 0;
+#endif
+            if (wolfSenseActive == 0) {
                 field_0x71f++;
                 if (field_0x71f < l_HIO.attackDelayOnApproach) {
                     speedF = 0.0f;
@@ -490,7 +602,18 @@ void daE_HP_c::executeAttack() {
     cXyz vecToHome;
     switch (movemode) {
     case 0:
+#if TARGET_PC
+        // Co-op: attack startup commits to the selected combat target.
+        {
+            s16 targetAngle = current.angle.y;
+            coOpSelectHpTargetState(this, "e_hp.attack", true,
+                                    dusk::coop::EnemyTargetMode::StickyCombat, NULL, NULL,
+                                    &targetAngle);
+            current.angle.y = targetAngle;
+        }
+#else
         current.angle.y = fopAcM_searchPlayerAngleY(this);
+#endif
         speedF = 20.0f + NREG_F(10);
         setBck(5, 0, 3.0f, 1.0f);
 
@@ -572,7 +695,14 @@ void daE_HP_c::executeDamage() {
 }
 
 void daE_HP_c::executeDown() {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectHpTargetState(this, "e_hp.down", false,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL, NULL);
+    daPy_py_c* player = targetState.player;
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     dBgS_LinChk dStack_98;
     cXyz unkXyz1;
     cXyz cStack_b0;
@@ -605,9 +735,16 @@ void daE_HP_c::executeDown() {
             speedF = 10.0f;
         }
 
+#if TARGET_PC
+        // Co-op: down-state lock cleanup belongs to the selected local wolf if one exists.
+        if (player != NULL && player->checkWolfLock(this)) {
+            player->cancelWolfLock(this);
+        }
+#else
         if (daPy_getPlayerActorClass()->checkWolfLock(this)) {
             daPy_getPlayerActorClass()->cancelWolfLock(this);
         }
+#endif
         onWolfNoLock();
 
         field_0x78a = 0;
@@ -779,6 +916,11 @@ void daE_HP_c::executeDead() {
 void daE_HP_c::action() {
     s16 angleDiff = 0;
     s32 unkFlag1 = 0;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectHpTargetState(this, "e_hp.action", mAction == 3,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL, NULL);
+#endif
 
     if (field_0x78b != 0) {
         field_0x78b = 0;
@@ -822,7 +964,9 @@ void daE_HP_c::action() {
         mSound1.startCreatureSoundLevel(Z2SE_EN_HP_MOVE, 0, -1);
     }
 
+#if !TARGET_PC
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
     if (mObjAcch.GetGroundH() != -G_CM3D_F_INF) {
         if (arg0 != 2 || mAction == 5 || mAction == 6) {
             gravity = -3.0f;
@@ -849,7 +993,12 @@ void daE_HP_c::action() {
             gravity = 0.0f;
             cLib_addCalc2(&current.pos.y, home.pos.y, 0.8f, 10.0f + BREG_F(17));
         } else {
+#if TARGET_PC
+            // Co-op: hover height tracks the selected combat target's local position.
+            cLib_addCalc2(&current.pos.y, targetState.pos.y, 0.8f, 10.0f + BREG_F(17));
+#else
             cLib_addCalc2(&current.pos.y, player->current.pos.y, 0.8f, 10.0f + BREG_F(17));
+#endif
         }
     } else {
         gravity = 0.0f;
@@ -895,9 +1044,21 @@ void daE_HP_c::action() {
         cLib_addCalcAngleS2(&shape_angle.y, current.angle.y, 8, 0x800);
     }
 
-    if (daPy_py_c::checkNowWolfPowerUp() || mAction == 5) {
+#if TARGET_PC
+    const dusk::coop::selected_target_state::SelectedTargetState senseState =
+        coOpFindHpWolfSensePlayer(this, "e_hp.visibility_wolf_sense");
+    const bool wolfSenseActive = senseState.available;
+#else
+    const bool wolfSenseActive = daPy_py_c::checkNowWolfPowerUp();
+#endif
+    if (wolfSenseActive || mAction == 5) {
         if (field_0x789 == 0) {
+#if TARGET_PC
+            // Co-op: Poe reveal/attention range is opened by any active wolf-sense player.
+            unkXyz1 = home.pos - (wolfSenseActive ? senseState.pos : targetState.pos);
+#else
             unkXyz1 = home.pos - player->current.pos;
+#endif
             if (unkXyz1.abs() < mDisHani) {
                 setActionMode(0, 10);
                 field_0x789 = 1;
@@ -920,15 +1081,27 @@ void daE_HP_c::action() {
     }
 
     if (field_0x790 > 250.0f) {
+#if TARGET_PC
+        unkXyz1 = home.pos - targetState.pos;
+#else
         unkXyz1 = home.pos - player->current.pos;
+#endif
         fopAcM_OnStatus(this, 0);
         attention_info.flags |= fopAc_AttnFlag_BATTLE_e;
 
         if (unkXyz1.abs() < mDisHani) {
-            if (abs((s16)(current.angle.y - fopAcM_searchPlayerAngleY(this))) < 0x4000 &&
+#if TARGET_PC
+            s16 targetAngle = current.angle.y;
+            coOpSelectHpTargetState(this, "e_hp.visibility_angle", false,
+                                    dusk::coop::EnemyTargetMode::StickyCombat, NULL, NULL,
+                                    &targetAngle);
+#else
+            s16 targetAngle = fopAcM_searchPlayerAngleY(this);
+#endif
+            if (abs((s16)(current.angle.y - targetAngle)) < 0x4000 &&
                 (mAction == 0 || mAction == 1 || mAction == 3 && movemode == 2))
             {
-                angleDiff = -(shape_angle.y - fopAcM_searchPlayerAngleY(this));
+                angleDiff = -(shape_angle.y - targetAngle);
                 if (angleDiff < -10000) {
                     angleDiff = -10000;
                 } else if (angleDiff > 10000) {
@@ -993,7 +1166,12 @@ void daE_HP_c::mtx_set() {
         field_0x76c.x = 0;
     }
 
-    if (mAction == 3 && field_0x71c == 0 && daPy_py_c::checkNowWolfPowerUp()) {
+#if TARGET_PC
+    const bool wolfSenseActive = coOpFindHpWolfSensePlayer(this, "e_hp.attack_effect_wolf_sense").available;
+#else
+    const bool wolfSenseActive = daPy_py_c::checkNowWolfPowerUp();
+#endif
+    if (mAction == 3 && field_0x71c == 0 && wolfSenseActive) {
         field_0xddc = dComIfGp_particle_set(field_0xddc, 0x878b, &field_0xde0, &shape_angle, 0);
         JPABaseEmitter* emitter = dComIfGp_particle_getEmitter(field_0xddc);
         if (emitter != NULL) {
@@ -1116,6 +1294,10 @@ static int daE_HP_IsDelete(daE_HP_c* i_this) {
 }
 
 int daE_HP_c::_delete() {
+#if TARGET_PC
+    // Co-op: clear retained combat/debug state before this Poe actor can be reused.
+    dusk::coop::clearAllEnemyTargets(this);
+#endif
     dComIfG_resDelete(&mPhaseReq, "E_HP");
 
     if (field_0xdf9 != 0) {

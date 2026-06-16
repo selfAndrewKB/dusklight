@@ -11,6 +11,12 @@
 #include "f_op/f_op_kankyo_mng.h"
 #include "d/d_s_play.h"
 #include "f_op/f_op_actor_enemy.h"
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#include "dusk/coop/wolf_catch_owner.h"
+#endif
 #include <cstring>
 
 class daE_MS_HIO_c : public JORReflexible {
@@ -43,11 +49,66 @@ static void anm_init(e_ms_class* i_this, int param_2, f32 param_3, u8 param_4, f
     i_this->mNextSound = param_2;
 }
 
+#if TARGET_PC
+// Co-op: Rat combat keeps one retained target; labels describe the native decision using it.
+static bool coOpSelectMsTargetState(
+    e_ms_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance,
+    s16* angle_y) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        target.found ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+                     : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    return target.found;
+}
+
+static bool coOpMsWolfBarkPredicate(
+    const dusk::coop::selected_target_state::SelectedTargetState& state) {
+    return state.wolfBark;
+}
+
+static bool coOpMsRoom15LowPlayerPredicate(
+    const dusk::coop::selected_target_state::SelectedTargetState& state) {
+    return state.pos.y < -400.0f;
+}
+#endif
+
 static int pl_check(e_ms_class* i_this, f32 i_dist) {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    f32 targetDistance = i_this->mPlayerDistance;
+    if (coOpSelectMsTargetState(i_this, "e_ms.pl_check", false,
+                                dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState,
+                                &targetDistance, NULL) &&
+        targetDistance < i_dist && !fopAcM_otherBgCheck(i_this, targetState.actor)) {
+        return 1;
+    }
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
     if (i_this->mPlayerDistance < i_dist && !fopAcM_otherBgCheck(i_this, player)) {
         return 1;
     }
+#endif
 
     return 0;
 }
@@ -554,7 +615,13 @@ static void e_ms_damage(e_ms_class* i_this) {
 
 static void e_ms_wolfbite(e_ms_class* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)i_this;
+#if TARGET_PC
+    dusk::coop::wolf_catch_owner::WolfCatchOwnerState catchOwner =
+        dusk::coop::wolf_catch_owner::updateWolfCatch("e_ms.wolfbite", actor);
+    daPy_py_c* player = catchOwner.localPlayer;
+#else
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
     switch (i_this->mMode) {
     case 0:
         anm_init(i_this, 4, 0.0f, 0, 1.0f);
@@ -562,14 +629,18 @@ static void e_ms_wolfbite(e_ms_class* i_this) {
         i_this->mSound.startCreatureVoice(Z2SE_EN_MS_V_DAMAGE, -1);
         break;
     case 1:
-        if (!player->checkWolfEnemyCatchOwn(i_this)) {
+        if (player == NULL || !player->checkWolfEnemyCatchOwn(i_this)) {
             i_this->mAction = 4;
             i_this->mMode = 0;
             i_this->mSound.startCreatureVoice(Z2SE_EN_MS_V_DEATH, -1);
             i_this->health = 0;
-            if (player->checkWolfEnemyLeftThrow()) {
+#if TARGET_PC
+            // Co-op: throw direction belongs to the wolf slot that retained the catch.
+            dusk::coop::wolf_catch_owner::clearWolfCatch("e_ms.wolfbite_release", actor);
+#endif
+            if (player != NULL && player->checkWolfEnemyLeftThrow()) {
                 i_this->current.angle.y = player->shape_angle.y - 0x4000;
-            } else {
+            } else if (player != NULL) {
                 i_this->current.angle.y = player->shape_angle.y + 0x4000;
             }
         }
@@ -586,12 +657,22 @@ static void e_ms_standby(e_ms_class* i_this) {
 }
 
 static void damage_check(e_ms_class* i_this) {
+#if !TARGET_PC
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
     if (i_this->mCooldown1 == 0) {
         i_this->mDStts.Move();
         if (i_this->mSph1.ChkTgHit()) {
             i_this->mAtInfo.mpCollider = i_this->mSph1.GetTgHitObj();
             cc_at_check(i_this, &i_this->mAtInfo);
+#if TARGET_PC
+            // Co-op: wolf catch starts from the player who caused the hit, not P1.
+            const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+                dusk::coop::damage_owner::resolveDamageOwner(i_this, i_this->mAtInfo.mpCollider);
+            dusk::coop::damage_owner::recordDamageOwnerHit("e_ms.damage", i_this, damageOwner,
+                                                           &i_this->mAtInfo);
+            daPy_py_c* player = dusk::coop::damage_owner::resolveDamageOwnerPlayer(damageOwner);
+#endif
             if (i_this->mAtInfo.mpCollider->ChkAtType(AT_TYPE_HOOKSHOT) ||
                 i_this->mAtInfo.mpCollider->ChkAtType(AT_TYPE_SLINGSHOT))
             {
@@ -605,8 +686,12 @@ static void damage_check(e_ms_class* i_this) {
             }
 
             if (i_this->mAtInfo.mpCollider->ChkAtType(AT_TYPE_WOLF_ATTACK) &&
-                player->onWolfEnemyCatch(i_this))
+                player != NULL && player->onWolfEnemyCatch(i_this))
             {
+#if TARGET_PC
+                dusk::coop::wolf_catch_owner::beginWolfCatchFromDamageOwner(
+                    "e_ms.wolfbite_begin", i_this, damageOwner);
+#endif
                 i_this->mAction = 5;
                 i_this->mMode = 0;
                 i_this->mCooldown1 = 200;
@@ -632,8 +717,15 @@ static void damage_check(e_ms_class* i_this) {
 
 static void action(e_ms_class* i_this) {
     fopAc_ac_c* actor = i_this;
+#if TARGET_PC
+    // Co-op: the native action dispatcher cache feeds rat chase, jump, and return gates.
+    coOpSelectMsTargetState(i_this, "e_ms.action", i_this->mAction == 1,
+                            dusk::coop::EnemyTargetMode::StickyCombat, NULL,
+                            &i_this->mPlayerDistance, &i_this->mPlayerAngleY);
+#else
     i_this->mPlayerDistance = fopAcM_searchPlayerDistance(actor);
     i_this->mPlayerAngleY = fopAcM_searchPlayerAngleY(actor);
+#endif
     damage_check(i_this);
     s8 sVar10 = 0;
     s8 sVar11 = 1;
@@ -710,7 +802,14 @@ static void action(e_ms_class* i_this) {
         }
     }
 
+#if TARGET_PC
+    const dusk::coop::selected_target_state::SelectedTargetState barkState =
+        dusk::coop::selected_target_state::findNearestPlayerState(i_this, "e_ms.wolf_bark",
+                                                                  coOpMsWolfBarkPredicate, 500.0f);
+    if (sVar10 && barkState.available) {
+#else
     if ((sVar10 && i_this->mPlayerDistance < 500.0f) && daPy_getPlayerActorClass()->checkWolfBark()) {
+#endif
         i_this->mAction = 0;
         i_this->mMode = 5;
         anm_init(i_this, 8, 1.0f, 0, 1.0f);
@@ -859,6 +958,19 @@ static int daE_MS_Execute(e_ms_class* i_this) {
     }
 
     if (strcmp(dComIfGp_getStartStageName(), "D_MN10") == 0 && fopAcM_GetRoomNo(i_this) == 15) {
+#if TARGET_PC
+        // Co-op: this authored room trigger asks whether any active player crossed the low plane.
+        const dusk::coop::selected_target_state::SelectedTargetState lowState =
+            dusk::coop::selected_target_state::findNearestPlayerState(
+                i_this, "e_ms.room15_low_player", coOpMsRoom15LowPlayerPredicate);
+        if (lowState.available && i_this->current.pos.y > -400.0f &&
+            !dComIfGs_isSwitch(10, fopAcM_GetRoomNo(i_this)))
+        {
+            i_this->field_0xba8 = 1;
+        } else {
+            i_this->field_0xba8 = 0;
+        }
+#else
         fopAc_ac_c* player = dComIfGp_getPlayer(0);
         if (player->current.pos.y < -400.0f && i_this->current.pos.y > -400.0f &&
             !dComIfGs_isSwitch(10, fopAcM_GetRoomNo(i_this)))
@@ -867,13 +979,25 @@ static int daE_MS_Execute(e_ms_class* i_this) {
         } else {
             i_this->field_0xba8 = 0;
         }
+#endif
     }
 
     J3DModel* model = i_this->mpModelMorf->getModel();
     action(i_this);
 
     if (i_this->mAction == 5) {
+#if TARGET_PC
+        // Co-op: attach to the retained wolf slot's mouth matrix during the catch lifetime.
+        dusk::coop::wolf_catch_owner::WolfCatchOwnerState catchOwner =
+            dusk::coop::wolf_catch_owner::updateWolfCatch("e_ms.wolfbite.matrix", i_this);
+        if (catchOwner.localPlayer != NULL) {
+            PSMTXCopy(catchOwner.localPlayer->getWolfMouthMatrix(), mDoMtx_stack_c::get());
+        } else {
+            PSMTXCopy(daPy_getLinkPlayerActorClass()->getWolfMouthMatrix(), mDoMtx_stack_c::get());
+        }
+#else
         PSMTXCopy(daPy_getLinkPlayerActorClass()->getWolfMouthMatrix(), mDoMtx_stack_c::get());
+#endif
         mDoMtx_stack_c::multVecZero(&i_this->current.pos);
         mDoMtx_stack_c::YrotM(0);
         mDoMtx_stack_c::XrotM(-0x8000);
@@ -947,6 +1071,11 @@ static int daE_MS_IsDelete(e_ms_class* i_this) {
 }
 
 static int daE_MS_Delete(e_ms_class* i_this) {
+#if TARGET_PC
+    // Co-op: clear retained combat and wolf-catch state before this actor slot is reused.
+    dusk::coop::clearAllEnemyTargets(i_this);
+    dusk::coop::wolf_catch_owner::clearWolfCatch("e_ms.delete", i_this);
+#endif
     dComIfG_resDelete(&i_this->mPhaseReq, "E_MS");
     if (i_this->mHIOInit) {
         hio_set = 0;
