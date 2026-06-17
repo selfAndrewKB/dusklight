@@ -6686,7 +6686,12 @@ int daAlink_c::procWolfSwimUpInit() {
     mZ2Link.setInWater(false);
     setSingleAnimeWolfParam(WANM_SWIM_RESURFACE, &mpHIO->mWolf.mWlSwim.m.mSurfacingAnm);
     setFaceBasicTexture(FTANM_WL_SWIMP);
+#if TARGET_PC
+    // Co-op: wolf swim status is owner-local so water actors can recognize P2's swim state.
+    daAlink_setOwnerCameraStatus0(this, 0x100000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x100000);
+#endif
     seStartMapInfo(Z2SE_WL_OUTOF_WATER);
     mProcVar5.field_0x3012 = 1;
     return 1;
@@ -6735,7 +6740,12 @@ int daAlink_c::procWolfSwimWaitInit(int param_0) {
     }
 
     setSingleAnimeWolfBaseSpeed(WANM_SWIM_WAIT, anm_speed, morf);
+#if TARGET_PC
+    // Co-op: wolf swim status is owner-local so water actors can recognize P2's swim state.
+    daAlink_setOwnerCameraStatus0(this, 0x100000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x100000);
+#endif
 
     if (checkNoResetFlg0(FLG0_SWIM_UP)) {
         current.pos.y = mWaterY;
@@ -6786,7 +6796,12 @@ int daAlink_c::procWolfSwimMoveInit() {
         speed.y = 0.0f;
     }
 
+#if TARGET_PC
+    // Co-op: wolf swim status is owner-local so water actors can recognize P2's swim state.
+    daAlink_setOwnerCameraStatus0(this, 0x100000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x100000);
+#endif
     return 1;
 }
 

@@ -135,6 +135,13 @@ presentation wrinkle: if a dive/staging gate compares target angle to camera ang
 slot's presentation camera when available instead of P1's camera. Do not collapse those families
 into one broader "flying enemy" helper unless more validated enemies prove the same narrower shape.
 
+Kargarok (`E_KR`) confirms that ordinary flyer combat can share the compact-flyer conversion shape
+even when the file also contains mounted/path/setpiece code. View/wake, auto movement, dive attack,
+horse pursuit, dispatcher-cache distance/angle/pitch, and attack guard contact belong to
+`enemy_targeting`, `selected_target_state`, `horse_owner`, and `defender_owner`. Coach/path,
+cargo-bomb, boomerang lock-cancel, and authored setpiece targets remain separate mounted/setpiece or
+item-awareness questions and should not be flattened into the ordinary Combat owner.
+
 Rat (`E_MS`) and Goose (`E_YG`) define the batchable small-ground wolf-bite pattern: fill the native
 angle/distance dispatcher cache from the Combat owner, answer wolf-bark fear with an active-player
 `selected_target_state` predicate scan, start wolf-bite ownership from `damage_owner`, then keep
@@ -191,12 +198,26 @@ Static/ranged enemies follow the same identity split but need stricter callsite 
 may acquire immediately, while breath, bullet, or spawned-child attack continuation should read the
 retained Combat target through `selected_target_state`. Big Freezard (`E_FB`) uses this for vertical
 eligibility, head pitch, caged/sweep side gates, Mini Freezard spawn facing, and active-player
-bullet hit counting. Big Freezard also confirmed that `dComIfGp_checkPlayerStatus0(0, 0x02000000)`
-is the heavy-boots status bit (`FLG0_EQUIP_HVY_BOOTS`), so selected-player status0 gates belong in
-`selected_target_state` once the enemy already knows which player it means.
+bullet hit counting. Big Freezard and Bombfish split two similar-looking ownership families:
+equipment facts such as heavy boots (`FLG0_EQUIP_HVY_BOOTS`) must come from the selected player
+actor through `selected_target_state`, while true camera/status flags remain slot-local
+`player_camera_status` checks once the enemy already knows which player it means.
 Shell Blade (`E_SB`) added another selected-target status proof: status0 `0x4000` is sampled from
 the selected slot for hookshot/player-camera-state shell reaction gates instead of asking P1's
 global status.
+Bombfish (`E_BG`) and Skullfish (`E_SG`) add the first quick water-enemy batch pattern. Ordinary
+water wake, swim/charge/follow, selected-player heavy-boots checks, selected-slot hook-carry gates,
+camera-relative movement, retained bite release/status, and damage knockback ownership can use the
+existing Combat, selected-target-state, player-camera-status, and damage-owner APIs. Fishing-rod
+bait/eat searches, bomb/cargo state, hook-carry object behavior, and broader water/fishing ownership
+are object-owned or item-awareness surfaces; leave them documented instead of routing them through
+sticky Combat.
+Bombfish also proved the producer side of the native-first rule: an enemy-side read can be converted
+correctly and still fail if P2 never receives the vanilla player state that P1 gets. `E_BG` used
+status0 `0x100000` as a water/swim eligibility gate, but that bit was still produced by ALINK swim
+lifecycles only through global P1 status. Future conversions that read status bits, mode flags,
+equipment/form facts, or cached action fields must grep and audit the matching set/update plus
+clear/reset producers before the behavior is considered covered.
 Dodongo (`E_DD`) confirmed the dispatcher-cache pattern: some enemies compute one native
 "player angle/distance" pair at the top of the action dispatcher and let every state consume those
 fields. Convert that cache from the Combat owner once per tick, then leave search, chase, attack,

@@ -17,7 +17,10 @@
 #include "f_op/f_op_camera_mng.h"
 
 #if TARGET_PC
+#include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/player_attention.h"
+#include "dusk/coop/player_camera_status.h"
+#include "dusk/coop/selected_target_state.h"
 #endif
 
 class daE_BG_HIO_c : public JORReflexible {
@@ -86,6 +89,57 @@ dCcD_SrcSph cc_bg_at_src = {
                 {{0.0f, 0.0f, 0.0f}, 40.0f} // mSph
     } // mSphAttr
 };
+
+#if TARGET_PC
+// Co-op: Bombfish wake, swim, and charge states need the selected water target's facts.
+static bool coOpSelectBgTargetState(
+    daE_BG_c* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance, s16* angle_y) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    return true;
+}
+
+static bool coOpSelectedTargetStatus0(
+    const dusk::coop::selected_target_state::SelectedTargetState& state, u32 flag) {
+    return state.available && dusk::coop::player_camera_status::checkStatus0(state.slot, flag) != 0;
+}
+
+// Co-op: recovery/birth facing is selected-target steering, not a fresh P1 singleton read.
+static s16 coOpBgTargetAngleY(daE_BG_c* i_this, const char* label,
+                              dusk::coop::EnemyTargetMode mode, s16 fallback) {
+    s16 angle_y = fallback;
+    coOpSelectBgTargetState(i_this, label, false, mode, NULL, NULL, &angle_y);
+    return angle_y;
+}
+#endif
 }
 
 int daE_BG_c::ctrlJoint(J3DJoint* i_joint, J3DModel* i_model) {
@@ -287,7 +341,17 @@ void daE_BG_c::executeBorn() {
         }
 
         if (mBgId == 0xffffffff) {
-            if (fopAcM_searchPlayerDistance(this) < 500.0f) {
+#if TARGET_PC
+            f32 targetDistance = 99999.0f;
+            // Co-op: spawn wake proximity is an awareness question over active players.
+            if (coOpSelectBgTargetState(this, "e_bg.born", false,
+                                        dusk::coop::EnemyTargetMode::ImmediateAcquire, NULL,
+                                        &targetDistance, NULL) &&
+                targetDistance < 500.0f)
+#else
+            if (fopAcM_searchPlayerDistance(this) < 500.0f)
+#endif
+            {
                 field_0x68f = l_HIO.mJumpTime;
                 mMoveMode = 2;
             }
@@ -335,13 +399,43 @@ void daE_BG_c::executeSwim() {
     field_0x69c += field_0x6a0;
 
     if (current.pos.abs(home.pos) < l_HIO.mAttackRange) {
-        if (daPy_getPlayerActorClass()->current.pos.abs(home.pos) < l_HIO.mAttackRange &&
+#if TARGET_PC
+        // Co-op: zero-init keeps status fallbacks safe if target resolution fails during teardown.
+        dusk::coop::selected_target_state::SelectedTargetState targetState = {};
+        f32 targetDistance = 99999.0f;
+        const bool hasTarget =
+            coOpSelectBgTargetState(this, "e_bg.swim", false,
+                                    dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState,
+                                    &targetDistance, NULL);
+        fopAc_ac_c* targetActor = targetState.actor;
+        const bool hookCarryNow =
+            coOpSelectedTargetStatus0(targetState, fopAcStts_HOOK_CARRY_NOW_e);
+        if (hasTarget && targetState.pos.abs(home.pos) < l_HIO.mAttackRange &&
+            targetDistance < l_HIO.mPlayerSearchDistance)
+#else
+        daPy_py_c* targetPlayer = daPy_getPlayerActorClass();
+        fopAc_ac_c* targetActor = targetPlayer;
+        const bool hookCarryNow = dComIfGp_checkPlayerStatus0(0, fopAcStts_HOOK_CARRY_NOW_e);
+        if (targetPlayer->current.pos.abs(home.pos) < l_HIO.mAttackRange &&
             fopAcM_searchPlayerDistance(this) < l_HIO.mPlayerSearchDistance)
+#endif
         {
-            if (!fopAcM_otherBgCheck(this, daPy_getPlayerActorClass())) {
-                if (daPy_getPlayerActorClass()->checkEquipHeavyBoots()) {
+            if (!fopAcM_otherBgCheck(this, targetActor)) {
+                if (
+#if TARGET_PC
+                    targetState.equipHeavyBoots
+#else
+                    targetPlayer->checkEquipHeavyBoots()
+#endif
+                ) {
                     if (field_0x684 != -G_CM3D_F_INF) {
-                        if (daPy_getPlayerActorClass()->current.pos.y < field_0x684 - 20.0f) {
+                        if (
+#if TARGET_PC
+                            targetState.pos.y
+#else
+                            targetPlayer->current.pos.y
+#endif
+                            < field_0x684 - 20.0f) {
                             setActionMode(2, 0);
                             return;
                         }
@@ -349,7 +443,7 @@ void daE_BG_c::executeSwim() {
                         setActionMode(2, 0);
                         return;
                     }
-                } else if (dComIfGp_checkPlayerStatus0(0, fopAcStts_HOOK_CARRY_NOW_e)) {
+                } else if (hookCarryNow) {
                     setActionMode(2, 0);
                     return;
                 }
@@ -452,9 +546,27 @@ void daE_BG_c::executeAttack() {
     s16 unkShort1;
     cXyz unkXyz1;
 
+#if TARGET_PC
+    // Co-op: charge continuation uses the retained target's slot for status, aim, and camera.
+    dusk::coop::selected_target_state::SelectedTargetState targetState = {};
+    f32 targetDistance = 99999.0f;
+    s16 targetAngleY = 0;
+    const bool hasTarget =
+        coOpSelectBgTargetState(this, "e_bg.attack", true,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
+                                &targetDistance, &targetAngleY);
+    camera_process_class* camera = dComIfGp_getCamera(
+        dComIfGp_getPlayerCameraID(hasTarget ? static_cast<int>(targetState.slot) : 0));
+    cXyz playerPos = hasTarget ? targetState.pos : daPy_getPlayerActorClass()->current.pos;
+    const bool hookCarryNow =
+        coOpSelectedTargetStatus0(targetState, fopAcStts_HOOK_CARRY_NOW_e);
+#else
     camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
 
     cXyz playerPos = daPy_getPlayerActorClass()->current.pos;
+    daPy_py_c* targetPlayer = daPy_getPlayerActorClass();
+    const bool hookCarryNow = dComIfGp_checkPlayerStatus0(0, fopAcStts_HOOK_CARRY_NOW_e);
+#endif
 
     dBgS_LinChk linChk;
 
@@ -462,20 +574,32 @@ void daE_BG_c::executeAttack() {
     field_0x69c += field_0x6a0;
 
     if (mMoveMode <= 2) {
-        if (daPy_getPlayerActorClass()->checkEquipHeavyBoots()) {
+        if (
+#if TARGET_PC
+            targetState.equipHeavyBoots
+#else
+            targetPlayer->checkEquipHeavyBoots()
+#endif
+        ) {
             if (field_0x684 != -G_CM3D_F_INF && playerPos.y >= field_0x684 - 20.0f) {
                 setActionMode(1, 0);
                 return;
             }
         } else {
-            if (!dComIfGp_checkPlayerStatus0(0, fopAcStts_HOOK_CARRY_NOW_e)) {
+            if (!hookCarryNow) {
                 setActionMode(1, 0);
                 return;
             }
         }
 
         if (current.pos.abs(home.pos) > l_HIO.mAttackRange ||
-             fopAcM_searchPlayerDistance(this) > l_HIO.mPlayerSearchDistance)
+            (
+#if TARGET_PC
+                targetDistance
+#else
+                fopAcM_searchPlayerDistance(this)
+#endif
+                    > l_HIO.mPlayerSearchDistance))
         {
             setActionMode(1, 0);
             return;
@@ -484,17 +608,43 @@ void daE_BG_c::executeAttack() {
 
     switch (mMoveMode) {
     case 0:
-        field_0x6ac = fopAcM_searchPlayerAngleY(this) - shape_angle.y;
+        field_0x6ac =
+#if TARGET_PC
+            targetAngleY
+#else
+            fopAcM_searchPlayerAngleY(this)
+#endif
+            - shape_angle.y;
 
         cLib_addCalcAngleS(&field_0x6a0, 0x2400, 8, 0x400, 0x100);
-        cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 0x10, 0x400, 0x100);
-        cLib_addCalcAngleS(&shape_angle.x, fopAcM_searchPlayerAngleX(this), 0x10, 0x400, 0x100);
+        cLib_addCalcAngleS(&shape_angle.y,
+#if TARGET_PC
+                           targetAngleY
+#else
+                           fopAcM_searchPlayerAngleY(this)
+#endif
+                               ,
+                           0x10, 0x400, 0x100);
+        cLib_addCalcAngleS(&shape_angle.x,
+#if TARGET_PC
+                           cLib_targetAngleX(&current.pos, &playerPos)
+#else
+                           fopAcM_searchPlayerAngleX(this)
+#endif
+                               ,
+                           0x10, 0x400, 0x100);
 
         cLib_chaseF(&speedF, l_HIO.mTrackingSpeed * cM_scos(shape_angle.x), 1.0f);
         cLib_chaseF(&speed.y, l_HIO.mTrackingSpeed * cM_ssin(shape_angle.x), 1.0f);
 
-        if (!dComIfGp_checkPlayerStatus0(0, fopAcStts_HOOK_CARRY_NOW_e)) {
-            if (daPy_getPlayerActorClass()->checkEquipHeavyBoots()) {
+        if (!hookCarryNow) {
+            if (
+#if TARGET_PC
+                targetState.equipHeavyBoots
+#else
+                targetPlayer->checkEquipHeavyBoots()
+#endif
+            ) {
                 mMoveMode = 1;
                 field_0x69a = cM_rndFX(8192.0f);
             }
@@ -515,7 +665,14 @@ void daE_BG_c::executeAttack() {
         field_0x6a2 = nREG_S(0) + 0x1000;
 
         cLib_addCalcAngleS(&field_0x6a0, 0x1000, 8, 0x400, 0x100);
-        cLib_addCalcAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 0x10, 0x400, 0x100);
+        cLib_addCalcAngleS(&shape_angle.y,
+#if TARGET_PC
+                           targetAngleY
+#else
+                           fopAcM_searchPlayerAngleY(this)
+#endif
+                               ,
+                           0x10, 0x400, 0x100);
         cLib_addCalcAngleS(&shape_angle.x, 0, 0x10, 0x400, 0x100);
 
         cLib_chaseF(&speedF, 0.0f, 0.1f);
@@ -564,7 +721,7 @@ void daE_BG_c::executeAttack() {
             field_0x6ae = 0;
         }
 
-        if (dComIfGp_checkPlayerStatus0(0, fopAcStts_HOOK_CARRY_NOW_e)) {
+        if (hookCarryNow) {
             mMoveMode = 0;
             break;
         }
@@ -582,7 +739,13 @@ void daE_BG_c::executeAttack() {
 #endif
             unkFlag1 = true;
         } else {
-            if ((s16)cLib_distanceAngleS(unkShort1, fopAcM_searchPlayerAngleY(this)) > 0x6800) {
+            if ((s16)cLib_distanceAngleS(unkShort1,
+#if TARGET_PC
+                                         targetAngleY
+#else
+                                         fopAcM_searchPlayerAngleY(this)
+#endif
+                                             ) > 0x6800) {
                 if (current.pos.abs(unkXyz1) < 200.0f) {
                     unkFlag1 = true;
                 } else if (mObjAcch.ChkWallHit()) {
@@ -609,7 +772,7 @@ void daE_BG_c::executeAttack() {
         cLib_chaseF(&speedF, 0.0f, 1.0f);
         cLib_chaseF(&speed.y, 0.0f, 1.0f);
 
-        if (dComIfGp_checkPlayerStatus0(0, fopAcStts_HOOK_CARRY_NOW_e)) {
+        if (hookCarryNow) {
             mMoveMode = 0;
         } else {
             if (field_0x68f == 0) {
@@ -849,6 +1012,12 @@ void daE_BG_c::executeBirth() {
     field_0x6ac = 0;
     field_0x6a2 = 0xc00;
     field_0x69c += field_0x6a0;
+#if TARGET_PC
+    // Co-op: birth/recovery facing should turn back toward the retained selected target.
+    const s16 targetAngleY = coOpBgTargetAngleY(this, "e_bg.birth",
+                                               dusk::coop::EnemyTargetMode::StickyCombat,
+                                               shape_angle.y);
+#endif
 
     switch (mMoveMode) {
     case 0:
@@ -910,7 +1079,11 @@ void daE_BG_c::executeBirth() {
         shape_angle.x += field_0x69a;
 
         if (cLib_chaseAngleS(&field_0x69a, 0, 0x100) != 0) {
+#if TARGET_PC
+            cLib_chaseAngleS(&shape_angle.y, targetAngleY, 0x100);
+#else
             cLib_chaseAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 0x100);
+#endif
             cLib_chaseAngleS(&shape_angle.x, 0, 0x180);
 
             if (speed.y <= 0.0f) {
@@ -927,7 +1100,11 @@ void daE_BG_c::executeBirth() {
     case 4:
         cLib_addCalcAngleS(&field_0x6a0, 0x800, 8, 0x400, 0x100);
 
+#if TARGET_PC
+        cLib_chaseAngleS(&shape_angle.y, targetAngleY, 0x100);
+#else
         cLib_chaseAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 0x100);
+#endif
         cLib_chaseAngleS(&shape_angle.x, 0, 0x100);
 
         if (field_0x68f == 0) {
@@ -1291,6 +1468,11 @@ static int daE_BG_IsDelete(daE_BG_c* i_this) {
 }
 
 int daE_BG_c::_delete() {
+#if TARGET_PC
+    // Co-op: actor deletion must purge sidecar target/debug state for this Bombfish.
+    dusk::coop::clearAllEnemyTargets(this);
+#endif
+
     dComIfG_resDelete(&mPhaseReq, "E_BG");
 
     if (mHIOInit) {

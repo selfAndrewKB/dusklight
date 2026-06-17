@@ -113,8 +113,10 @@ SelectedTargetState stateForSlot(PlayerSlot slot, fopAc_ac_c* actor) {
     state.status0_0x100 = player_camera_status::checkStatus0(slot, 0x100) != 0;
     state.status0_0x4000 = player_camera_status::checkStatus0(slot, 0x4000) != 0;
     state.ironBallSubject = player_camera_status::checkStatus0(slot, 0x400) != 0;
-    state.equipHeavyBoots =
-        player_camera_status::checkStatus0(slot, daPy_py_c::FLG0_EQUIP_HVY_BOOTS) != 0;
+    // Co-op: equipment flags live on the selected player actor, not in the camera/status table.
+    // Water enemies such as Bombfish use this exact vanilla helper to decide whether Link is
+    // heavy enough underwater to be attacked, so P2+ must answer from the owner-local actor.
+    state.equipHeavyBoots = player->checkEquipHeavyBoots() != 0;
     state.available = true;
     return state;
 }

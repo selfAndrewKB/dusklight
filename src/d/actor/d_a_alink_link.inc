@@ -362,7 +362,12 @@ int daAlink_c::procCoSwimSubjectivityInit() {
                                 mpHIO->mSwim.m.mWaitInterpolation);
     }
 
+#if TARGET_PC
+    // Co-op: swim subjectivity status belongs to the active player slot, not P1 globally.
+    daAlink_setOwnerCameraStatus0(this, 0x100000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x100000);
+#endif
     mProcVar2.field_0x300c = 0;
 
     return 1;

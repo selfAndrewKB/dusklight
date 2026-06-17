@@ -11,6 +11,14 @@
 #include "d/actor/d_a_obj_kbox.h"
 #include "d/actor/d_a_player.h"
 
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/player_camera_status.h"
+#include "dusk/coop/player_slots.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 enum Action {
     /* 0x0 */ ACT_MOVE,
     /* 0x1 */ ACT_SEARCH,
@@ -109,6 +117,54 @@ static bool hio_set;
 static daE_SG_HIO_c l_HIO;
 
 static int stick_pt;
+
+#if TARGET_PC
+// Co-op: Skullfish targeting, attachment, and release checks must follow the selected slot.
+static bool coOpSelectSgTargetState(
+    e_sg_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance, s16* angle_y,
+    f32* home_distance) {
+    fopAc_ac_c* actor = (fopAc_ac_c*)i_this;
+    dusk::coop::EnemyTargetContext context;
+    context.observer = actor;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        actor, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    if (home_distance != NULL) {
+        *home_distance = i_this->home.pos.abs(targetState.pos);
+    }
+    return true;
+}
+
+static bool coOpTargetStatus0(const dusk::coop::selected_target_state::SelectedTargetState& state,
+                              u32 flag) {
+    return state.available && dusk::coop::player_camera_status::checkStatus0(state.slot, flag) != 0;
+}
+#endif
 
 static void pl_joint_search(e_sg_class* i_this) {
     if (stick_pt != 0x7ffff) {
@@ -227,6 +283,17 @@ static dmg_rod_class* search_esa(e_sg_class* i_this) {
 static void e_sg_move(e_sg_class* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)i_this;
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+#if TARGET_PC
+    // Co-op: zero-init keeps retained-attach fallbacks safe if the selected player disappears.
+    dusk::coop::selected_target_state::SelectedTargetState targetState = {};
+    if (coOpSelectSgTargetState(i_this, "e_sg.move", false,
+                                dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState, NULL,
+                                NULL, NULL))
+    {
+        // Co-op: idle/search water movement asks which active player can wake the fish now.
+        player = targetState.actor;
+    }
+#endif
     fopAc_ac_c* target;
     dmg_rod_class* rod;
 
@@ -269,7 +336,9 @@ static void e_sg_move(e_sg_class* i_this) {
         break;
 
     case MODE_FOLLOW:
-        i_this->mTargetPos = player->current.pos;
+        if (player != NULL) {
+            i_this->mTargetPos = player->current.pos;
+        }
         i_this->mTargetPos.y = i_this->mGroundY - 20.0f;
         i_this->mStepSpeed = 0.3f;
         max_angle_step = 0x200;
@@ -323,7 +392,7 @@ static void e_sg_move(e_sg_class* i_this) {
     cLib_addCalc2(&i_this->mJointYRot, fVar6, 0.5f, 1000.0f);
     cLib_addCalc2(&actor->speedF, i_this->mTargetSpeed * l_HIO.mMovementSpeed, 1.0f, max_step);
 
-    BOOL bg_check = fopAcM_otherBgCheck(actor, player);
+    BOOL bg_check = player != NULL ? fopAcM_otherBgCheck(actor, player) : TRUE;
     if ((i_this->mRandomSeed & 0x7) == (fopAcM_GetID(actor) & 0x7)) {
         target = (fopAc_ac_c*)search_box(i_this);
 
@@ -334,7 +403,7 @@ static void e_sg_move(e_sg_class* i_this) {
             i_this->mRandomSeed = cM_rndF(65536.0f);
             i_this->mTimers[0] = cM_rndF(30.0f) + 30.0f;
 
-        } else if (i_this->mTimers[1] == 0 && bg_check == 0 &&
+        } else if (player != NULL && i_this->mTimers[1] == 0 && bg_check == 0 &&
                    player->current.pos.y - 5.0f < i_this->mGroundY &&
                    player->current.pos.y > i_this->mGroundY - l_HIO.mPlayerHeightThreshold &&
                    i_this->mTargetDist < i_this->mSearchBound)
@@ -362,6 +431,16 @@ static void e_sg_move(e_sg_class* i_this) {
 static void e_sg_search(e_sg_class* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)i_this;
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState = {};
+    if (coOpSelectSgTargetState(i_this, "e_sg.search", false,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL,
+                                NULL, NULL))
+    {
+        // Co-op: the joint-search attach approach must follow the retained combat target.
+        player = targetState.actor;
+    }
+#endif
 
     s16 max_angle_step;
     f32 max_speed_step;
@@ -373,9 +452,14 @@ static void e_sg_search(e_sg_class* i_this) {
         break;
     }
 
-    MTXCopy(
-        daPy_getLinkPlayerActorClass()->getModelJointMtx(stick_d[i_this->mStickIdx - 1].joint_no),
-        *calc_mtx);
+    MtxP joint_mtx =
+#if TARGET_PC
+        targetState.player != NULL
+            ? targetState.player->getModelJointMtx(stick_d[i_this->mStickIdx - 1].joint_no)
+            :
+#endif
+            daPy_getLinkPlayerActorClass()->getModelJointMtx(stick_d[i_this->mStickIdx - 1].joint_no);
+    MTXCopy(joint_mtx, *calc_mtx);
 
     cXyz local_74(0.0f, stick_d[i_this->mStickIdx - 1].y, stick_d[i_this->mStickIdx - 1].z);
     MtxPosition(&local_74, &i_this->mTargetPos);
@@ -409,9 +493,14 @@ static void e_sg_search(e_sg_class* i_this) {
     cLib_addCalc2(&i_this->mJointYRot, fVar9, 0.5f, 1000.0f);
     cLib_addCalc2(&i_this->speedF, i_this->mTargetSpeed * l_HIO.mSearchSpeed, 1.0f, max_speed_step);
 
-    if (player->current.pos.y - 5.0f > i_this->mGroundY ||
+#if TARGET_PC
+    const bool status0_8 = coOpTargetStatus0(targetState, 8);
+#else
+    const bool status0_8 = dComIfGp_checkPlayerStatus0(0, 8);
+#endif
+    if (player == NULL || player->current.pos.y - 5.0f > i_this->mGroundY ||
         player->current.pos.y < i_this->mGroundY - l_HIO.mPlayerHeightThreshold ||
-        dComIfGp_checkPlayerStatus0(0, 8) || fopAcM_otherBgCheck(actor, dComIfGp_getPlayer(0)))
+        status0_8 || fopAcM_otherBgCheck(actor, player))
     {
         i_this->mAction = ACT_MOVE;
         i_this->mMode = MODE_FOLLOW;
@@ -601,9 +690,19 @@ static void e_sg_esa_search(e_sg_class* i_this) {
 
 static void e_sg_kamu(e_sg_class* i_this) {
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState = {};
+    if (coOpSelectSgTargetState(i_this, "e_sg.kamu", true,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL,
+                                NULL, NULL))
+    {
+        // Co-op: an attached bite is a retained interaction with the selected target slot.
+        player = targetState.actor;
+    }
+#endif
 
     switch (i_this->mMode) {
-    case MODE_IDLE:
+    case MODE_IDLE: {
         i_this->mAttackCollistion = true;
         if ((i_this->mRandomSeed & 0xf) == 0) {
             if (i_this->mKamuTimer != 0) {
@@ -612,20 +711,33 @@ static void e_sg_kamu(e_sg_class* i_this) {
             i_this->mSound.startCreatureSound(Z2SE_EN_SG_BITE, 0, -1);
         }
 
-        if (mDoCPd_c::getTrigA(0)) {
+#if TARGET_PC
+        const int pad = targetState.available ? dusk::coop::getPadForSlot(targetState.slot) : 0;
+#else
+        const int pad = 0;
+#endif
+        if (mDoCPd_c::getTrigA(pad)) {
             i_this->mKamuTimer++;
         }
 
-        if (player->current.pos.y > i_this->mGroundY + 10.0f || player->speedF >= 10.0f) {
+        if (player != NULL &&
+            (player->current.pos.y > i_this->mGroundY + 10.0f || player->speedF >= 10.0f))
+        {
             i_this->mMode = MODE_ACTIVE;
             i_this->mTimers[0] = (cM_rndF(30.0f) + 10.0f);
         }
 
-        if (i_this->mKamuTimer >= 10 || dComIfGp_checkPlayerStatus0(0, 8)) {
+#if TARGET_PC
+        const bool status0_8 = coOpTargetStatus0(targetState, 8);
+#else
+        const bool status0_8 = dComIfGp_checkPlayerStatus0(0, 8);
+#endif
+        if (i_this->mKamuTimer >= 10 || status0_8) {
             i_this->mMode = MODE_ACTIVE;
             i_this->mTimers[0] = 0;
         }
         break;
+    }
 
     case MODE_ACTIVE:
         if (i_this->mTimers[0] == 0) {
@@ -649,9 +761,14 @@ static void e_sg_kamu(e_sg_class* i_this) {
 
     i_this->mStepSpeed = 0.9f;
 
-    MTXCopy(
-        daPy_getLinkPlayerActorClass()->getModelJointMtx(stick_d[i_this->mStickIdx - 1].joint_no),
-        *calc_mtx);
+    MtxP joint_mtx =
+#if TARGET_PC
+        targetState.player != NULL
+            ? targetState.player->getModelJointMtx(stick_d[i_this->mStickIdx - 1].joint_no)
+            :
+#endif
+            daPy_getLinkPlayerActorClass()->getModelJointMtx(stick_d[i_this->mStickIdx - 1].joint_no);
+    MTXCopy(joint_mtx, *calc_mtx);
     cXyz local_48(0.0f, stick_d[i_this->mStickIdx - 1].y, stick_d[i_this->mStickIdx - 1].z);
 
     MtxPosition(&local_48, &i_this->mTargetPos);
@@ -661,14 +778,16 @@ static void e_sg_kamu(e_sg_class* i_this) {
     cLib_addCalc2(&i_this->current.pos.z, i_this->mTargetPos.z, 1.0f, i_this->mKamuSpeed);
     cLib_addCalc2(&i_this->mKamuSpeed, 1000.0f, 1.0f, 10.0f);
 
-    local_48 = player->current.pos;
-    local_48 += player->speed * 20.0f;
-    local_48 -= i_this->current.pos;
+    if (player != NULL) {
+        local_48 = player->current.pos;
+        local_48 += player->speed * 20.0f;
+        local_48 -= i_this->current.pos;
 
-    cLib_addCalcAngleS2(&i_this->current.angle.y,
-                        cM_atan2s(local_48.x, local_48.z) +
-                            (s16)(cM_ssin(i_this->mRandomSeed * 0xaf0) * 8000.0f),
-                        8, 0x800);
+        cLib_addCalcAngleS2(&i_this->current.angle.y,
+                            cM_atan2s(local_48.x, local_48.z) +
+                                (s16)(cM_ssin(i_this->mRandomSeed * 0xaf0) * 8000.0f),
+                            8, 0x800);
+    }
     cLib_addCalcAngleS2(&i_this->current.angle.x, 0, 8, 0x800);
     cLib_addCalcAngleS2(&i_this->mJointAngle,
                         cM_ssin(i_this->mRandomSeed * 0x1500) * 2000.0f + 3000.0f, 1, 0x2000);
@@ -744,6 +863,18 @@ static void e_sg_drop(e_sg_class* i_this) {
 
 static void e_sg_damage(e_sg_class* i_this) {
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+#if TARGET_PC
+    if (i_this->mAtInfo.mpCollider != NULL) {
+        const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+            dusk::coop::damage_owner::resolveDamageOwner(i_this, i_this->mAtInfo.mpCollider);
+        dusk::coop::damage_owner::recordDamageOwnerHit("e_sg.damage", i_this, damageOwner,
+                                                       &i_this->mAtInfo);
+        // Co-op: hit knockback should face away from the player or item owner that struck it.
+        if (damageOwner.localPlayerActor != NULL) {
+            player = damageOwner.localPlayerActor;
+        }
+    }
+#endif
 
     cXyz local_2c;
     cXyz cStack_38;
@@ -752,7 +883,11 @@ static void e_sg_damage(e_sg_class* i_this) {
 
     switch (i_this->mMode) {
     case MODE_IDLE:
-        local_2c = i_this->current.pos - player->eyePos;
+        if (player != NULL) {
+            local_2c = i_this->current.pos - player->eyePos;
+        } else {
+            local_2c.setall(0.0f);
+        }
 
         i_this->current.angle.y = cM_atan2s(local_2c.x, local_2c.z);
         if (i_this->current.pos.y < i_this->mGroundY) {
@@ -998,9 +1133,27 @@ static int daE_SG_Execute(e_sg_class* i_this) {
         i_this->mGroundY = fVar71;
         i_this->home.pos.y = i_this->mGroundY - 250.0f + cM_rndFX(50.0f);
     }
-    i_this->mPlayerAngle = fopAcM_searchPlayerAngleY(i_this);
-    i_this->mPlayerDist = fopAcM_searchPlayerDistance(i_this);
-    i_this->mTargetDist = (i_this->home.pos - player->current.pos).abs();
+#if TARGET_PC
+    f32 playerDistance = 0.0f;
+    f32 homeDistance = 0.0f;
+    s16 playerAngle = 0;
+    if (coOpSelectSgTargetState(i_this, "e_sg.action", i_this->mAction == ACT_KAMU,
+                                i_this->mAction == ACT_MOVE
+                                    ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                                    : dusk::coop::EnemyTargetMode::StickyCombat,
+                                NULL, &playerDistance, &playerAngle, &homeDistance))
+    {
+        // Co-op: the native dispatcher cache feeds downstream Skullfish states this tick.
+        i_this->mPlayerAngle = playerAngle;
+        i_this->mPlayerDist = playerDistance;
+        i_this->mTargetDist = homeDistance;
+    } else
+#endif
+    {
+        i_this->mPlayerAngle = fopAcM_searchPlayerAngleY(i_this);
+        i_this->mPlayerDist = fopAcM_searchPlayerDistance(i_this);
+        i_this->mTargetDist = player != NULL ? (i_this->home.pos - player->current.pos).abs() : 99999.0f;
+    }
 
     for (int i = 0; i < 3; i++) {
         if (i_this->mTimers[i] != 0) {
@@ -1102,6 +1255,10 @@ static int daE_SG_IsDelete(e_sg_class* i_this) {
 }
 
 static int daE_SG_Delete(e_sg_class* i_this) {
+#if TARGET_PC
+    // Co-op: actor deletion must purge Skullfish combat target/debug sidecar state.
+    dusk::coop::clearAllEnemyTargets((fopAc_ac_c*)i_this);
+#endif
     dComIfG_resDelete(&i_this->mPhaseReq, "E_sg");
 
     if (i_this->mHioInit) {

@@ -12,6 +12,13 @@
 #include "d/d_cc_uty.h"
 #include "f_op/f_op_actor_enemy.h"
 
+#if TARGET_PC
+#include "dusk/coop/defender_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/horse_owner.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 class e_krHIO_c : public fOpAcm_HIO_entry_c {
 public:
     e_krHIO_c() {
@@ -168,9 +175,12 @@ static void kuti_open(e_kr_class* i_this, s16 param_1, u32 param_2) {
     }
 }
 
-static BOOL e_kr_player_bg_check(e_kr_class* i_this) {
+static BOOL e_kr_player_bg_check_at(e_kr_class* i_this, fopAc_ac_c* player) {
     fopAc_ac_c* actor = &i_this->enemy;
-    daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+    // Co-op: a missing selected target should fail line-of-sight checks closed.
+    if (player == NULL) {
+        return TRUE;
+    }
 
     dBgS_LinChk linChk;
     cXyz unkXyz1;
@@ -188,6 +198,66 @@ static BOOL e_kr_player_bg_check(e_kr_class* i_this) {
         return FALSE;
     }
 }
+
+static BOOL e_kr_player_bg_check(e_kr_class* i_this) {
+    return e_kr_player_bg_check_at(i_this, dComIfGp_getPlayer(0));
+}
+
+#if TARGET_PC
+// Co-op: ordinary Kargarok combat uses one retained target while labels stay diagnostic.
+static bool coOpSelectKrTargetState(
+    e_kr_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance_xz,
+    s16* angle_y, s16* angle_x) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = &i_this->enemy;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        &i_this->enemy, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+
+    if (!targetState.available || targetState.actor == NULL) {
+        return false;
+    }
+
+    fopAc_ac_c* actor = &i_this->enemy;
+    const f32 diffX = targetState.pos.x - actor->current.pos.x;
+    const f32 diffY = targetState.actor->eyePos.y - actor->current.pos.y;
+    const f32 diffZ = targetState.pos.z - actor->current.pos.z;
+    const f32 targetDistanceXZ = JMAFastSqrt(diffX * diffX + diffZ * diffZ);
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance_xz != NULL) {
+        *distance_xz = targetDistanceXZ;
+    }
+    if (angle_y != NULL) {
+        *angle_y = cM_atan2s(diffX, diffZ);
+    }
+    if (angle_x != NULL) {
+        *angle_x = -cM_atan2s(diffY, targetDistanceXZ);
+    }
+    return true;
+}
+
+static f32 coOpKrSelectedHorseSpeed(dusk::coop::PlayerSlot slot, f32 fallback) {
+    daHorse_c* horse = dusk::coop::horse_owner::getHorse(slot);
+    if (horse != NULL) {
+        return horse->speedF;
+    }
+    return fallback;
+}
+#endif
 
 static BOOL e_kr_setpos_bg_check(e_kr_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
@@ -211,24 +281,42 @@ static BOOL e_kr_setpos_bg_check(e_kr_class* i_this) {
 
 static BOOL e_kr_player_view_check(e_kr_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState = {};
+    f32 playerDistance = 99999.0f;
+    s16 playerAngleY = 0;
+    // Co-op: wake/search visibility is immediate awareness over active players, not sticky combat.
+    if (!coOpSelectKrTargetState(i_this, "e_kr.view", false,
+                                 dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState,
+                                 &playerDistance, &playerAngleY, NULL))
+    {
+        return FALSE;
+    }
+    fopAc_ac_c* player = targetState.actor;
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+    f32 playerDistance = i_this->field_0x6c4;
+    s16 playerAngleY = i_this->field_0x6c0;
+#endif
 
     if (l_e_krHIO.field_0x6 != 0) {
         return TRUE;
     }
     if (i_this->field_0x665 != 0xff) {
-        if (i_this->field_0x6c4 > i_this->field_0x665 * 100.0f ||
-            e_kr_player_bg_check(i_this) != 0)
+        if (playerDistance > i_this->field_0x665 * 100.0f ||
+            e_kr_player_bg_check_at(i_this, player) != 0)
         {
             return FALSE;
         }
     } else {
         if (i_this->mCurAction == 4 || i_this->mCurAction == 7) {
-            if (i_this->field_0x6c4 > l_e_krHIO.field_0x68 || e_kr_player_bg_check(i_this) != 0) {
+            if (playerDistance > l_e_krHIO.field_0x68 ||
+                e_kr_player_bg_check_at(i_this, player) != 0)
+            {
                 return FALSE;
             }
-        } else if (i_this->field_0x6c4 > l_e_krHIO.field_0x64 ||
-                   e_kr_player_bg_check(i_this) != 0)
+        } else if (playerDistance > l_e_krHIO.field_0x64 ||
+                   e_kr_player_bg_check_at(i_this, player) != 0)
         {
             return FALSE;
         }
@@ -246,7 +334,7 @@ static BOOL e_kr_player_view_check(e_kr_class* i_this) {
 
     f32 unkFloat2 = fabsf(player->eyePos.y + 100.0f - actor->eyePos.y);
     if (unkFloat2 < unkFloat1) {
-        s16 unkShort1 = actor->current.angle.y - i_this->field_0xe7c - i_this->field_0x6c0;
+        s16 unkShort1 = actor->current.angle.y - i_this->field_0xe7c - playerAngleY;
         if (unkShort1 < 0) {
             unkShort1 = unkShort1 * -1;
         }
@@ -259,6 +347,16 @@ static BOOL e_kr_player_view_check(e_kr_class* i_this) {
 
 static BOOL pl_horse_check(e_kr_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState = {};
+    // Co-op: horse-triggered pursuit follows the selected rider slot, not canonical Epona/P1.
+    if (coOpSelectKrTargetState(i_this, "e_kr.horse_check", false,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL,
+                                NULL, NULL))
+    {
+        return targetState.horseRide && coOpKrSelectedHorseSpeed(targetState.slot, 0.0f) > 20.0f;
+    }
+#endif
     if (daPy_getPlayerActorClass()->checkHorseRide() && dComIfGp_getHorseActor()->speedF > 20.0f) {
         return TRUE;
     } else {
@@ -564,7 +662,17 @@ static s8 e_kr_path_move(e_kr_class* i_this) {
 }
 
 static void e_kr_auto_move(e_kr_class* i_this) {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState = {};
+    // Co-op: auto/ground wake spacing is awareness over active players, not a P1-only range check.
+    const bool hasTarget =
+        coOpSelectKrTargetState(i_this, "e_kr.auto", false,
+                                dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState, NULL,
+                                NULL, NULL);
+    fopAc_ac_c* playerActor = hasTarget ? targetState.actor : dComIfGp_getPlayer(0);
+#else
     fopAc_ac_c* playerActor = dComIfGp_getPlayer(0);
+#endif
     fopAc_ac_c* player = (daPy_py_c*)playerActor;
     fopAc_ac_c* actor = &i_this->enemy;
     cXyz unkXyz1;
@@ -666,10 +774,21 @@ static void e_kr_auto_move(e_kr_class* i_this) {
 }
 
 static void e_kr_atack_move(e_kr_class* i_this) {
+    fopAc_ac_c* actor = &i_this->enemy;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState = {};
+    f32 playerDist = fopAcM_searchPlayerDistance(actor);
+    // Co-op: dive/chase attack steering follows the retained combat target slot.
+    const bool hasTarget =
+        coOpSelectKrTargetState(i_this, "e_kr.attack", true,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
+                                &playerDist, NULL, NULL);
+    fopAc_ac_c* playerActor = hasTarget ? targetState.actor : dComIfGp_getPlayer(0);
+#else
     fopAc_ac_c* playerActor = dComIfGp_getPlayer(0);
     daPy_py_c* player = (daPy_py_c*)playerActor;
-    fopAc_ac_c* actor = &i_this->enemy;
     f32 playerDist = fopAcM_searchPlayerDistance(actor);
+#endif
     cXyz unkXyz1;
 
     s8 unkFlag1 = FALSE;
@@ -906,7 +1025,16 @@ static void e_kr_atack_move(e_kr_class* i_this) {
         } else {
             if (frame >= 15 && frame <= 27) {
                 unkFlag2 = true;
+#if TARGET_PC
+                // Co-op: guard bounce must ask the player actually hit by this attack sphere.
+                const dusk::coop::defender_owner::DefenderOwnerResult defender =
+                    dusk::coop::defender_owner::resolveDefenderOwner(actor, &i_this->mSphere1);
+                dusk::coop::defender_owner::recordDefenderOwnerContact(
+                    "e_kr.attack_guard", actor, defender);
+                if (defender.guarded) {
+#else
                 if (player->checkPlayerGuard() && i_this->mSphere1.ChkAtHit()) {
+#endif
                     i_this->field_0x6aa = 10;
                     i_this->field_0x672 = 10;
                     i_this->field_0x69c[0] = l_e_krHIO.field_0x34;
@@ -958,7 +1086,14 @@ static void e_kr_atack_move(e_kr_class* i_this) {
         unkXyz1 = i_this->field_0x678 - actor->current.pos;
 
         unkFloat1 = unkXyz1.abs();
+#if TARGET_PC
+        // Co-op: combat dropout checks line of sight to the retained attack target.
+        if (e_kr_player_bg_check_at(i_this, playerActor) || e_kr_setpos_bg_check(i_this) ||
+            unkFlag1)
+        {
+#else
         if (e_kr_player_bg_check(i_this) || e_kr_setpos_bg_check(i_this) || unkFlag1) {
+#endif
             i_this->mCurAction = i_this->field_0x664;
             if (i_this->mCurAction == 4 || i_this->mCurAction == 7) {
                 i_this->field_0x672 = 10;
@@ -996,14 +1131,29 @@ static void e_kr_atack_move(e_kr_class* i_this) {
 
 static void e_kr_horse_move(e_kr_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
+#if TARGET_PC
+    // Co-op: horse pursuit uses the selected rider and their slot-local horse speed.
+    dusk::coop::selected_target_state::SelectedTargetState targetState = {};
+    const bool hasTarget =
+        coOpSelectKrTargetState(i_this, "e_kr.horse", true,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL,
+                                NULL, NULL);
+    fopAc_ac_c* player = hasTarget ? targetState.actor : dComIfGp_getPlayer(0);
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     cXyz unkXyz1;
     cXyz unkXyz2;
 
     i_this->field_0xe8c = 1;
 
     s32 frame = i_this->mpMorf->getFrame();
+#if TARGET_PC
+    f32 speed = hasTarget ? coOpKrSelectedHorseSpeed(targetState.slot, 0.0f)
+                          : dComIfGp_getHorseActor()->speedF;
+#else
     f32 speed = dComIfGp_getHorseActor()->speedF;
+#endif
     if (speed > 60.0f) {
         speed = 60.0f;
     } else if (speed < 30.0f) {
@@ -1991,18 +2141,44 @@ static int daE_Kr_Execute(e_kr_class* i_this) {
     s16 unkShort1;
     s16 unkShort2;
 
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState actionTargetState = {};
+    f32 playerDistance = 99999.0f;
+    s16 playerAngleY = 0;
+    s16 playerAngleX = 0;
+    const bool awarenessAction =
+        i_this->mCurAction == 0 || i_this->mCurAction == 4 || i_this->mCurAction == 7;
+    // Co-op: the native dispatcher cache feeds downstream Kargarok states for this tick.
+    const bool hasTarget =
+        coOpSelectKrTargetState(i_this, "e_kr.action",
+                                i_this->mCurAction == 3 || i_this->mCurAction == 8,
+                                awarenessAction
+                                    ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                                    : dusk::coop::EnemyTargetMode::StickyCombat,
+                                &actionTargetState, &playerDistance, &playerAngleY,
+                                &playerAngleX);
+    fopAc_ac_c* playerActor = hasTarget ? actionTargetState.actor : dComIfGp_getPlayer(0);
+#else
     fopAc_ac_c* playerActor = dComIfGp_getPlayer(0);
-    daPy_py_c* player = (daPy_py_c*)playerActor;
+#endif
     
     cXyz unkXyz1;
     cXyz unkXyz2;
-    f32 diffX = player->current.pos.x - actor->current.pos.x;
-    f32 diffY = player->eyePos.y - actor->current.pos.y;
-    f32 diffZ = player->current.pos.z - actor->current.pos.z;
-
-    i_this->field_0x6c4 = JMAFastSqrt(diffX * diffX + diffZ * diffZ);
-    i_this->field_0x6c0 = cM_atan2s(diffX, diffZ);
-    i_this->field_0x6c2 = -cM_atan2s(diffY, i_this->field_0x6c4);
+#if TARGET_PC
+    if (hasTarget) {
+        i_this->field_0x6c4 = playerDistance;
+        i_this->field_0x6c0 = playerAngleY;
+        i_this->field_0x6c2 = playerAngleX;
+    } else
+#endif
+    {
+        f32 diffX = playerActor->current.pos.x - actor->current.pos.x;
+        f32 diffY = playerActor->eyePos.y - actor->current.pos.y;
+        f32 diffZ = playerActor->current.pos.z - actor->current.pos.z;
+        i_this->field_0x6c4 = JMAFastSqrt(diffX * diffX + diffZ * diffZ);
+        i_this->field_0x6c0 = cM_atan2s(diffX, diffZ);
+        i_this->field_0x6c2 = -cM_atan2s(diffY, i_this->field_0x6c4);
+    }
     i_this->field_0x6d6++;
     
     for (s32 i = 0; i < 6; i++) {
@@ -2133,8 +2309,8 @@ static int daE_Kr_Execute(e_kr_class* i_this) {
     s16 unkShort3 = 0x800;
     if (i_this->field_0xe8c != 0) {
         if (i_this->field_0xe8c == 1) {
-            diffX = player->current.pos.x - actor->current.pos.x;
-            diffZ = player->current.pos.z - actor->current.pos.z;
+            f32 diffX = playerActor->current.pos.x - actor->current.pos.x;
+            f32 diffZ = playerActor->current.pos.z - actor->current.pos.z;
             s16 diff = cM_atan2s(diffX, diffZ);
             i_this->field_0xe7e = actor->current.angle.y - diff;
             if (i_this->field_0xe7e > 0x2710) {
@@ -2212,6 +2388,11 @@ static int daE_Kr_IsDelete(e_kr_class* i_this) {
 }
 
 static int daE_Kr_Delete(e_kr_class* i_this) {
+#if TARGET_PC
+    // Co-op: actor deletion must purge Kargarok combat target/debug sidecar state.
+    dusk::coop::clearAllEnemyTargets(&i_this->enemy);
+#endif
+
     dComIfG_resDelete(&i_this->mPhase, "E_kr");
     fopEn_enemy_c* enemy = &i_this->enemy;
 #if DEBUG

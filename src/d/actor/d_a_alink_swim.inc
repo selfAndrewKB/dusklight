@@ -909,7 +909,12 @@ int daAlink_c::procSwimUpInit() {
     onNoResetFlg0(FLG0_SWIM_UP);
     mZ2Link.setInWater(false);
     setSingleAnimeParam(ANM_SWIM_RESURFACE, &mpHIO->mSwim.m.mFloatUpAnm);
+#if TARGET_PC
+    // Co-op: swim presentation/status bits are owner-local; water enemies query this for P2.
+    daAlink_setOwnerCameraStatus0(this, 0x100000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x100000);
+#endif
     mProcVar0.field_0x3008 = 0;
     mProcVar4.field_0x3010 = 0;
     field_0x3480 = mpHIO->mSwim.m.mStartHeight;
@@ -987,7 +992,12 @@ int daAlink_c::procSwimWaitInit(int param_0) {
         field_0x3080 = 0;
     }
 
+#if TARGET_PC
+    // Co-op: swim presentation/status bits are owner-local; water enemies query this for P2.
+    daAlink_setOwnerCameraStatus0(this, 0x100000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x100000);
+#endif
 
     if (checkNoResetFlg0(FLG0_SWIM_UP)) {
         current.pos.y = mWaterY;
@@ -1089,7 +1099,12 @@ int daAlink_c::procSwimMoveInit() {
     }
 
     swimDeleteItem();
+#if TARGET_PC
+    // Co-op: swim presentation/status bits are owner-local; water enemies query this for P2.
+    daAlink_setOwnerCameraStatus0(this, 0x100000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x100000);
+#endif
     mProcVar0.field_0x3008 = 0;
     return 1;
 }
@@ -1153,7 +1168,12 @@ int daAlink_c::procSwimDiveInit() {
     field_0x3480 = mpHIO->mSwim.m.mStartHeight;
     mProcVar4.field_0x3010 = 0;
 
+#if TARGET_PC
+    // Co-op: swim presentation/status bits are owner-local; water enemies query this for P2.
+    daAlink_setOwnerCameraStatus0(this, 0x100000);
+#else
     dComIfGp_setPlayerStatus0(0, 0x100000);
+#endif
     field_0x3000 = 30;
     field_0x3478 = 0.0f;
     field_0x347c = 1.0f / mpHIO->mSwim.m.mUnderwaterDiveAnm.mEndFrame;
