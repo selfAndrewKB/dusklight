@@ -14,6 +14,7 @@
 #include "dusk/coop/player_button_status.h"
 
 #if TARGET_PC
+#include "dusk/menu_pointer.h"
 #include "dusk/scope_guard.hpp"
 #endif
 
@@ -578,6 +579,20 @@ void jmessage_tReference::selectMessage() {
     if (mSelectNum != 0) {
         // Co-op: message choices use the retained dialogue owner pad.
         mpStick->setPad(dusk::coop::player_button_status::messagePad());
+#if TARGET_PC
+        u8 pointerChoice = 0xFF;
+        if (dusk::menu_pointer::get_dialog_choice(pointerChoice) && pointerChoice < mSelectNum &&
+            pointerChoice != mSelectPos)
+        {
+            mSelectPos = pointerChoice;
+            if (mSelectType != 0) {
+                getObjectPtr()->getSequenceProcessor()->calcStringLength();
+            }
+            Z2GetAudioMgr()->seStart(Z2SE_SY_TALK_CURSOR, NULL, 0, 0, 1.0f, 1.0f, -1.0f,
+                                     -1.0f, 0);
+        }
+#endif
+
         mpStick->checkTrigger();
 
         if (mSelectType == 0) {
