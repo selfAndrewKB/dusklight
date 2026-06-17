@@ -18,7 +18,9 @@
 
 #include "dusk/settings.h"
 #if TARGET_PC
+#include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/player_attention.h"
+#include "dusk/coop/selected_target_state.h"
 #endif
 
 class daE_YM_HIO_c: public JORReflexible {
@@ -86,6 +88,100 @@ void daE_YM_HIO_c::genMessage(JORMContext* ctext) {
 }
 #endif
 
+#if TARGET_PC
+// Co-op: Shadow Insect keeps one Combat target for movement/attack caches; immediate wolf-sense
+// and bark checks are active-player state predicates, not independent target owners.
+static bool coOpSelectYmTargetState(
+    daE_YM_c* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance,
+    s16* angle_y) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+
+    return true;
+}
+
+static bool coOpYmWolfSensePredicate(
+    const dusk::coop::selected_target_state::SelectedTargetState& state) {
+    return state.wolfSenseActive;
+}
+
+static bool coOpYmWolfBarkPredicate(
+    const dusk::coop::selected_target_state::SelectedTargetState& state) {
+    return state.wolfBark;
+}
+
+static dusk::coop::selected_target_state::SelectedTargetState coOpFindYmWolfBarkPlayer(
+    daE_YM_c* i_this, const char* label) {
+    return dusk::coop::selected_target_state::findNearestPlayerState(
+        i_this, label, coOpYmWolfBarkPredicate, 900.0f);
+}
+
+static bool coOpYmAnyWolfSensePlayer(daE_YM_c* i_this, const char* label) {
+    return dusk::coop::selected_target_state::findNearestPlayerState(
+               i_this, label, coOpYmWolfSensePredicate)
+        .available;
+}
+
+static daPy_py_c* coOpYmLockingPlayer(daE_YM_c* i_this) {
+    fopAc_ac_c* actor = dusk::coop::player_attention::lockingPlayerForActor(i_this);
+    dusk::coop::PlayerSlot slot = dusk::coop::getSlotForActor(actor);
+    if (slot == dusk::coop::PlayerSlot::Invalid || dusk::coop::getPlayer(slot) != actor) {
+        return NULL;
+    }
+
+    return static_cast<daPy_py_c*>(actor);
+}
+
+static bool coOpYmWolfLockedByAnyPlayer(daE_YM_c* i_this) {
+    bool locked = false;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+        if (locked) {
+            return;
+        }
+
+        daPy_py_c* player = static_cast<daPy_py_c*>(actor);
+        locked = player != NULL && player->checkWolfLock(i_this) != 0;
+    });
+    return locked;
+}
+
+static void coOpYmCancelWolfLockForAll(daE_YM_c* i_this) {
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+        daPy_py_c* player = static_cast<daPy_py_c*>(actor);
+        if (player != NULL && player->checkWolfLock(i_this)) {
+            player->cancelWolfLock(i_this);
+        }
+    });
+}
+#endif
+
 
 bool daE_YM_c::checkBck(char const* i_arcName, int i_resNo) {
     if (mpMorf->getAnm() == (J3DAnmTransform*)dComIfG_getObjectRes(i_arcName, i_resNo)) {
@@ -133,7 +229,12 @@ int daE_YM_c::draw() {
         return 1;
     }
 
+#if TARGET_PC
+    // Co-op: Shadow Insect reveal visuals follow any active wolf-sense player, not P1 only.
+    if (coOpYmAnyWolfSensePlayer(this, "e_ym.draw_wolf_sense")) {
+#else
     if (daPy_getPlayerActorClass()->checkNowWolfEyeUp()) {
+#endif
         cLib_addCalc2(&field_0x6d4, 255.0f, 1.0f, 30.0f);
     } else if (mAction == ACT_DOWN) {
         cLib_addCalc2(&field_0x6d4, 255.0f, 1.0f, 30.0f);
@@ -338,11 +439,24 @@ bool daE_YM_c::checkWolfBark() {
         return false;
     }
 
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState barkState =
+        coOpFindYmWolfBarkPlayer(this, "e_ym.wolf_bark");
+    if (barkState.available) {
+        cXyz barkDiff = barkState.pos - current.pos;
+        const f32 barkDistance = barkDiff.abs();
+        const s16 barkAngle = cM_atan2s(barkDiff.x, barkDiff.z);
+#else
     if (daPy_getPlayerActorClass()->checkWolfBark() && mDistToPlayer < 900.0f) {
+        const f32 barkDistance = mDistToPlayer;
+        const s16 barkAngle = mAngleToPlayer;
+#endif
         if (mType == 0) {
-            s16 dist_ang = cLib_distanceAngleS(mAngleToPlayer, shape_angle.y);
+            s16 dist_ang = cLib_distanceAngleS(barkAngle, shape_angle.y);
             cXyz my_vec_0 = current.pos - mPrevPos;
-            if (my_vec_0.abs() < l_HIO.mMoveRange && dist_ang < 0x4000 && cM_rndF(10.0f) > 1.0f) {
+            if (barkDistance < 900.0f && my_vec_0.abs() < l_HIO.mMoveRange &&
+                dist_ang < 0x4000 && cM_rndF(10.0f) > 1.0f)
+            {
                 setActionMode(ACT_BACK);
             } else {
                 if (mTagPosP != NULL) {
@@ -362,7 +476,16 @@ bool daE_YM_c::checkWolfBark() {
 }
 
 bool daE_YM_c::checkSurpriseLock() {
+#if TARGET_PC
+    // Co-op: lock-triggered surprise is caused by the player currently locking this actor. Combat
+    // stickiness can be stale here, so sample the lock owner for the vanilla position tests.
+    daPy_py_c* player = coOpYmLockingPlayer(this);
+    if (player == NULL) {
+        player = daPy_getPlayerActorClass();
+    }
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
     if (mType == 2) {
         return false;
     }
@@ -453,7 +576,20 @@ bool daE_YM_c::checkRailSurprise() {
 }
 
 bool daE_YM_c::checkSurpriseNear() {
+#if TARGET_PC
+    // Co-op: near/speed attack gates are selected-target state, not P1 global state.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectYmTargetState(this, "e_ym.surprise_near", false,
+                            dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState, NULL, NULL);
+    daPy_py_c* player =
+        targetState.player != NULL ? targetState.player : daPy_getPlayerActorClass();
+    const cXyz playerPos = targetState.available ? targetState.pos : player->current.pos;
+    const f32 playerSpeedF = targetState.available ? targetState.speedF : player->getSpeedF();
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+    const cXyz playerPos = player->current.pos;
+    const f32 playerSpeedF = player->getSpeedF();
+#endif
     cXyz my_vec_0;
     if (mType == 1) {
         if (field_0x6fa) {
@@ -466,7 +602,7 @@ bool daE_YM_c::checkSurpriseNear() {
                 my_val = 50.0f;
             }
 
-            cXyz my_vec_1 = player->current.pos;
+            cXyz my_vec_1 = playerPos;
             my_vec_1.y += 100.0f;
             my_vec_0 = mPrevPos - current.pos;
             if (my_vec_0.abs() < my_val) {
@@ -528,7 +664,7 @@ bool daE_YM_c::checkSurpriseNear() {
                 return false;
             }
 
-            if (player->getSpeedF() >= 16.0f) {
+            if (playerSpeedF >= 16.0f) {
                 field_0x6f6 = 0;
             } else {
                 if (field_0x6f8) {
@@ -1314,13 +1450,34 @@ void daE_YM_c::setGoHomeType() {
 }
 
 void daE_YM_c::executeSurprise() {
+#if TARGET_PC
+    // Co-op: surprise recovery is selected-target state. The insect may wake from P2 lock/speed,
+    // then later decide whether to stop fleeing and attack from this same selected player.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectYmTargetState(this, "e_ym.surprise", false,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL, NULL);
+    daPy_py_c* player =
+        targetState.player != NULL ? targetState.player : daPy_getPlayerActorClass();
+    const cXyz playerPos = targetState.available ? targetState.pos : player->current.pos;
+    const s16 playerShapeAngleY =
+        targetState.available ? targetState.shapeAngleY : player->shape_angle.y;
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+    const cXyz playerPos = player->current.pos;
+    const s16 playerShapeAngleY = player->shape_angle.y;
+#endif
     if (mType != 1) {
         cLib_chaseF(&speed.y, -90.0f, 15.0f);
     }
 
     cXyz my_vec_0 = mPrevPos - current.pos;
+#if TARGET_PC
+    // Co-op: vanilla only freezes surprise movement for wolf lock. Ordinary lock-on may wake the
+    // insect, but must not strand it in the run-away/surprise animation.
+    if (coOpYmWolfLockedByAnyPlayer(this) && mAcch.ChkGroundHit()) {
+#else
     if (daPy_getPlayerActorClass()->checkWolfLock(this) && mAcch.ChkGroundHit()) {
+#endif
         cLib_chaseF(&speedF, 0.0f, 5.0f);
         cLib_chaseAngleS(&shape_angle.y,mAngleToPlayer, 0x400);
         return;
@@ -1338,7 +1495,7 @@ void daE_YM_c::executeSurprise() {
             } else {
                 field_0x6a5 = 0;
                 field_0x6e4 = mAngleToPlayer + 0x8000;
-                s16 sh_ang = player->shape_angle.y;
+                s16 sh_ang = playerShapeAngleY;
                 s16 dist_ang = cLib_distanceAngleS(field_0x6e4, sh_ang);
                 if (sh_ang + dist_ang == field_0x6e4) {
                     field_0x6a5 = 0;
@@ -1411,7 +1568,7 @@ void daE_YM_c::executeSurprise() {
                     if (field_0x6a1 == 1) {
                         setActionMode(ACT_ELECTRIC);
                     } else if (field_0x6a1 == 0) {
-                        if (daPy_getPlayerActorClass()->current.pos.abs(mPrevPos) <= l_HIO.mMoveRange + 200.0f) {
+                        if (playerPos.abs(mPrevPos) <= l_HIO.mMoveRange + 200.0f) {
                             setActionMode(ACT_ATTACK);
                         }
                     }
@@ -1596,8 +1753,20 @@ void daE_YM_c::executeFall() {
 }
 
 void daE_YM_c::executeAttack() {
+#if TARGET_PC
+    // Co-op: the jump attack destination is produced here, after awareness already picked a
+    // Combat target. Use that retained target so P2 wake does not enter an attack aimed at P1.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectYmTargetState(this, "e_ym.attack", true,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL, NULL);
+    daPy_py_c* player =
+        targetState.player != NULL ? targetState.player : daPy_getPlayerActorClass();
+    const cXyz playerPos = targetState.available ? targetState.pos : player->current.pos;
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
-    cXyz my_vec_0 = player->current.pos - mPrevPos;
+    const cXyz playerPos = player->current.pos;
+#endif
+    cXyz my_vec_0 = playerPos - mPrevPos;
     if (mType != 1) {
         cLib_chaseF(&speed.y, -100.0f, 4.0f);
     }
@@ -1898,7 +2067,16 @@ void daE_YM_c::initFly() {
 }
 
 void daE_YM_c::executeFly() {
+#if TARGET_PC
+    // Co-op: flying Shadow Insects orbit/face the retained combat target, while bark interrupts
+    // still scan active players because bark is a sound-state predicate.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectYmTargetState(this, "e_ym.fly", false,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL, NULL);
+    fopAc_ac_c* player = targetState.actor != NULL ? targetState.actor : dComIfGp_getPlayer(0);
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     cXyz player_pos(player->current.pos);
     cXyz my_vec_1 = current.pos - player_pos;
     cXyz my_vec_2 = current.pos - mPrevPos;
@@ -2068,7 +2246,11 @@ void daE_YM_c::executeFly() {
             cLib_chaseF(&speedF, 0.0f, 1.0f);
             cLib_chaseF(&speed.y, 0.0f, 3.0f);
             if (field_0x6f0 == 0 || my_vec_1.absXZ() < 50.0f
+#if TARGET_PC
+                || coOpFindYmWolfBarkPlayer(this, "e_ym.fly_wolf_bark").available) {
+#else
                 || (daPy_getPlayerActorClass()->checkWolfBark() && my_vec_1.absXZ() < 100.0f)) {
+#endif
                 speedF = speed.y = 0.0f;
                 mMode = 3;
                 return;
@@ -2153,7 +2335,17 @@ void daE_YM_c::executeFlyAttack() {
             field_0x6e4 = 0;
             bckSetFly(5, 0, 0.0f, 1.0f);
             mMode = 1;
+#if TARGET_PC
+            // Co-op: flying attack stores a fixed strike point before the lunge begins.
+            // Produce that point from the retained Combat target, not P1.
+            dusk::coop::selected_target_state::SelectedTargetState targetState;
+            coOpSelectYmTargetState(this, "e_ym.fly_attack", true,
+                                    dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
+                                    NULL, NULL);
+            fopAc_ac_c* ply = targetState.actor != NULL ? targetState.actor : dComIfGp_getPlayer(0);
+#else
             fopAc_ac_c* ply = dComIfGp_getPlayer(0);
+#endif
             field_0x67c = ply->current.pos;
             field_0x67c.y += 50.0f;
             break;
@@ -3029,8 +3221,21 @@ void daE_YM_c::action() {
         field_0x700 = 0;
     }
 
+#if TARGET_PC
+    // Co-op: native action code consumes these cached player metrics throughout the state machine,
+    // so fill the cache once from the retained Combat owner instead of letting every consumer ask P1.
+    if (!coOpSelectYmTargetState(this, "e_ym.action",
+                                 mAction == ACT_ATTACK || mAction == ACT_ATTACK_WALL,
+                                 dusk::coop::EnemyTargetMode::StickyCombat, NULL, &mDistToPlayer,
+                                 &mAngleToPlayer))
+    {
+        mDistToPlayer = fopAcM_searchPlayerDistance(this);
+        mAngleToPlayer = fopAcM_searchPlayerAngleY(this);
+    }
+#else
     mDistToPlayer = fopAcM_searchPlayerDistance(this);
     mAngleToPlayer = fopAcM_searchPlayerAngleY(this);
+#endif
     cXyz my_vec_0;
     cXyz my_vec_1;
     mSphCc.OnTgSetBit();
@@ -3156,9 +3361,14 @@ void daE_YM_c::action() {
 
     if (!field_0x6d4) {
         attention_info.flags = 0;
+#if TARGET_PC
+        // Co-op: invisible Shadow Insects clear wolf locks for every active owner, not just P1.
+        coOpYmCancelWolfLockForAll(this);
+#else
         if (daPy_getPlayerActorClass()->checkWolfLock(this)) {
             daPy_getPlayerActorClass()->cancelWolfLock(this);
         }
+#endif
 
         onWolfNoLock();
     } else {
@@ -3324,6 +3534,10 @@ static int daE_YM_IsDelete(daE_YM_c*) {
 }
 
 int daE_YM_c::_delete() {
+#if TARGET_PC
+    // Co-op: purge retained Combat target/debug state before this insect actor memory can be reused.
+    dusk::coop::clearAllEnemyTargets(this);
+#endif
     if (mFlyType == true) {
         dComIfG_resDelete(&mPhase, "E_TM");
     } else {

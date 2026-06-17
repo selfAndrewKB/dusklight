@@ -14,6 +14,9 @@
 #include "f_op/f_op_camera_mng.h"
 #include "SSystem/SComponent/c_math.h"
 #include "Z2AudioLib/Z2Instances.h"
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#endif
 
 static bool hio_set;
 
@@ -155,7 +158,12 @@ static int bee_fly_action(e_bee_class* i_this, bee_s* i_bee) {
                 i_this->mCcSph.SetC(i_bee->mPos);
             }
             if (dist < 300.0f) {
+#if TARGET_PC
+                // Co-op: bee follow state belongs to the ALINK actor the swarm is actually chasing.
+                static_cast<daPy_py_c*>(hit_actor)->onBeeFollow();
+#else
                 daPy_getPlayerActorClass()->onBeeFollow();
+#endif
             }
             vec += i_bee->mTarget;
             f32 home_check = 30.0f;
@@ -485,28 +493,46 @@ static void bee_control(e_bee_class* i_this) {
                 hit_pos = hit_actor->current.pos;
             } else if (hit_obj->ChkAtType(AT_TYPE_IRON_BALL)) {
                 hit_radius = 100.0f+ TREG_F(19);
+#if TARGET_PC
+                // Co-op: iron-ball hit position follows the player who owns this hit collider.
+                const dusk::coop::damage_owner::DamageOwnerResult owner =
+                    dusk::coop::damage_owner::resolveDamageOwner(i_this, hit_obj);
+                daPy_py_c* player = dusk::coop::damage_owner::resolveDamageOwnerPlayer(owner);
+#else
                 daPy_py_c* player = static_cast<daPy_py_c*>(dComIfGp_getPlayer(0));
-                cXyz* center = player->getIronBallCenterPos();
-                if (center != NULL) {
-                    hit_pos = *center;
+#endif
+                if (player != NULL) {
+                    cXyz* center = player->getIronBallCenterPos();
+                    if (center != NULL) {
+                        hit_pos = *center;
+                    }
                 }
             } else {
                 hit_pos = hit_actor->current.pos;
                 hit_radius = 150.0f + TREG_F(19);
             }
         } else {
+#if TARGET_PC
+            // Co-op: sword/boomerang-style bee knockback arcs use the player who caused the hit.
+            const dusk::coop::damage_owner::DamageOwnerResult owner =
+                dusk::coop::damage_owner::resolveDamageOwner(i_this, hit_obj);
+            daPy_py_c* player = dusk::coop::damage_owner::resolveDamageOwnerPlayer(owner);
+#else
             daPy_py_c* player = daPy_getPlayerActorClass();
-            if (cc_pl_cut_bit_get() == 0x80) {
+#endif
+            if (player != NULL && cc_pl_cut_bit_get() == 0x80) {
                 ANGLE_ADD(i_this->mBoomerangAngle, 0x1400);
                 vec1.z = 150.0f + TREG_F(15);
             } else {
                 vec1.z = 100.0f + TREG_F(12);
             }
-            cMtx_YrotS(*calc_mtx, player->shape_angle.y + i_this->mBoomerangAngle);
-            vec1.x = 0.0f;
-            vec1.y = 100.0f;
-            MtxPosition(&vec1, &vec2);
-            hit_pos = player->current.pos + vec2;
+            if (player != NULL) {
+                cMtx_YrotS(*calc_mtx, player->shape_angle.y + i_this->mBoomerangAngle);
+                vec1.x = 0.0f;
+                vec1.y = 100.0f;
+                MtxPosition(&vec1, &vec2);
+                hit_pos = player->current.pos + vec2;
+            }
         }
     } else {
         i_this->mBoomerangAngle = 0;

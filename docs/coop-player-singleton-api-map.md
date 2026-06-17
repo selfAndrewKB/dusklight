@@ -187,6 +187,33 @@ without becoming combat targeting. Wake, move, attack, and down-state steering u
 wolf-form and wolf-sense reveal gates scan active players. Soul pull-out drawing, item-get, and
 death presentation are separate down/soul-owner or event/presentation surfaces and should stay
 documented until a specific owner API exists.
+The larger Poe variant (`E_PO`) reinforces that split: ordinary action caches, wolf-sense wake, and
+advanced rolling/circling formation can share the ghost targeting shape, while wolf-down pull,
+soul/item presentation, roll/holl demos, camera/player placement, and special death flow are
+authored retained/presentation surfaces. Do not classify them as combat targeting just because the
+same file also has search and attack movement.
+
+Shadow Insects (`E_YM`) use the same selected-target cache pattern for ordinary movement/attack
+distance and angle. Their surprise-lock, surprise-near, surprise recovery, and fly/orbit states also
+consume those facts, so converting only the wake/read path is incomplete if the follow-up producer
+still points at P1. They also prove that "is this actor locked?" and "which player/mode locked it?"
+are different questions. Surprise wake can observe slot-local `player_attention`, but branches that
+sample player position or distinguish ordinary lock-on from wolf lock must use the locking player
+and the owner-local wolf-lock state, not a stale Combat target and not a generic any-lock boolean.
+Wolf-sense reveal, wolf-bark reaction, dig/front-roll triggers, tear-collection, rail/river,
+Midna-sensitive, lock-cancel cleanup, and camera-visibility paths are separate player-state or
+presentation questions. Convert them by question, not by file-wide singleton replacement.
+
+Tears of Light (`Obj_Drop`) are the retained collection version of this split. Shadow Insect death
+plays disappear effects, but the actual pickup object owns the native collection radius, draw-in
+lines, and `onWolfLightDropGet()` call. The active player who enters that native radius should be
+retained as the `Collect` owner until the drop deletes. Do not solve Tear pickup by retargeting
+Shadow Insect combat AI.
+
+Beehive/Bees (`E_NEST`/`E_BEE`) are the parent-child swarm version of the same ownership rule. The
+beehive stores the actor that disturbed it in `mHitActorID`, and child bees chase that actor later.
+That parent producer must store the damage/item owner before the bees spawn or fly; fixing only the
+bee contact/follow consumer still lets a P2 hit create a P1-targeted swarm.
 
 Stalfos (`E_SF`) is the regular-humanoid-with-authored-demo boundary. Combat, guard contact, and
 damage reactions can use the existing targeting, defender, and damage-owner families, but first
@@ -268,6 +295,7 @@ player who owns the accepted catch event, so it routes through `event_owner`.
 | "Which player/camera owns this spawn intro, child facing, or presentation angle?" | future presentation/camera-owner helpers | White Wolfos uses a narrow helper; broader API deferred |
 | "Which target or owner should this enemy-spawned weapon/object inherit?" | parent/master `enemy_targeting` scope, `damage_owner`, or retained interaction owner depending on the source | Chilfos thrown spear launch math inherits the parent Combat target when the parent is live; Bomb Bug hookshot/boomerang-created bombs inherit the player/item damage owner before NBOMB create-time setup |
 | "Which player owns this boomerang-carried object until it is released?" | retained item-owner plumbing on `daPy_boomerangMove_c` / item movement helpers | Bomb Bug NBOMB boomerang movement retains the throwing player so carry/catch/drop position uses P2 when P2 threw the boomerang |
+| "Which player owns this collectible draw-in/pickup effect?" | `dusk::coop::retained_interaction_owner::Collect` plus active-player pickup eligibility | Tears of Light retain the player who entered the native pickup radius so draw-in lines and `onWolfLightDropGet()` use that slot |
 | "Which player owns this item/tool instance?" | item-owner helpers / owner keeps | Partially implemented by item ownership patches |
 | "What is this player slot locked onto or allowed to target?" | `dusk::coop::player_attention` | V1 gives additional ALINK actors their own `dAttention_c`; lock acquisition/status gating, owner target-capability masks, owner camera gameplay, cursor drawing, and actor-observed "am I locked-on?" checks use the same attention owner while P1 remains on global attention for HUD/story compatibility |
 | "What Do/A/R/Z, wolf X/Y, or 3D action status should this ALINK consume?" | `dusk::coop::player_button_status` | Implemented for ALINK gameplay prompt state; P1 forwards to vanilla globals and additional slots store sidecar values |

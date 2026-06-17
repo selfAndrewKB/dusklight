@@ -12,6 +12,7 @@ enum class RetainedInteractionScope : u8 {
     Attach,
     Carry,
     Hang,
+    Collect,
 };
 
 enum class RetainedInteractionReason : u8 {

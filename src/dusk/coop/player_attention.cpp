@@ -153,6 +153,26 @@ bool isActorLockedByAnyPlayer(const fopAc_ac_c* actor) {
     return false;
 }
 
+fopAc_ac_c* lockingPlayerForActor(const fopAc_ac_c* actor) {
+    if (actor == nullptr) {
+        return nullptr;
+    }
+
+    dAttention_c* primaryAttention = dComIfGp_getAttention();
+    if (primaryAttention->LockonTruth() && primaryAttention->LockonTarget(0) == actor) {
+        return getPlayer(PlayerSlot::Primary);
+    }
+
+    for (int i = 1; i < kPlayerSlotCount; i++) {
+        dAttention_c* attention = s_attention[i].attention;
+        if (attention != nullptr && attention->LockonTruth() && attention->LockonTarget(0) == actor) {
+            return getPlayer(static_cast<PlayerSlot>(i));
+        }
+    }
+
+    return nullptr;
+}
+
 bool isLockBlockedByPlayerStatus(dAttention_c* attention) {
     if (attention == nullptr) {
         return true;

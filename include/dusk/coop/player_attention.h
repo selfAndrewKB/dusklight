@@ -20,5 +20,6 @@ unsigned int attentionFlagsForOwner(dAttention_c* attention);
 bool canSelectActor(dAttention_c* attention, const fopAc_ac_c* actor);
 bool isViewportCursorDrawActive();
 void setViewportCursorDrawList();
+fopAc_ac_c* lockingPlayerForActor(const fopAc_ac_c* actor);
 
 }  // namespace dusk::coop::player_attention

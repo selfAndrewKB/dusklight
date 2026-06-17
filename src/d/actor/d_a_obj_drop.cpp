@@ -21,9 +21,70 @@
 #include "f_op/f_op_camera_mng.h"
 
 #include "dusk/settings.h"
+#if TARGET_PC
+#include "dusk/coop/player_query.h"
+#include "dusk/coop/retained_interaction_owner.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
 
 #if DEBUG
 daObjDrop_HIO_c l_HIO;
+#endif
+
+#if TARGET_PC
+static bool coOpDropCargoRideCandidate(daPy_py_c* player) {
+    return player != NULL && player->checkCargoCarry() &&
+           strcmp(dComIfGp_getStartStageName(), "F_SP112") == 0 &&
+           dComIfGs_isLightDropGetFlag(dComIfGp_getStartStageDarkArea());
+}
+
+static dusk::coop::selected_target_state::SelectedTargetState coOpDropFindCollector(
+    daObjDrop_c* i_this, const char* label) {
+    dusk::coop::selected_target_state::SelectedTargetState bestState;
+    f32 bestDistance = 0.0f;
+    bool found = false;
+    const bool lightDropReady = dComIfGs_isLightDropGetFlag(dComIfGp_getStartStageDarkArea());
+
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot slot, fopAc_ac_c* actor) {
+        dusk::coop::selected_target_state::SelectedTargetState state =
+            dusk::coop::selected_target_state::stateForSlot(slot, actor);
+        if (!state.available) {
+            return;
+        }
+
+        // Co-op: light-drop pickup is a collection-owner question. Preserve the native 3D
+        // collection radius and cargo special-case, but let any active slot become the owner.
+        const f32 distance = i_this->current.pos.abs(state.pos);
+        const bool canCollectByDistance = lightDropReady && distance < 250.0f;
+        const bool canCollectByCargo = coOpDropCargoRideCandidate(state.player);
+        if (!canCollectByDistance && !canCollectByCargo) {
+            return;
+        }
+
+        if (!found || distance < bestDistance) {
+            bestState = state;
+            bestDistance = distance;
+            found = true;
+        }
+    });
+
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, bestState,
+        found ? dusk::coop::selected_target_state::SelectedTargetStateReason::FilteredNearest
+              : dusk::coop::selected_target_state::SelectedTargetStateReason::NoMatch);
+    return bestState;
+}
+
+static daPy_py_c* coOpDropCurrentCollector(daObjDrop_c* i_this, const char* label) {
+    dusk::coop::retained_interaction_owner::RetainedInteractionState owner =
+        dusk::coop::retained_interaction_owner::updateRetainedInteraction(
+            label, i_this, dusk::coop::retained_interaction_owner::RetainedInteractionScope::Collect);
+    if (owner.found && owner.localPlayer != NULL) {
+        return owner.localPlayer;
+    }
+
+    return daPy_getPlayerActorClass();
+}
 #endif
 
 static void* searchParentSub(void* pproc, void* pdata) {
@@ -124,6 +185,19 @@ static f32 dummy() {
 }
 
 BOOL daObjDrop_c::checkGetArea() {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState collector =
+        coOpDropFindCollector(this, "obj_drop.check_get_area");
+    if (collector.available) {
+        dusk::coop::retained_interaction_owner::beginRetainedInteraction(
+            "obj_drop.collect", this,
+            dusk::coop::retained_interaction_owner::RetainedInteractionScope::Collect,
+            collector.actor, dusk::coop::retained_interaction_owner::RetainedInteractionReason::DirectPlayer);
+        return true;
+    }
+
+    return false;
+#else
     f32 dist_to_player = current.pos.abs(daPy_getPlayerActorClass()->current.pos);
 
     if ((daPy_getPlayerActorClass()->checkCargoCarry() &&
@@ -134,6 +208,7 @@ BOOL daObjDrop_c::checkGetArea() {
     }
 
     return false;
+#endif
 }
 
 void daObjDrop_c::checkCompleteDemo() {
@@ -297,21 +372,12 @@ int daObjDrop_c::modeParentWait() {
     return 1;
 }
 
-#if TARGET_PC
-static inline BOOL checkGetCargoRide() {
-    if (daPy_getPlayerActorClass()->checkCargoCarry() &&
-        strcmp(dComIfGp_getStartStageName(), "F_SP112") == 0 &&
-        dComIfGs_isLightDropGetFlag(dComIfGp_getStartStageDarkArea()))
-    {
-        return true;
-    }
-
-    return false;
-}
-#endif
-
 int daObjDrop_c::modeWait() {
+#if TARGET_PC
+    daPy_py_c* pplayer = coOpDropCurrentCollector(this, "obj_drop.wait_collect_owner");
+#else
     daPy_py_c* pplayer = daPy_getPlayerActorClass();
+#endif
 
     cXyz collect_pos(pplayer->current.pos);
     cXyz spF0;
@@ -333,10 +399,10 @@ int daObjDrop_c::modeWait() {
     case 50:
         #if TARGET_PC
         if (dusk::getSettings().game.fastTears) {
-            f32 player_dist = current.pos.abs(daPy_getPlayerActorClass()->current.pos);
+            f32 player_dist = current.pos.abs(pplayer->current.pos);
             f32 home_dist = current.pos.abs(home.pos);
 
-            if (checkGetCargoRide() && player_dist < 1000.0f) {
+            if (coOpDropCargoRideCandidate(pplayer) && player_dist < 1000.0f) {
                 mTargetPos = pplayer->current.pos;
                 mTargetPos.y += 100.0f;
 
@@ -612,6 +678,12 @@ int daObjDrop_c::execute() {
 }
 
 int daObjDrop_c::_delete() {
+#if TARGET_PC
+    // Co-op: light-drop draw-in retains the collecting slot until the object is deleted.
+    dusk::coop::retained_interaction_owner::clearRetainedInteraction(
+        "obj_drop.delete", this,
+        dusk::coop::retained_interaction_owner::RetainedInteractionScope::Collect);
+#endif
     removeLineEffect();
     removeBodyEffect();
     mSound.deleteObject();

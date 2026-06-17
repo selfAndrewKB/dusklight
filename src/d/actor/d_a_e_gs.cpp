@@ -93,6 +93,17 @@ static bool coOpSelectCombatTargetState(
 
     return true;
 }
+
+static bool coOpGsWolfSensePredicate(
+    const dusk::coop::selected_target_state::SelectedTargetState& state) {
+    return state.wolfSenseActive;
+}
+
+static bool coOpGsAnyWolfSensePlayer(e_gs_class* a_this) {
+    return dusk::coop::selected_target_state::findNearestPlayerState(
+               &a_this->enemy, "e_gs.wolf_sense", coOpGsWolfSensePredicate)
+        .available;
+}
 #endif
 
 static void e_gs_wait(e_gs_class* a_this) {
@@ -157,7 +168,12 @@ static int daE_GS_Execute(e_gs_class* a_this) {
     f32 alpha_target = 0.0f;
     f32 alpha_speed = l_HIO.disappear_alpha_speed;
 
+#if TARGET_PC
+    // Co-op: Ghost Soldier visibility is an active-player wolf-sense question, not P1-only form state.
+    if (coOpGsAnyWolfSensePlayer(a_this)) {
+#else
     if (daPy_py_c::checkNowWolfPowerUp()) {
+#endif
         if (a_this->timers[0] == 0) {
             alpha_target = 255.0f;
             alpha_speed = l_HIO.appear_alpha_speed;

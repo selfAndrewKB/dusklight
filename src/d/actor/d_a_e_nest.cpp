@@ -14,6 +14,9 @@
 #include "d/d_bomb.h"
 #include "f_pc/f_pc_name.h"
 #include "f_op/f_op_camera_mng.h"
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#endif
 #include <cstring>
 
 static bool hio_set;
@@ -24,6 +27,29 @@ daE_Nest_HIO_c::daE_Nest_HIO_c() {
     field_0x4 = -1;
     mScale = 1.0f;
 }
+
+#if TARGET_PC
+static fopAc_ac_c* coOpNestHitOwner(e_nest_class* i_this, cCcD_Obj* collider, const char* label) {
+    if (collider == NULL) {
+        return daPy_getPlayerActorClass();
+    }
+
+    const dusk::coop::damage_owner::DamageOwnerResult owner =
+        dusk::coop::damage_owner::resolveDamageOwner(i_this, collider);
+    dusk::coop::damage_owner::recordDamageOwnerHit(label, i_this, owner, &i_this->mAtInfo);
+    if (owner.localPlayerActor != NULL) {
+        return owner.localPlayerActor;
+    }
+
+    return daPy_getPlayerActorClass();
+}
+
+static void coOpNestSetHitOwner(e_nest_class* i_this, cCcD_Obj* collider, const char* label) {
+    // Co-op: bee swarms chase the nest's mHitActorID. Pass the player/item owner through the
+    // beehive producer so child E_BEE actors do not inherit P1 before they begin flying.
+    i_this->mHitActorID = fopAcM_GetID(coOpNestHitOwner(i_this, collider, label));
+}
+#endif
 
 static void hahen_draw(e_nest_class* i_this) {
     nest_hahen_s* debris = i_this->mDebris;
@@ -265,7 +291,11 @@ static void e_nest_normal(e_nest_class* i_this) {
                     i_this->mIframes = 10;
                     i_this->mHitTimer = 3;
                     i_this->mKnockDown = 1;
+#if TARGET_PC
+                    coOpNestSetHitOwner(i_this, i_this->mAtInfo.mpCollider, "e_nest.cyl_hit");
+#else
                     i_this->mHitActorID = fopAcM_GetID(daPy_getPlayerActorClass());
+#endif
                 }
             } else {
                 int knock_down = false;
@@ -278,7 +308,11 @@ static void e_nest_normal(e_nest_class* i_this) {
                         i_this->mAction = e_nest_class::ACT_HOOK;
                         i_this->mMode = 0;
                         i_this->mKnockDown = 0;
+#if TARGET_PC
+                        coOpNestSetHitOwner(i_this, i_this->mAtInfo.mpCollider, "e_nest.hookshot");
+#else
                         i_this->mHitActorID = fopAcM_GetID(daPy_getPlayerActorClass());
+#endif
                     } else if (i_this->mAtInfo.mpCollider->ChkAtType(AT_TYPE_SLINGSHOT) ||
                                i_this->mAtInfo.mpCollider->ChkAtType(AT_TYPE_IRON_BALL)) {
                         i_this->mHitTimer = 10;
@@ -300,7 +334,12 @@ static void e_nest_normal(e_nest_class* i_this) {
                         if (!dComIfGp_event_runCheck()) {
                             i_this->mHitTimer = 20;
                             i_this->mKnockDown = 1;
+#if TARGET_PC
+                            coOpNestSetHitOwner(i_this, i_this->mAtInfo.mpCollider,
+                                                "e_nest.knock_down");
+#else
                             i_this->mHitActorID = fopAcM_GetID(daPy_getPlayerActorClass());
+#endif
                             if (!strcmp(dComIfGp_getStartStageName(), "F_SP103")) {
                                 i_this->mDemoStage = 1;
                                 /* dSv_event_flag_c::F_0084 - Ordon Village - Opening days 2&3: knocked down a beehive with slingshot */
@@ -312,7 +351,11 @@ static void e_nest_normal(e_nest_class* i_this) {
                             || i_this->mAtInfo.mHitType == HIT_TYPE_ARROW
                             || i_this->mAtInfo.mHitType == HIT_TYPE_BOOMERANG
                             || i_this->mAtInfo.mHitType == HIT_TYPE_STUN) {
+#if TARGET_PC
+                        coOpNestSetHitOwner(i_this, i_this->mAtInfo.mpCollider, "e_nest.attack_hit");
+#else
                         i_this->mHitActorID = fopAcM_GetID(daPy_getPlayerActorClass());
+#endif
                         /* dSv_event_flag_c::F_0073 - Ordon Village - Attacked after charging at large beehive */
                         dComIfGs_onEventBit(dSv_event_flag_c::saveBitLabels[172]);
                     } else if (fopAcM_GetName(actor) == fpcNm_NPC_TK_e) {

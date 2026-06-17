@@ -12,6 +12,13 @@
 #include "f_op/f_op_actor_enemy.h"
 #include "f_op/f_op_camera_mng.h"
 #include "Z2AudioLib/Z2Instances.h"
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/player_attention.h"
+#include "dusk/coop/selected_target_state.h"
+#include "dusk/coop/wolf_catch_owner.h"
+#endif
 #include <cstring>
 
 
@@ -96,6 +103,69 @@ static int mArg0Check(e_po_class* i_this, s16 param_1) {
     }
     return 0;
 }
+
+#if TARGET_PC
+// Co-op: ordinary Poe combat owns one retained target; special soul/demo presentation stays
+// authored until a dedicated ghost-down/soul owner can preserve those native sequences.
+static bool coOpSelectPoTargetState(
+    e_po_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance,
+    s16* angle_y) {
+    fopAc_ac_c* actor = (fopAc_ac_c*)i_this;
+    dusk::coop::EnemyTargetContext context;
+    context.observer = actor;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        actor, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+
+    return true;
+}
+
+static bool coOpPoWolfSensePredicate(
+    const dusk::coop::selected_target_state::SelectedTargetState& state) {
+    return state.wolfSenseActive;
+}
+
+static bool coOpPoWolfPredicate(
+    const dusk::coop::selected_target_state::SelectedTargetState& state) {
+    return state.wolf;
+}
+
+static bool coOpPoAnyWolfSensePlayer(e_po_class* i_this, const char* label) {
+    return dusk::coop::selected_target_state::findNearestPlayerState(
+               (fopAc_ac_c*)i_this, label, coOpPoWolfSensePredicate)
+        .available;
+}
+
+static bool coOpPoAnyWolfPlayer(e_po_class* i_this, const char* label) {
+    return dusk::coop::selected_target_state::findNearestPlayerState(
+               (fopAc_ac_c*)i_this, label, coOpPoWolfPredicate)
+        .available;
+}
+#endif
 
 
 static void anm_init(e_po_class* i_this, int i_index, f32 i_morf, u8 i_attr, f32 i_rate) {
@@ -333,10 +403,16 @@ static void e_po_wait(e_po_class* i_this) {
 
     case 1:
         if (!i_this->field_0x5C1) {
+#if TARGET_PC
+            // Co-op: visible Poe wake accepts wolf-sense lock-on from any player slot.
+            if (coOpPoAnyWolfSensePlayer(i_this, "e_po.wait_wolf_sense") &&
+                dusk::coop::player_attention::isActorLockedByAnyPlayer(a_this))
+#else
             if (daPy_py_c::checkNowWolfPowerUp() &&
                 dComIfGp_getAttention()->GetLockonList(0) != NULL &&
                 dComIfGp_getAttention()->LockonTruth() &&
                 dComIfGp_getAttention()->GetLockonList(0)->getActor() == a_this)
+#endif
             {
                 i_this->mType = 0;
                 i_this->mSound1.startCreatureVoice(Z2SE_EN_PO_V_FIND, -1);
@@ -344,6 +420,17 @@ static void e_po_wait(e_po_class* i_this) {
                 i_this->mActionID = ACT_SEARCH;
                 return;
             }
+#if TARGET_PC
+            // Co-op: idle visible-facing tracks the retained Combat target once any player is eligible.
+            dusk::coop::selected_target_state::SelectedTargetState targetState;
+            coOpSelectPoTargetState(i_this, "e_po.wait_face", false,
+                                    dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
+                                    NULL, NULL);
+            if (targetState.actor != NULL) {
+                i_this->enemy.current.angle.y =
+                    fopAcM_searchActorAngleY(a_this, targetState.actor) + 0x8000;
+            } else
+#endif
             i_this->enemy.current.angle.y = fopAcM_searchPlayerAngleY(a_this) + 0x8000;
             return;
         }
@@ -366,12 +453,21 @@ static void e_po_wait(e_po_class* i_this) {
 
 static void e_po_avoid(e_po_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)i_this;
+#if TARGET_PC
+    // Co-op: avoid/flee facing is selected-target steering, not a new nearest-player query.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectPoTargetState(i_this, "e_po.avoid", false,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL, NULL);
+    fopAc_ac_c* player_p = targetState.actor != NULL ? targetState.actor : dComIfGp_getPlayer(0);
+#else
+    fopAc_ac_c* player_p = dComIfGp_getPlayer(0);
+#endif
 
     switch (i_this->mType) {
     case 0:
         anm_init(i_this, ANM_SWAY_BACK, 0.0f, 0, 1.0f);
         i_this->mSound1.startCreatureVoice(Z2SE_EN_PO_V_LAUGH, -1);
-        i_this->enemy.current.angle.y = fopAcM_searchPlayerAngleY(a_this);
+        i_this->enemy.current.angle.y = fopAcM_searchActorAngleY(a_this, player_p);
         i_this->enemy.attention_info.flags &= ~fopAc_AttnFlag_BATTLE_e;
         if (cM_rndF(1.0f) < 0.5f) {
             i_this->enemy.current.angle.y += 0x4000;
@@ -397,7 +493,7 @@ static void e_po_avoid(e_po_class* i_this) {
 
     cLib_addCalc2(&i_this->enemy.speedF, 8.0f, 1.0f, 1.0f);
     cLib_addCalcAngleS2(&i_this->enemy.shape_angle.y,
-                        fopAcM_searchPlayerAngleY(a_this), 2, 0x2000);
+                        fopAcM_searchActorAngleY(a_this, player_p), 2, 0x2000);
     i_this->field_0x754 = 20;
 }
 
@@ -405,7 +501,15 @@ static void e_po_avoid(e_po_class* i_this) {
 static void e_po_search(e_po_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)i_this;
 
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectPoTargetState(i_this, "e_po.search", false,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL, NULL);
+    fopAc_ac_c* player_p =
+        targetState.available ? targetState.actor : static_cast<fopAc_ac_c*>(dComIfGp_getPlayer(0));
+#else
     fopAc_ac_c* player_p = static_cast<fopAc_ac_c*>(dComIfGp_getPlayer(0));
+#endif
     cXyz distance_from_home;
     cXyz distance_from_player;
     f32 temp_float = 0.0f;
@@ -467,7 +571,7 @@ static void e_po_search(e_po_class* i_this) {
             if (i_this->mAnmID != ANM_WAIT02) {
                 anm_init(i_this, ANM_WAIT02, 10.0f, 2, 1.0f);
             }
-            angle_tan = sVar3 + fopAcM_searchPlayerAngleY(a_this);
+            angle_tan = sVar3 + fopAcM_searchActorAngleY(a_this, player_p);
 
             distance_from_player = a_this->home.pos - player_p->current.pos;
             if (distance_from_player.abs() < l_HIO.mType0AtRange) {
@@ -498,7 +602,7 @@ static void e_po_search(e_po_class* i_this) {
         }
     }
     if (i_this->mType != 4) {
-        cLib_addCalcAngleS2(&a_this->current.angle.y, sVar3 + fopAcM_searchPlayerAngleY(a_this),
+        cLib_addCalcAngleS2(&a_this->current.angle.y, sVar3 + fopAcM_searchActorAngleY(a_this, player_p),
                             0x10, 0x800);
     }
 }
@@ -506,7 +610,16 @@ static void e_po_search(e_po_class* i_this) {
 
 static void e_po_attack(e_po_class* i_this) {
     fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
+#if TARGET_PC
+    // Co-op: attack hover height follows the retained Combat target.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectPoTargetState(i_this, "e_po.attack", true,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL, NULL);
+    fopAc_ac_c* player_p =
+        targetState.actor != NULL ? targetState.actor : dComIfGp_getPlayer(0);
+#else
     daPy_py_c* player_p = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
     s32 frame = i_this->mpMorf->getFrame();
     f32 temp_float = 0.0f;
     if (mArg0Check(i_this, 0) != 0 && i_this->field_0x5C1) {
@@ -593,7 +706,7 @@ static void e_po_attack(e_po_class* i_this) {
         }
 
         cLib_addCalc2(&a_this->speedF, temp_float, 0.8f, 3.0f);
-        cLib_addCalcAngleS2(&a_this->current.angle.y, fopAcM_searchPlayerAngleY(a_this), 0x10,
+        cLib_addCalcAngleS2(&a_this->current.angle.y, fopAcM_searchActorAngleY(a_this, player_p), 0x10,
                             0x1000);
         cLib_addCalc2(&a_this->current.pos.y, player_p->current.pos.y, 0.05f, i_this->field_0x7D4);
         cLib_addCalc2(&i_this->field_0x7D4, l_HIO.mMovementSpeed, 1.0f, 0.5f);
@@ -603,7 +716,9 @@ static void e_po_attack(e_po_class* i_this) {
 
 static void damage_check(e_po_class* i_this) {
     fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
+#if !TARGET_PC
     daPy_py_c* player_p = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
 
     if (i_this->field_0x754 != 0 || i_this->field_0x757 == 0) {
         return;
@@ -621,7 +736,14 @@ static void damage_check(e_po_class* i_this) {
     i_this->enemy.scale.set(l_HIO.mBaseSize, l_HIO.mBaseSize, l_HIO.mBaseSize);
     setMidnaBindEffect(&i_this->enemy, &i_this->mSound1, &position, &i_this->enemy.scale);
     i_this->field_0x7DC = TRUE;
-    if (daPy_py_c::checkNowWolf() &&
+    if (
+#if TARGET_PC
+        // Co-op: Poe vulnerability during visible attack/roll states follows any active wolf slot.
+        coOpPoAnyWolfPlayer(i_this, "e_po.damage_wolf")
+#else
+        daPy_py_c::checkNowWolf()
+#endif
+        &&
         ((i_this->mActionID == ACT_ATTACK && i_this->field_0x5F4 > 200.0f) ||
          (i_this->mActionID == ACT_ROLL_MOVE && i_this->field_0x5F4 > 200.0f)))
     {
@@ -642,6 +764,14 @@ static void damage_check(e_po_class* i_this) {
         i_this->mAtInfo.mpCollider = i_this->mCyl.GetTgHitObj();
         i_this->mAtInfo.field_0x18 = 31;
         cc_at_check(a_this, &i_this->mAtInfo);
+#if TARGET_PC
+        // Co-op: Poe hit reactions and wolf-bite ownership follow the player who struck it.
+        const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+            dusk::coop::damage_owner::resolveDamageOwner(a_this, i_this->mAtInfo.mpCollider);
+        dusk::coop::damage_owner::recordDamageOwnerHit("e_po.damage", a_this, damageOwner,
+                                                       &i_this->mAtInfo);
+        daPy_py_c* player_p = dusk::coop::damage_owner::resolveDamageOwnerPlayer(damageOwner);
+#endif
         if (mArg0Check(i_this, 0xFF) == 2) {
             mRollHp = i_this->enemy.health;
         }
@@ -649,11 +779,16 @@ static void damage_check(e_po_class* i_this) {
         i_this->field_0x754 = 20;
         cXyz temp_vec;
         temp_vec.set(*i_this->mCyl.GetTgHitPosP());
-        if (player_p->getCutType() != daPy_py_c::CUT_TYPE_WOLF_B_LEFT &&
+        if (player_p != NULL &&
+            player_p->getCutType() != daPy_py_c::CUT_TYPE_WOLF_B_LEFT &&
             player_p->getCutType() != daPy_py_c::CUT_TYPE_WOLF_B_RIGHT &&
             i_this->mAtInfo.mpCollider->ChkAtType(AT_TYPE_WOLF_ATTACK) &&
             player_p->onWolfEnemyHangBite(&i_this->enemy))
         {
+#if TARGET_PC
+            dusk::coop::wolf_catch_owner::beginWolfCatchFromDamageOwner(
+                "e_po.wolfbite", a_this, damageOwner);
+#endif
             dScnPly_c::setPauseTimer(0);
             dComIfGp_setHitMark(3, &i_this->enemy, &i_this->enemy.getDownPos(),
                                 &i_this->enemy.shape_angle, NULL, 0);
@@ -725,7 +860,15 @@ static void e_po_damage(e_po_class* i_this) {
 
 static void e_po_wolfbite(e_po_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)i_this;
+#if TARGET_PC
+    // Co-op: the ongoing wolf-bite hang is owned by the wolf that caused the hit.
+    dusk::coop::wolf_catch_owner::WolfCatchOwnerState catchOwner =
+        dusk::coop::wolf_catch_owner::updateWolfCatch("e_po.wolfbite", a_this);
+    daPy_py_c* player_p =
+        catchOwner.localPlayer != NULL ? catchOwner.localPlayer : (daPy_py_c*)dComIfGp_getPlayer(0);
+#else
     daPy_py_c* player_p = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
     i_this->field_0x754 = 10;
     a_this->speedF = 0.0f;
     switch (i_this->mType) {
@@ -754,6 +897,9 @@ static void e_po_wolfbite(e_po_class* i_this) {
             }
             if (a_this->health <= 1) {
                 player_p->offWolfEnemyHangBite();
+#if TARGET_PC
+                dusk::coop::wolf_catch_owner::clearWolfCatch("e_po.wolfbite_dead", a_this);
+#endif
                 i_this->mActionID = ACT_DEAD;
                 i_this->mType = 0;
                 a_this->health = 0;
@@ -775,6 +921,9 @@ static void e_po_wolfbite(e_po_class* i_this) {
         {
             anm_init(i_this, ANM_HANGED_BRUSH, 2.0f, 0, 1.0f);
             player_p->offWolfEnemyHangBite();
+#if TARGET_PC
+            dusk::coop::wolf_catch_owner::clearWolfCatch("e_po.wolfbite_release", a_this);
+#endif
             i_this->mType = 2;
             return;
         }
@@ -1296,7 +1445,16 @@ static void e_po_dead(e_po_class* i_this) {
 
 static f32 e_rollingMove(e_po_class* i_this, s16 param_1, f32 param_2, f32 param_3) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)i_this;
+#if TARGET_PC
+    // Co-op: the four-Poe rolling formation orbits the retained Combat target instead of P1.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectPoTargetState(i_this, "e_po.roll_center", false,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL,
+                            NULL);
+    fopAc_ac_c* player_p = targetState.actor != NULL ? targetState.actor : dComIfGp_getPlayer(0);
+#else
     fopAc_ac_c* player_p = dComIfGp_getPlayer(0);
+#endif
     cXyz local_38;
     cXyz cStack_44;
 
@@ -1555,7 +1713,16 @@ static void e_po_limbering(e_po_class* i_this) {
 
 static void e_po_roll_move(e_po_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)i_this;
+#if TARGET_PC
+    // Co-op: active rolling Poes use the same Combat target for formation center and facing.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectPoTargetState(i_this, "e_po.roll_move", false,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL,
+                            NULL);
+    fopAc_ac_c* player_p = targetState.actor != NULL ? targetState.actor : dComIfGp_getPlayer(0);
+#else
     fopAc_ac_c* player_p = static_cast<fopAc_ac_c*>(dComIfGp_getPlayer(0));
+#endif
 
     if (mArg0Check(i_this, 0xFF) == 2 && mAttackNo == 0) {
         i_this->field_0x758 = 1;
@@ -1681,7 +1848,7 @@ static void e_po_roll_move(e_po_class* i_this) {
             cLib_addCalc2(&mHaba, i_this->field_0x804, var_f2, var_f3);
         }
     }
-    s16 var_r4 = fopAcM_searchPlayerAngleY(a_this);
+    s16 var_r4 = fopAcM_searchActorAngleY(a_this, player_p);
     if (i_this->mAnmID == ANM_RUN_AFTER2) {
         var_r4 = a_this->current.angle.y;
     }
@@ -2452,22 +2619,54 @@ static void e_po_holl_demo(e_po_class* i_this) {
 
 static void action(e_po_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)i_this;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    if (!coOpSelectPoTargetState(i_this, "e_po.action",
+                                 i_this->mActionID == ACT_ATTACK || i_this->mActionID == ACT_WOLF_BITE,
+                                 dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
+                                 &i_this->field_0x744, NULL))
+    {
+        targetState.actor = dComIfGp_getPlayer(0);
+        targetState.player = (daPy_py_c*)targetState.actor;
+        targetState.available = targetState.actor != NULL;
+        if (targetState.actor != NULL) {
+            targetState.pos = targetState.actor->current.pos;
+        }
+        i_this->field_0x744 = fopAcM_searchPlayerDistance(a_this);
+    }
+    daPy_py_c* player_p =
+        targetState.player != NULL ? targetState.player : (daPy_py_c*)dComIfGp_getPlayer(0);
+#else
     daPy_py_c* player_p = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
 
     cXyz local_3c;
     cXyz local_48;
+#if !TARGET_PC
     i_this->field_0x744 = fopAcM_searchPlayerDistance(a_this);
+#endif
 
     f32 var_f31 = 0.0f;
     f32 var_f30 = 30.0f;
     if (mArg0Check(i_this, 2) != 0) {
+#if TARGET_PC
+        if (targetState.actor != NULL && fopAcM_otherBgCheck(a_this, targetState.actor)) {
+#else
         if (fopAcM_otherBgCheck(a_this, dComIfGp_getPlayer(0))) {
+#endif
             i_this->field_0x74A[3] = 5;
         }
     }
     if (i_this->field_0x75A == 0 && i_this->mActionID != ACT_HOLL_DEMO) {
+#if TARGET_PC
+        // Co-op: visibility/attention follows any active wolf-sense player, while the retained
+        // Combat target still supplies ordinary distance and facing facts.
+        if (coOpPoAnyWolfSensePlayer(i_this, "e_po.action_wolf_sense") ||
+            (i_this->mActionID == ACT_DEAD && i_this->mType == 2))
+#else
         if (daPy_py_c::checkNowWolfPowerUp() != 0 ||
             (i_this->mActionID == ACT_DEAD && i_this->mType == 2))
+#endif
         {
             if (i_this->field_0x74A[3] == 0) {
                 var_f31 = 230.0f;
@@ -2568,11 +2767,24 @@ static void action(e_po_class* i_this) {
             i_this->mActionID != ACT_HOLL_DEMO)
         {
             s16 var_r27_2 = a_this->current.angle.y;
-            if (i_this->field_0x5C1 &&
-                (daPy_py_c::checkNowWolfPowerUp() != 0 || i_this->field_0x5F4 > 50.0f))
+#if TARGET_PC
+            const bool shouldFacePlayer =
+                i_this->field_0x5C1 &&
+                (coOpPoAnyWolfSensePlayer(i_this, "e_po.shape_wolf_sense") ||
+                 i_this->field_0x5F4 > 50.0f);
+            if (shouldFacePlayer)
+            {
+                var_r27_2 = fopAcM_searchActorAngleY(a_this, targetState.actor) + 0x8000;
+            }
+#else
+            const bool shouldFacePlayer =
+                i_this->field_0x5C1 &&
+                (daPy_py_c::checkNowWolfPowerUp() != 0 || i_this->field_0x5F4 > 50.0f);
+            if (shouldFacePlayer)
             {
                 var_r27_2 = fopAcM_searchPlayerAngleY(a_this) + 0x8000;
             }
+#endif
             cLib_addCalcAngleS2(&a_this->shape_angle.y, var_r27_2, 2, 0x2000);
         }
     }
@@ -2827,6 +3039,11 @@ static int daE_PO_IsDelete(e_po_class* param_0) {
 static int daE_PO_Delete(e_po_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)i_this;
 
+#if TARGET_PC
+    // Co-op: purge retained Combat and wolf-bite state before the Poe actor memory can be reused.
+    dusk::coop::clearAllEnemyTargets(a_this);
+    dusk::coop::wolf_catch_owner::clearWolfCatch("e_po.delete", a_this);
+#endif
     dComIfG_resDelete(&i_this->mPhase, "E_PO");
     if (i_this->field_0xECC != 0) {
         hio_set = FALSE;
