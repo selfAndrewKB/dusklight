@@ -385,6 +385,29 @@ Initial stance:
 - Reuse behavior-owned enemy target state where the native question is about an enemy's current
   opponent. Do not infer an owner from actor iteration order.
 
+Bulblin Rider / King Bulblin source split (`src/d/actor/d_a_e_rd.cpp`):
+
+- `ACTOR_SET_NONE` is the ordinary Bulblin Rider path. This can use regular enemy APIs: one Combat
+  owner for Link-targeted distance/angle, `selected_target_state` for the selected target's
+  mounted facts, `horse_owner` for that target slot's assigned horse speed, `player_attention` for
+  "is any mounted active player locking this Rider?", `damage_owner` for horseback hit bonuses, and
+  `defender_owner` for guard contact.
+- `ACTOR_SET_E3_2005`, `ACTOR_SET_IKKI`, `ACTOR_SET_IKKI2`, and `ACTOR_SET_LV9` are authored
+  encounter variants using `E_rdb` resources. Comments tie them to Eldin Field, Eldin Bridge, Lake
+  Hylia Bridge, and Hyrule Castle. These are not ordinary enemy-awareness conversions.
+- `F_SP121` room `0` is treated in code/comments as Hyrule Field / Bridge of Eldin setup. `F_SP102`
+  is explicitly commented as Bridge of Eldin Battle and includes P1-position fall/skip logic.
+- `ride_game_actor_set()` spawns `E_WB` boars. The bridge/castle variants use hard-coded authored
+  coordinates; only the E3 2005 case places boars relative to P1's angle. Do not replace this with
+  nearest-player placement without an encounter-owner decision.
+- `demo_camera()` is a singular presentation script: it calls P1 demo modes, P1 placement helpers,
+  camera 0 / P1 camera, global event acceptance/reset, hard-coded camera coordinates, and setpiece
+  actor cleanup. Keep it protagonist/event-owned until a dedicated King Bulblin / bridge
+  presentation plan owns the whole sequence.
+- `get_pla()` intentionally compares Link and the coach/wagon actor. Ordinary co-op target
+  replacement should only run when this helper chose Link; coach/wagon remains an authored escort
+  target until an escort-owner pass says otherwise.
+
 ##### Enemy Reactions To Mounted Speed
 
 Several enemy damage and behavior paths still decide reaction strength by asking whether P1 rides

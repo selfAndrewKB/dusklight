@@ -141,6 +141,40 @@ angle/distance dispatcher cache from the Combat owner, answer wolf-bark fear wit
 release, throw direction, and mouth-matrix attachment in `wolf_catch_owner`. Their skull/dokuro
 searches are object-owned behavior and should not be converted as player targeting.
 
+Deku Like (`E_DF`) adds the swallow/eat version of retained interaction ownership. The wake question
+is "which active falling player entered the mouth volume?", so it uses selected/player-state facts
+such as slot-local `status0_0x100`, height, and distance. Once the actor starts eating Link, the
+question changes to "which player is currently swallowed?", so `retained_interaction_owner` owns
+the ALINK through hold, repositioning, spit-out, throw damage, cleanup, and delete. Bomb/object
+eating remains object-owned behavior. Link-swallow camera/demo presentation is then a separate
+`event_presentation::EnemyRetainedInteraction` surface that presents the retained swallowed slot
+fullscreen; it does not change the retained gameplay owner or become combat targeting.
+
+Twilit Carrier Kargarok (`E_YC`) and Rider (`E_RDY`) add the split-actor carry version of the same
+rule. The carrier detects the caught selected target, but the rider owns the native carry demo and
+camera state machine. Key the retained `Carry` owner to the actor that consumes the demo/camera
+state, then let that actor choose the retained slot's player and player camera for `changeDemoMode`,
+throw damage, camera stop/reset, and `event_presentation::EnemyRetainedInteraction`. Ordinary Rider
+arrows can inherit the retained Combat target, while path, coach, bridge, King Bulblin, and other
+authored setpiece arrows/demos stay on their native target until a dedicated setpiece-owner policy
+classifies them.
+
+Bulblin Rider (`E_RD`) is the mounted/setpiece boundary for regular-enemy batching. Ordinary Link
+combat can still use the usual dispatcher-cache pattern: fill native distance/angle fields from one
+Combat owner, route guard contact through `defender_owner`, and route hit reactions through
+`damage_owner`. Ordinary mounted run/attack gates add three ownership questions: selected-target
+horse facts should come from `selected_target_state` plus `horse_owner`, selected-target boar state
+should come from `selected_target_state`, and "is the mounted opponent locking onto me?" should
+observe slot-local `player_attention`. But Rider also deliberately targets non-player actors such as
+the coach/wagon; ordinary bow aim and spawned arrow launch math should inherit the retained Combat
+target while preserving native coach-arrow homing only for those authored non-player targets. Rider
+also owns a separate boar actor in ordinary mounted combat. That mount should not select a target of
+its own; it should derive steering, pass checks, range checks, and selected-slot horse-speed gates
+from the mounted Rider's retained Combat target. Rider also contains bridge, King Bulblin-style,
+horn, death notification, and demo-camera paths. Preserve those authored targets until a
+mounted/setpiece or presentation API specifically owns the question; do not flatten them into
+nearest-player targeting.
+
 Poe (`E_HP`) shows that ghost visibility and vulnerability can be selected/active-player state
 without becoming combat targeting. Wake, move, attack, and down-state steering use the Combat owner;
 wolf-form and wolf-sense reveal gates scan active players. Soul pull-out drawing, item-get, and
@@ -202,13 +236,13 @@ player who owns the accepted catch event, so it routes through `event_owner`.
 | "Which active player is nearest or eligible by raw distance/angle facts?" | `dusk::coop::player_query` | Implemented |
 | "Who is this enemy fighting right now?" | `dusk::coop::enemy_targeting` | Implemented for scoped combat targeting |
 | "Who caused this hit?" | `dusk::coop::damage_owner` / narrow actor-local collision owner checks | Implemented for direct players and known owned items; Big Freezard added a bespoke direct-hit counter proof for enemies that bypass normal HP |
-| "What is the selected target's form/speed/guard/horse/swim/damage/status state?" | `dusk::coop::selected_target_state` | Initial implementation for target speed/facing/position/cut/horse facts; Chilfos added selected-target damage-wait and slot-local status bits such as `0x100` and iron-ball subject mode; Bomb Bug added selected-target collision-status band checks through `player_camera_status`; Ghost Rat added owner-local wolf-sense visibility facts; Shadow Beast added owner-local wolf bark/threat facts |
+| "What is the selected target's form/speed/guard/horse/boar/swim/damage/status state?" | `dusk::coop::selected_target_state` | Initial implementation for target speed/facing/position/cut/horse facts; Bulblin Rider added selected-target boar-ride state for mounted attack volume; Chilfos added selected-target damage-wait and slot-local status bits such as `0x100` and iron-ball subject mode; Bomb Bug added selected-target collision-status band checks through `player_camera_status`; Ghost Rat added owner-local wolf-sense visibility facts; Shadow Beast added owner-local wolf bark/threat facts |
 | "What position/angle should this enemy use for chase detours after it already selected a target?" | `dusk::coop::selected_target_state` | Bokoblin obstacle steering proof uses selected target facts instead of P1 globals |
 | "Is any active player near this enemy/teammate for group wake-up?" | `dusk::coop::player_query` | Bokoblin group battle participation uses nearest active-player facts |
 | "Which active player can trip this authored trigger or room switch?" | future `world_trigger` helpers plus `world.switch` diagnostics | Diagnostics implemented; Ghost Rat ceiling-drop gates exposed switches `227-229` in `D_MN10` room `10`; Ghost Rat now opens the native authored room switch when an active player satisfies the same local wake predicate |
 | "Who did this enemy attack touch, and was that player guarding/blocking?" | `dusk::coop::defender_owner` | Initial direct-player implementation for Bokoblin guard collision |
 | "Which player collided, rode, pushed, stood on, or picked this up?" | broader collision-owner helpers | Not implemented yet |
-| "Which player is caught, stunned, grabbed, carried, swallowed, or retained by this actor?" | `dusk::coop::caught_stun_owner` / `dusk::coop::wolf_catch_owner` / `dusk::coop::retained_interaction_owner` / future caught-grab helpers | Gibdo scream stun uses `caught_stun_owner`; Keese and Skulltula wolf bites use `wolf_catch_owner`; Ghost Rat attach and Peahat hookshot carry use `retained_interaction_owner` |
+| "Which player is caught, stunned, grabbed, carried, swallowed, or retained by this actor?" | `dusk::coop::caught_stun_owner` / `dusk::coop::wolf_catch_owner` / `dusk::coop::retained_interaction_owner` / future caught-grab helpers | Gibdo scream stun uses `caught_stun_owner`; Keese and Skulltula wolf bites use `wolf_catch_owner`; Ghost Rat attach, Peahat hookshot carry, Deku Like swallow, and Twilit Carrier Rider-carry use `retained_interaction_owner` |
 | "Which active player or owned item should this enemy notice immediately?" | `dusk::coop::item_awareness` / narrow active-player scans | Initial hookshot-awareness proof in White Wolfos; Keese boomerang wind uses `item_awareness` |
 | "Which player/camera owns this spawn intro, child facing, or presentation angle?" | future presentation/camera-owner helpers | White Wolfos uses a narrow helper; broader API deferred |
 | "Which target or owner should this enemy-spawned weapon/object inherit?" | parent/master `enemy_targeting` scope, `damage_owner`, or retained interaction owner depending on the source | Chilfos thrown spear launch math inherits the parent Combat target when the parent is live; Bomb Bug hookshot/boomerang-created bombs inherit the player/item damage owner before NBOMB create-time setup |
@@ -218,6 +252,8 @@ player who owns the accepted catch event, so it routes through `event_owner`.
 | "What Do/A/R/Z, wolf X/Y, or 3D action status should this ALINK consume?" | `dusk::coop::player_button_status` | Implemented for ALINK gameplay prompt state; P1 forwards to vanilla globals and additional slots store sidecar values |
 | "Which X/Y items has this player assigned?" | `dusk::coop::player_item_selection` | Implemented as runtime sidecar assignments for additional slots with P1 forwarding to vanilla globals; inventory and consumable pools remain shared |
 | "Which runtime Epona belongs to this player slot or rider?" | `dusk::coop::horse_owner` | Authored Epona remains canonical for story/save compatibility and additional slots receive slot-assigned runtime clones; rider-local mounted gameplay, per-viewport spur presentation, and any-active-horse fence-jump tags are routed, while remaining collision and authored world-tag families stay active audit work |
+| "Which selected enemy target's horse speed or mounted state should drive an enemy gate?" | `selected_target_state` plus `horse_owner` | Bulblin Rider's ordinary mounted run/attack spacing and fast-horse gates use the retained Combat target's slot-assigned horse; authored bridge/King Bulblin progression remains a separate setpiece-owner question |
+| "Which player should a rider-owned mount steer around?" | Parent/rider `enemy_targeting` plus mount-local `selected_target_state` snapshots | Ordinary Bulblin Rider boars inherit the Rider's retained Combat target for steering and speed gates; leader/King Bulblin and player-mounted boar paths remain authored/setpiece or horse/mount ownership questions |
 | "Which player's prompt/item state is this HUD/meter pass presenting?" | `dusk::coop::hud_owner` | Split-screen prompt and assigned-item HUD replay reads slot-local button state and item snapshots; the Epona spur presenter also resolves horse-local lash counts while broader independent inventory/menu/meter duplication remains deferred |
 | "Which slot owns this transient overlay, delayed reticle packet, or singular item wheel?" | `dusk::coop::ui_owner` | Implemented for scoped presentation slots, retained singular UI ownership, viewport-local projection/draw helpers, Hawkeye scope, ALINK live reticles, boomerang lock markers, and fishing forced-wheel entry |
 | "Which player owns first-person/item/camera-action status?" | `dusk::coop::player_camera_status` over `dusk::coop::camera` | First pass implemented for slot-local status 0/1 bits, camera attention bits, subject zoom/focus, bow/slingshot, Hawkeye, iron ball subject mode, hookshot subject/hang/flight status, MG_ROD camera/cast status, and wolf AOE charge/dome/lock camera status lifecycle |
@@ -225,7 +261,7 @@ player who owns the accepted catch event, so it routes through `event_owner`.
 | "Which player requested this accepted event/demo?" | `dusk::coop::event_owner` | Initial implementation derives from event `Pt1`; message input, ALINK door-demo staff consumption, and knob/shutter door demos use it so P2-started scripted interactions do not animate or move P1 |
 | "Which player owns the transient Midna service and manual wolf-transform request?" | `dusk::coop::midna_owner` | P1's Midna remains canonical for story/save/global paths, while active additional slots get runtime Midna service actors; active-service position/no-draw setup, prompt eligibility, message branch reads, transform blocking, accepted transform demo handoff, and the talk/camera status bit follow the service actor's ALINK slot |
 | "Which player owns this active interactive dialogue/message surface?" | `dusk::coop::message_owner` | Retains the dialogue slot, pad, listener, speaker, and presenter actor after the native message controller accepts the message, with `talkStartInit()` as fallback insurance; prefers active `midna_owner` service, otherwise falls back to `event_owner`; A/B and choice input read the retained pad while native global movement/input locking remains intact |
-| "Should this explicitly classified singular event, interactive dialogue, or captured menu surface temporarily present one fullscreen camera and hide non-presenting players?" | `dusk::coop::event_presentation` | Implemented as an opt-in presentation override above the camera sidecar; P1/global howling stones, Midna service, interactive dialogue, item ring, Start-menu tree, field/dungeon maps, and Agitha's insect screen are classified consumers |
+| "Should this explicitly classified singular event, interactive dialogue, retained enemy interaction, or captured menu surface temporarily present one fullscreen camera and hide non-presenting players?" | `dusk::coop::event_presentation` | Implemented as an opt-in presentation override above the camera sidecar; P1/global howling stones, Midna service, interactive dialogue, retained enemy Link-swallow/Rider-carry presentation, item ring, Start-menu tree, field/dungeon maps, and Agitha's insect screen are classified consumers |
 | "Which player is retained by this training sequence?" | future `training_owner` | Deferred unless Hidden Skill / `NPC_KN` playtesting exposes a concrete P2 ownership failure |
 | "Which player owns camera/HUD/message/story/save state?" | camera/HUD/story-specific APIs | Partially implemented for split-screen camera only |
 | "Which viewport owns this render pass, post effect, lighting, fog, or culling decision?" | split-screen viewport/render ownership APIs | Initial audit in `coop-split-screen-api-audit.md`; `render_visibility` implemented for known draw-culling paths |

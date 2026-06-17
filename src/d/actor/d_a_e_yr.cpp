@@ -10,6 +10,11 @@
 #include "d/d_cc_d.h"
 #include "d/d_path.h"
 #include "f_op/f_op_actor_enemy.h"
+#if TARGET_PC
+#include "dusk/coop/defender_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
 
 class e_yrHIO_c : public fOpAcm_HIO_entry_c {
 public:
@@ -239,9 +244,62 @@ static void kuti_open(e_yr_class* i_this, s16 param_1, u32 param_2) {
     }
 }
 
+#if TARGET_PC
+// Co-op: Dark Kargarok modes consume cached yaw/pitch/distance fields throughout the tick.
+// Fill those fields from one Combat target owner; callsite labels remain diagnostics only.
+static bool coOpSelectYrTargetState(
+    e_yr_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance,
+    s16* angle_y) {
+    fopAc_ac_c* actor = (fopAc_ac_c*)&i_this->mEnemy;
+    dusk::coop::EnemyTargetContext context;
+    context.observer = actor;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        actor, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    cXyz diff = targetState.pos - actor->current.pos;
+    diff.y = targetState.pos.y + 100.0f - actor->current.pos.y;
+    i_this->mPlayerLatDist = JMAFastSqrt(diff.x * diff.x + diff.z * diff.z);
+    i_this->mYawToPlayer = cM_atan2s(diff.x, diff.z);
+    i_this->mPitchToPlayer = -cM_atan2s(diff.y, i_this->mPlayerLatDist);
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    return true;
+}
+#endif
+
 static int e_yr_player_bg_check(e_yr_class* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)&i_this->mEnemy;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectYrTargetState(i_this, "e_yr.bg_check", false,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL,
+                            NULL);
+    fopAc_ac_c* player = targetState.available ? targetState.actor : dComIfGp_getPlayer(0);
+#else
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
     dBgS_LinChk linChk;
     cXyz unkXyz1;
     cXyz unkXyz2;
@@ -266,7 +324,16 @@ static e_yrHIO_c l_e_yrHIO;
 
 static int e_yr_player_view_check(e_yr_class* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)&i_this->mEnemy;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: wake/view eligibility is an immediate awareness read over active players.
+    coOpSelectYrTargetState(i_this, "e_yr.view_check", false,
+                            dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState, NULL,
+                            NULL);
+    fopAc_ac_c* player = targetState.available ? targetState.actor : dComIfGp_getPlayer(0);
+#else
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
 
     if (l_e_yrHIO.mSuddenAttack != 0) {
         return 1;
@@ -382,11 +449,23 @@ static void path_check(e_yr_class* i_this) {
 
 static int pl_horse_check(e_yr_class* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)&i_this->mEnemy;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectYrTargetState(i_this, "e_yr.horse_check", false,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL,
+                            NULL);
+    if (targetState.available && targetState.horseRide && dComIfGp_getHorseActor()->speedF > 20.0f) {
+        return 1;
+    } else {
+        return 0;
+    }
+#else
     if (daPy_getPlayerActorClass()->checkHorseRide() && dComIfGp_getHorseActor()->speedF > 20.0f) {
         return 1;
     } else {
         return 0;
     }
+#endif
 }
 
 static void daE_Yr_shadowDraw(e_yr_class* i_this) {
@@ -845,10 +924,22 @@ static void e_yr_auto_move(e_yr_class* i_this) {
 static void e_yr_atack_move(e_yr_class* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)&i_this->mEnemy;
 
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    f32 playerDist = 0.0f;
+    coOpSelectYrTargetState(i_this, "e_yr.attack_move", i_this->field_0x67d == 7,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
+                            &playerDist, NULL);
+    fopAc_ac_c* playerActor = targetState.available ? targetState.actor : dComIfGp_getPlayer(0);
+    daPy_py_c* player2 = targetState.available && targetState.player != NULL
+                             ? targetState.player
+                             : (daPy_py_c*)playerActor;
+#else
     fopAc_ac_c* playerActor = dComIfGp_getPlayer(0);
     daPy_py_c* player2 = (daPy_py_c*)playerActor;
 
     f32 playerDist = fopAcM_searchPlayerDistance(actor);
+#endif
 
     cXyz unkXyz1;
     s8 unkFlag1 = 0;
@@ -1064,19 +1155,37 @@ static void e_yr_atack_move(e_yr_class* i_this) {
         } else {
             if (frame >= 15 && frame <= 27) {
                 unkFlag2 = 1;
-                if (player2->checkPlayerGuard() && i_this->mSph1.ChkAtHit()) {
-                    i_this->field_0x6b2 = 10;
-                    i_this->field_0x67d = 10;
-                    i_this->field_0x6a4[0] = l_e_yrHIO.mChanceTime;
+                if (
+#if TARGET_PC
+                    i_this->mSph1.ChkAtHit()
+#else
+                    player2->checkPlayerGuard() && i_this->mSph1.ChkAtHit()
+#endif
+                ) {
+#if TARGET_PC
+                    // Co-op: attack bounce checks the actual defender touched by this sphere.
+                    const dusk::coop::defender_owner::DefenderOwnerResult defender =
+                        dusk::coop::defender_owner::resolveDefenderOwner(actor, &i_this->mSph1);
+                    dusk::coop::defender_owner::recordDefenderOwnerContact("e_yr.attack_guard",
+                                                                            actor, defender);
+#endif
+#if TARGET_PC
+                    if (defender.guarded)
+#endif
+                    {
+                        i_this->field_0x6b2 = 10;
+                        i_this->field_0x67d = 10;
+                        i_this->field_0x6a4[0] = l_e_yrHIO.mChanceTime;
 
-                    anm_init(i_this, 14, 0.0f, 0, l_e_yrHIO.field_0x38);
+                        anm_init(i_this, 14, 0.0f, 0, l_e_yrHIO.field_0x38);
 
-                    i_this->field_0x68c = TREG_F(7);
-                    i_this->field_0x690 = 1.0f;
-                    actor->speedF = -20.0f;
-                    unkFlag2 = 0;
+                        i_this->field_0x68c = TREG_F(7);
+                        i_this->field_0x690 = 1.0f;
+                        actor->speedF = -20.0f;
+                        unkFlag2 = 0;
 
-                    i_this->mSound.startCreatureVoice(Z2SE_EN_YR_V_DAMAGE_S, -1);
+                        i_this->mSound.startCreatureVoice(Z2SE_EN_YR_V_DAMAGE_S, -1);
+                    }
                 }
             }
         }
@@ -2028,19 +2137,33 @@ static inline void wing_smoke_set(e_yr_class* i_this) {
 static int daE_Yr_Execute(e_yr_class* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)&i_this->mEnemy;
 
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    const dusk::coop::EnemyTargetMode targetMode =
+        i_this->field_0x669 == 3 || i_this->field_0x669 == 9
+            ? dusk::coop::EnemyTargetMode::StickyCombat
+            : dusk::coop::EnemyTargetMode::ImmediateAcquire;
+    // Co-op: fill the native player cache from the Combat owner before state dispatch.
+    coOpSelectYrTargetState(i_this, "e_yr.execute", i_this->field_0x669 == 3,
+                            targetMode, &targetState, NULL, NULL);
+    fopAc_ac_c* playerActor = targetState.available ? targetState.actor : dComIfGp_getPlayer(0);
+#else
     fopAc_ac_c* playerActor = dComIfGp_getPlayer(0);
     daPy_py_c* player = (daPy_py_c*)playerActor;
-
-    cXyz unkXyz1;
-    cXyz unkXyz2;
+#endif
 
     f32 xDiff = playerActor->current.pos.x - actor->current.pos.x;
-    f32 yDiff = (100.0f + playerActor->current.pos.y) - actor->current.pos.y;
     f32 zDiff = playerActor->current.pos.z - actor->current.pos.z;
 
+#if !TARGET_PC
+    f32 yDiff = (100.0f + playerActor->current.pos.y) - actor->current.pos.y;
     i_this->mPlayerLatDist = JMAFastSqrt(xDiff * xDiff + zDiff * zDiff);
     i_this->mYawToPlayer = cM_atan2s(xDiff, zDiff);
     i_this->mPitchToPlayer = -cM_atan2s(yDiff, i_this->mPlayerLatDist);
+#endif
+
+    cXyz unkXyz1;
+    cXyz unkXyz2;
 
     i_this->field_0x6de++;
 
@@ -2378,6 +2501,9 @@ static int daE_Yr_IsDelete(e_yr_class* i_this) {
 static int daE_Yr_Delete(e_yr_class* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)&i_this->mEnemy;
 
+#if TARGET_PC
+    dusk::coop::clearAllEnemyTargets(actor);
+#endif
     dComIfG_resDelete(&i_this->mPhaseReq, "E_Yr");
 
 #if DEBUG

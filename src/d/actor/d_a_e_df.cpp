@@ -9,6 +9,11 @@
 #include "d/actor/d_a_obj_carry.h"
 #include "f_op/f_op_actor_enemy.h"
 #include "f_op/f_op_camera_mng.h"
+#if TARGET_PC
+#include "dusk/coop/event_presentation.h"
+#include "dusk/coop/retained_interaction_owner.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
 
 class daE_DF_HIO_c : public JORReflexible {
 public:
@@ -89,8 +94,18 @@ void daE_DF_c::SetAnm(int i_index, int i_attr, f32 i_morf, f32 i_rate) {
     mAnim = i_index;
 }
 
+#if TARGET_PC
+static camera_process_class* coOpDekuLikeSwallowCamera(daE_DF_c* i_this, const char* label);
+static void coOpBeginDekuLikePresentation(daE_DF_c* i_this, const char* label);
+static void coOpEndDekuLikePresentation(daE_DF_c* i_this);
+#endif
+
 void daE_DF_c::CameraSet(f32 i_posz) {
+#if TARGET_PC
+    camera_process_class* camera = coOpDekuLikeSwallowCamera(this, "e_df.camera_set");
+#else
     camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
+#endif
     cXyz center = current.pos;
     center.y += 100.0f;
 
@@ -121,8 +136,12 @@ void daE_DF_c::CameraSet(f32 i_posz) {
 }
 
 bool daE_DF_c::DemoStart() {
+#if TARGET_PC
+    camera_process_class* camera = coOpDekuLikeSwallowCamera(this, "e_df.demo_start");
+#else
     camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
     dCamera_c* body = dCam_getBody();
+#endif
 
     if (eventInfo.checkCommandDemoAccrpt() == 0) {
         fopAcM_orderPotentialEvent(this, 2, 0xffef, 0);
@@ -130,21 +149,37 @@ bool daE_DF_c::DemoStart() {
         return false;
     }
 
+#if TARGET_PC
+    coOpBeginDekuLikePresentation(this, "e_df.demo_start");
+#endif
     camera->mCamera.Stop();
+#if TARGET_PC
+    mFovY = camera->mCamera.Fovy();
+    mCenterPos = camera->mCamera.Center();
+    mEyePos = camera->mCamera.Eye();
+#else
     mFovY = body->Fovy();
     mCenterPos = body->Center();
     mEyePos = body->Eye();
+#endif
 
     camera->mCamera.SetTrimSize(3);
     return true;
 }
 
 void daE_DF_c::SetReleaseCam() {
+#if TARGET_PC
+    camera_process_class* camera = coOpDekuLikeSwallowCamera(this, "e_df.release_cam");
+#else
     camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
+#endif
     camera->mCamera.Reset(mCenterPos, mEyePos);
     camera->mCamera.Start();
     camera->mCamera.SetTrimSize(0);
     dComIfGp_event_reset();
+#if TARGET_PC
+    coOpEndDekuLikePresentation(this);
+#endif
 }
 
 int daE_DF_c::ctrlJoint(J3DJoint* i_joint, J3DModel* i_model) {
@@ -171,6 +206,129 @@ int daE_DF_c::ctrlJoint(J3DJoint* i_joint, J3DModel* i_model) {
 static u8 hio_set;
 
 static daE_DF_HIO_c l_HIO;
+
+#if TARGET_PC
+static daE_DF_c* s_coOpDekuLikePresentationOwner;
+
+// Co-op: Deku Like swallow is selected by awareness/contact, then retained by the swallowed
+// player through eat/spit frames. Its authored fullscreen camera presents the retained slot.
+static bool coOpFindDekuLikeSwallowTarget(
+    daE_DF_c* i_this, const char* label,
+    dusk::coop::selected_target_state::SelectedTargetState* state) {
+    dusk::coop::selected_target_state::SelectedTargetState bestState;
+    f32 bestDistance = 1000000.0f;
+
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot slot, fopAc_ac_c* actor) {
+        dusk::coop::selected_target_state::SelectedTargetState candidate =
+            dusk::coop::selected_target_state::stateForSlot(slot, actor);
+        if (!candidate.available || !candidate.status0_0x100 ||
+            candidate.pos.y <= i_this->current.pos.y + 200.0f)
+        {
+            return;
+        }
+
+        const f32 distance = candidate.pos.abs(i_this->current.pos);
+        if (distance < 400.0f && distance < bestDistance) {
+            bestDistance = distance;
+            bestState = candidate;
+        }
+    });
+
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, bestState,
+        bestState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::FilteredNearest
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::NoMatch);
+    if (!bestState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = bestState;
+    }
+    return true;
+}
+
+static void coOpBeginDekuLikeSwallow(daE_DF_c* i_this, const char* label,
+                                     fopAc_ac_c* playerActor) {
+    dusk::coop::retained_interaction_owner::beginRetainedInteraction(
+        label, i_this, dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach,
+        playerActor,
+        dusk::coop::retained_interaction_owner::RetainedInteractionReason::DirectPlayer);
+}
+
+static dusk::coop::retained_interaction_owner::RetainedInteractionState
+coOpDekuLikeSwallowState(daE_DF_c* i_this, const char* label) {
+    return dusk::coop::retained_interaction_owner::updateRetainedInteraction(
+        label, i_this, dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach);
+}
+
+static dusk::coop::PlayerSlot coOpDekuLikeSwallowSlot(daE_DF_c* i_this, const char* label) {
+    dusk::coop::retained_interaction_owner::RetainedInteractionState owner =
+        coOpDekuLikeSwallowState(i_this, label);
+    if (owner.found) {
+        return owner.slot;
+    }
+    return dusk::coop::PlayerSlot::Primary;
+}
+
+static camera_process_class* coOpDekuLikeSwallowCamera(daE_DF_c* i_this, const char* label) {
+    const dusk::coop::PlayerSlot slot = coOpDekuLikeSwallowSlot(i_this, label);
+    camera_process_class* camera =
+        dComIfGp_getCamera(dComIfGp_getPlayerCameraID(static_cast<int>(slot)));
+    if (camera != NULL) {
+        return camera;
+    }
+    return dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
+}
+
+static void coOpBeginDekuLikePresentation(daE_DF_c* i_this, const char* label) {
+    // Co-op: this native demo owns one fullscreen camera, so collapse presentation to the
+    // swallowed slot instead of letting P1 watch while P2 is hidden in the eat-position void.
+    if (s_coOpDekuLikePresentationOwner == i_this) {
+        return;
+    }
+    if (s_coOpDekuLikePresentationOwner != NULL) {
+        dusk::coop::event_presentation::end(
+            dusk::coop::event_presentation::Source::EnemyRetainedInteraction);
+    }
+    dusk::coop::event_presentation::Options options;
+    options.fullscreenSlot = coOpDekuLikeSwallowSlot(i_this, label);
+    options.hideNonPresenterVisuals = true;
+    s_coOpDekuLikePresentationOwner = i_this;
+    dusk::coop::event_presentation::begin(
+        dusk::coop::event_presentation::Source::EnemyRetainedInteraction, options);
+}
+
+static void coOpEndDekuLikePresentation(daE_DF_c* i_this) {
+    if (s_coOpDekuLikePresentationOwner != i_this) {
+        return;
+    }
+    s_coOpDekuLikePresentationOwner = NULL;
+    dusk::coop::event_presentation::end(
+        dusk::coop::event_presentation::Source::EnemyRetainedInteraction);
+}
+
+static daPy_py_c* coOpDekuLikeSwallowPlayer(daE_DF_c* i_this, const char* label) {
+    dusk::coop::retained_interaction_owner::RetainedInteractionState owner =
+        coOpDekuLikeSwallowState(i_this, label);
+    if (owner.found && owner.localPlayer != NULL) {
+        return owner.localPlayer;
+    }
+    return daPy_getPlayerActorClass();
+}
+
+static void coOpClearDekuLikeSwallow(daE_DF_c* i_this, const char* label) {
+    dusk::coop::retained_interaction_owner::RetainedInteractionState owner =
+        coOpDekuLikeSwallowState(i_this, label);
+    dusk::coop::retained_interaction_owner::clearRetainedInteraction(
+        label, i_this, dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach);
+    // Co-op: only the actor that retained or presented this swallow may release this source.
+    if (owner.active || s_coOpDekuLikePresentationOwner == i_this) {
+        coOpEndDekuLikePresentation(i_this);
+    }
+}
+#endif
 
 static int JointCallBack(J3DJoint* i_joint, int i_inactive) {
     if (i_inactive == 0) {
@@ -202,7 +360,11 @@ static void* s_obj_sub(void* param_1, void* param_2) {
 
 void daE_DF_c::Link_Eat_Pos() {
     cXyz pos(current.pos.x, current.pos.y + 400.0f + nREG_F(5), current.pos.z);
+#if TARGET_PC
+    daPy_py_c* player = coOpDekuLikeSwallowPlayer(this, "e_df.link_eat_pos");
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
     s16 angle = 0;
     player->setPlayerPosAndAngle(&pos, angle, 0);
 }
@@ -333,7 +495,11 @@ void daE_DF_c::BombEatAction() {
 }
 
 void daE_DF_c::Spid_Out() {
+#if TARGET_PC
+    daPy_py_c* player = coOpDekuLikeSwallowPlayer(this, "e_df.spit_out");
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
 
     if (mpMorfSO->checkFrame(24.0f)) {
         fopAcM_SetSpeed(player, 0, 0, 0);
@@ -352,6 +518,9 @@ void daE_DF_c::Spid_Out() {
         dComIfGp_getVibration().StopQuake(0x1f);
 
     } else if (mpMorfSO->isStop()) {
+#if TARGET_PC
+        coOpClearDekuLikeSwallow(this, "e_df.spit_done");
+#endif
         mAction = ACT_WAIT;
         mEatObjType = EAT_TYPE_OBJ;
         mEatStep = 0;
@@ -359,7 +528,11 @@ void daE_DF_c::Spid_Out() {
 }
 
 void daE_DF_c::LinkEatAction() {
+#if TARGET_PC
+    daPy_py_c* player = coOpDekuLikeSwallowPlayer(this, "e_df.link_eat");
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
     cXyz pos(current.pos.x, (current.pos.y - 4000.0f) + nREG_F(5), current.pos.z);
     s16 angle = 0;
 
@@ -477,6 +650,17 @@ void daE_DF_c::EatAction() {
 }
 
 void daE_DF_c::SearchAction() {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    // Co-op: the swallow wake checks any active falling player, then retains that player.
+    if (coOpFindDekuLikeSwallowTarget(this, "e_df.search_fall", &targetState)) {
+        mEatObjType = EAT_TYPE_LINK;
+        Set_Angle(&targetState.pos);
+        mTargetAngle = cLib_targetAngleY(&current.pos, &targetState.pos);
+        coOpBeginDekuLikeSwallow(this, "e_df.fall_swallow", targetState.actor);
+        mAction = ACT_EAT;
+    }
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
     cXyz* player_pos = &fopAcM_GetPosition(player);
     cXyz* speed = fopAcM_GetSpeed_p(player);
@@ -489,6 +673,7 @@ void daE_DF_c::SearchAction() {
         mTargetAngle = cLib_targetAngleY(&current.pos, player_pos);
         mAction = ACT_EAT;
     }
+#endif
 
     daObjCarry_c* obj_carry = (daObjCarry_c*)fpcM_Search(s_obj_sub, this);
     if (obj_carry != NULL) {
@@ -503,8 +688,15 @@ void daE_DF_c::SearchAction() {
 
         } else if (fopAcM_GetName(obj_carry) == fpcNm_ALINK_e && mTimer == 0) {
             mEatObjType = EAT_TYPE_LINK;
+#if TARGET_PC
+            cXyz* obj_pos = &fopAcM_GetPosition(obj_carry);
+            Set_Angle(obj_pos);
+            mTargetAngle = cLib_targetAngleY(&current.pos, obj_pos);
+            coOpBeginDekuLikeSwallow(this, "e_df.contact_swallow", obj_carry);
+#else
             Set_Angle(player_pos);
             mTargetAngle = cLib_targetAngleY(&current.pos, player_pos);
+#endif
             mAction = ACT_EAT;
             dComIfGp_getVibration().StartShock(5, 0x1f, cXyz(0.0f, 1.0f, 0.0f));
 
@@ -540,6 +732,9 @@ void daE_DF_c::MissAction() {
 
     case EAT_TYPE_LINK:
         if (mpMorfSO->isStop()) {
+#if TARGET_PC
+            coOpClearDekuLikeSwallow(this, "e_df.miss_done");
+#endif
             mAction = ACT_WAIT;
             mEatObjType = EAT_TYPE_OBJ;
             mEatStep = 0;
@@ -643,6 +838,9 @@ static int daE_DF_IsDelete(daE_DF_c* i_this) {
 }
 
 static int daE_DF_Delete(daE_DF_c* i_this) {
+#if TARGET_PC
+    coOpClearDekuLikeSwallow(i_this, "e_df.delete");
+#endif
     fopAcM_RegisterDeleteID(i_this, "E_DF");
     return i_this->Delete();
 }

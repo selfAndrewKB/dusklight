@@ -105,6 +105,7 @@ SelectedTargetState stateForSlot(PlayerSlot slot, fopAc_ac_c* actor) {
     // active slot that owns sense state instead of P1's global checkNowWolfPowerUp() helper.
     state.wolfSenseActive = state.wolf && state.wolfEyeUp != 0;
     state.horseRide = player->checkHorseRide();
+    state.boarRide = player->checkBoarRide();
     state.damageWaiting = state.damageWaitTimer != 0;
     // Co-op: these are slot-local camera/status gates that several enemies use after they
     // already know which player they mean. Snapshot them here so actor files do not fall back

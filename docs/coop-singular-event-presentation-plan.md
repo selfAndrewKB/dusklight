@@ -50,6 +50,7 @@ enum class Source : u8 {
     AgithaInsect,
     MidnaService,
     Dialogue,
+    EnemyRetainedInteraction,
 };
 
 struct Options {
@@ -136,6 +137,10 @@ Interactive Midna dialogue uses `message_owner` and `event_presentation::Source:
 native message controller accepts the message. The retained owner supplies the
 listener ALINK, speaker Midna, input pad, and talk-camera fallback actor; native global dialogue
 movement locking remains in place.
+
+Retained enemy interactions use `event_presentation::Source::EnemyRetainedInteraction` only for the
+authored fullscreen camera/presentation surface. The gameplay effect owner remains in the matching
+retained owner API, such as `retained_interaction_owner` for Deku Like Link swallow/eat/spit.
 
 ## Captured Fullscreen Menus
 

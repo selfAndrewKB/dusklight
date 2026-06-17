@@ -598,6 +598,7 @@ json selectedTargetStateDecisionEventKey(const json& decision) {
         {"wolf_bark", decision.value("wolf_bark", false)},
         {"wolf_threat", decision.value("wolf_threat", false)},
         {"horse_ride", decision.value("horse_ride", false)},
+        {"boar_ride", decision.value("boar_ride", false)},
         {"status0_0x100", decision.value("status0_0x100", false)},
         {"status0_0x4000", decision.value("status0_0x4000", false)},
         {"iron_ball_subject", decision.value("iron_ball_subject", false)},
@@ -1794,7 +1795,7 @@ json collectEventPresentation() {
     }
 
     return {
-        {"schema_version", 3},
+        {"schema_version", 4},
         {"revision", state.revision},
         {"fullscreen", state.fullscreen},
         {"split_screen_capability", coop::camera::isSplitScreenEnabled()},
@@ -1812,6 +1813,7 @@ json collectEventPresentation() {
             {"agitha_insect", state.agithaInsectDepth},
             {"midna_service", state.midnaServiceDepth},
             {"dialogue", state.dialogueDepth},
+            {"enemy_retained_interaction", state.enemyRetainedInteractionDepth},
         }},
         {"last_transition", coop::event_presentation::transitionName(state.lastTransition)},
         {"last_source", coop::event_presentation::sourceName(state.lastSource)},
@@ -2163,6 +2165,7 @@ json selectedTargetStateSummary(
         {"wolf_bark", state.wolfBark},
         {"wolf_threat", state.wolfThreat},
         {"horse_ride", state.horseRide},
+        {"boar_ride", state.boarRide},
         {"status0_0x100", state.status0_0x100},
         {"status0_0x4000", state.status0_0x4000},
         {"iron_ball_subject", state.ironBallSubject},

@@ -20,6 +20,12 @@
 #include "f_op/f_op_actor_enemy.h"
 #include "m_Do/m_Do_graphic.h"
 #include <cstring>
+#if TARGET_PC
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/event_presentation.h"
+#include "dusk/coop/retained_interaction_owner.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
 
 class daE_RDY_HIO_c : public JORReflexible {
 public:
@@ -205,6 +211,121 @@ static cXyz S_find_pos;
 static fopAc_ac_c* target_info[10];
 
 static int target_info_count;
+
+#if TARGET_PC
+static e_rdy_class* s_coOpRdyCarryPresentationOwner;
+
+static bool coOpSelectRdyTargetState(
+    e_rdy_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = &i_this->actor;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        &i_this->actor, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    return true;
+}
+
+static dusk::coop::retained_interaction_owner::RetainedInteractionState
+coOpRdyCarryState(e_rdy_class* i_this, const char* label) {
+    return dusk::coop::retained_interaction_owner::updateRetainedInteraction(
+        label, &i_this->actor,
+        dusk::coop::retained_interaction_owner::RetainedInteractionScope::Carry);
+}
+
+static bool coOpRdyUseCarryOwner(e_rdy_class* i_this) {
+    return i_this->mDemoMode > 0 && i_this->mDemoMode < 5;
+}
+
+static daPy_py_c* coOpRdyCarryDemoPlayer(e_rdy_class* i_this, const char* label) {
+    if (coOpRdyUseCarryOwner(i_this)) {
+        dusk::coop::retained_interaction_owner::RetainedInteractionState owner =
+            coOpRdyCarryState(i_this, label);
+        if (owner.found && owner.localPlayer != NULL) {
+            return owner.localPlayer;
+        }
+    }
+    return daPy_getPlayerActorClass();
+}
+
+static dusk::coop::PlayerSlot coOpRdyCarryDemoSlot(e_rdy_class* i_this, const char* label) {
+    if (coOpRdyUseCarryOwner(i_this)) {
+        dusk::coop::retained_interaction_owner::RetainedInteractionState owner =
+            coOpRdyCarryState(i_this, label);
+        if (owner.found) {
+            return owner.slot;
+        }
+    }
+    return dusk::coop::PlayerSlot::Primary;
+}
+
+static camera_process_class* coOpRdyCarryDemoCamera(e_rdy_class* i_this, const char* label) {
+    const dusk::coop::PlayerSlot slot = coOpRdyCarryDemoSlot(i_this, label);
+    camera_process_class* camera =
+        dComIfGp_getCamera(dComIfGp_getPlayerCameraID(static_cast<int>(slot)));
+    if (camera != NULL) {
+        return camera;
+    }
+    return dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
+}
+
+static void coOpBeginRdyCarryPresentation(e_rdy_class* i_this, const char* label) {
+    dusk::coop::retained_interaction_owner::RetainedInteractionState owner =
+        coOpRdyCarryState(i_this, label);
+    if (!owner.found || s_coOpRdyCarryPresentationOwner == i_this) {
+        return;
+    }
+    if (s_coOpRdyCarryPresentationOwner != NULL) {
+        dusk::coop::event_presentation::end(
+            dusk::coop::event_presentation::Source::EnemyRetainedInteraction);
+    }
+
+    dusk::coop::event_presentation::Options options;
+    options.fullscreenSlot = owner.slot;
+    options.hideNonPresenterVisuals = true;
+    s_coOpRdyCarryPresentationOwner = i_this;
+    dusk::coop::event_presentation::begin(
+        dusk::coop::event_presentation::Source::EnemyRetainedInteraction, options);
+}
+
+static void coOpEndRdyCarryPresentation(e_rdy_class* i_this) {
+    if (s_coOpRdyCarryPresentationOwner != i_this) {
+        return;
+    }
+    s_coOpRdyCarryPresentationOwner = NULL;
+    dusk::coop::event_presentation::end(
+        dusk::coop::event_presentation::Source::EnemyRetainedInteraction);
+}
+
+static void coOpClearRdyCarry(e_rdy_class* i_this, const char* label) {
+    dusk::coop::retained_interaction_owner::RetainedInteractionState owner =
+        coOpRdyCarryState(i_this, label);
+    dusk::coop::retained_interaction_owner::clearRetainedInteraction(
+        label, &i_this->actor,
+        dusk::coop::retained_interaction_owner::RetainedInteractionScope::Carry);
+    // Co-op: only a rider with an active carry or presentation may release this source.
+    if (owner.active || s_coOpRdyCarryPresentationOwner == i_this) {
+        coOpEndRdyCarryPresentation(i_this);
+    }
+}
+#endif
 
 daE_RDY_HIO_c::daE_RDY_HIO_c() {
     field_0x4 = -1;
@@ -3793,9 +3914,17 @@ static void* s_adel_sub(void* i_proc, void* i_this) {
 // DEBUG NONMATCHING: regalloc hell
 static void demo_camera(e_rdy_class* i_this) {
     fopAc_ac_c* a_this = &i_this->actor;
+#if TARGET_PC
+    // Co-op: carrier-grab demos consume the retained caught slot; authored setpieces fall back to P1.
+    daPy_py_c* player = coOpRdyCarryDemoPlayer(i_this, "e_rdy.yc_ride_demo");
+    camera_process_class* player_camera =
+        coOpRdyCarryDemoCamera(i_this, "e_rdy.yc_ride_demo");
+    camera_process_class* camera = player_camera;
+#else
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
     camera_process_class* player_camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
     camera_process_class* camera = dComIfGp_getCamera(0);
+#endif
     cXyz vec1, vec2, vec3, vec4, vec5;
     u8 unused_u8 = 1;
     (void) unused_u8;
@@ -3811,13 +3940,16 @@ static void demo_camera(e_rdy_class* i_this) {
             a_this->eventInfo.onCondition(dEvtCnd_CANDEMO_e);
             return;
         }
+#if TARGET_PC
+        coOpBeginRdyCarryPresentation(i_this, "e_rdy.yc_ride_demo");
+#endif
         player_camera->mCamera.Stop();
         i_this->mDemoMode = 2;
         i_this->mDemoTimer = 0;
         i_this->mCamFovy = 55.0f;
         player_camera->mCamera.SetTrimSize(3);
-        daPy_getPlayerActorClass()->changeOriginalDemo();
-        daPy_getPlayerActorClass()->changeDemoMode(0x38, 0, 0, 0);
+        player->changeOriginalDemo();
+        player->changeDemoMode(0x38, 0, 0, 0);
         i_this->mCamEye = camera->view.lookat.eye;
         i_this->mCamCenter = camera->view.lookat.center;
         s16 sang_y_diff = a_karg->shape_angle.y - player->shape_angle.y;
@@ -3839,8 +3971,8 @@ static void demo_camera(e_rdy_class* i_this) {
         if (i_this->mDemoMode == 3) {
             i_this->mDemoMode = 4;
             i_this->mDemoTimer = 0;
-            daPy_getPlayerActorClass()->setThrowDamage(a_this->shape_angle.y, 40.0f, KREG_F(14), 2, 1, 0);
-            daPy_getPlayerActorClass()->changeDemoMode(1, 0, 0, 0);
+            player->setThrowDamage(a_this->shape_angle.y, 40.0f, KREG_F(14), 2, 1, 0);
+            player->changeDemoMode(1, 0, 0, 0);
         }
         if (i_this->mDemoMode == 4 && i_this->mDemoTimer == 70 + JREG_S(7)) {
             cVar13 = 1;
@@ -4319,7 +4451,10 @@ static void demo_camera(e_rdy_class* i_this) {
         player_camera->mCamera.Start();
         player_camera->mCamera.SetTrimSize(0);
         dComIfGp_event_reset();
-        daPy_getPlayerActorClass()->cancelOriginalDemo();
+        player->cancelOriginalDemo();
+#if TARGET_PC
+        coOpClearRdyCarry(i_this, "e_rdy.yc_ride_demo_end");
+#endif
         i_this->mDemoMode = 0;
     }
 
@@ -4676,7 +4811,16 @@ static int daE_RDY_Execute(e_rdy_class* i_this) {
                 arrow_angle.y = cM_atan2s(vec1.x, vec1.z);
                 arrow_angle.x = -cM_atan2s(vec1.y, JMAFastSqrt(vec1.x * vec1.x + vec1.z * vec1.z));
             } else {
+#if TARGET_PC
+                dusk::coop::selected_target_state::SelectedTargetState targetState;
+                // Co-op: ordinary Rider arrows inherit the retained combat target, not P1.
+                coOpSelectRdyTargetState(i_this, "e_rdy.arrow_fire", false,
+                                         dusk::coop::EnemyTargetMode::StickyCombat, &targetState);
+                fopAc_ac_c* player =
+                    targetState.available ? targetState.actor : dComIfGp_getPlayer(0);
+#else
                 fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
                 vec1 = player->eyePos;
                 if (i_this->field_0x1366) {
                     f32 mult_val = 15.0f + TREG_F(7);
@@ -4760,6 +4904,11 @@ static int daE_RDY_IsDelete(e_rdy_class* i_this) {
 
 static int daE_RDY_Delete(e_rdy_class* i_this) {
     fopAc_ac_c* a_this = &i_this->actor;
+#if TARGET_PC
+    // Co-op: rider-scoped target/carry state must not survive actor deletion.
+    coOpClearRdyCarry(i_this, "e_rdy.delete");
+    dusk::coop::clearAllEnemyTargets(a_this);
+#endif
     fopAcM_RegisterDeleteID(i_this, "E_RDY");
     dComIfG_resDelete(&i_this->mPhase, i_this->mpArcName);
 

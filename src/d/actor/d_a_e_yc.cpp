@@ -14,6 +14,13 @@
 #include "d/d_s_play.h"
 #include "f_pc/f_pc_name.h"
 #include "d/actor/d_a_e_rdy.h"
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/retained_interaction_owner.h"
+#include "dusk/coop/selected_target_state.h"
+#include "dusk/coop/wolf_catch_owner.h"
+#endif
 
 static f32 S_area_dis;
 
@@ -31,6 +38,47 @@ static void anm_init(e_yc_class* i_this, int i_anmID, f32 i_morf, u8 i_attr, f32
     i_this->mpMorf->setAnm(anm, i_attr, i_morf, i_rate, 0.0f, -1.0f);
     i_this->mAnm = i_anmID;
 }
+
+#if TARGET_PC
+// Co-op: Twilit Carrier Kargarok caches one Combat target for flight, hover, and attack math.
+// Wolf-bite hang remains a retained wolf-owner interaction, not a fresh target query.
+static bool coOpSelectYcTargetState(
+    e_yc_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance_xz,
+    s16* angle_y) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    i_this->mAngleToPlayer = target.angleY;
+    i_this->mDistToPlayer = target.distanceXZ;
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance_xz != NULL) {
+        *distance_xz = target.distanceXZ;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    return true;
+}
+#endif
 
 static int daE_YC_Draw(e_yc_class* i_this) {
     if (i_this->mNoDrawFlag) {
@@ -55,15 +103,30 @@ static int daE_YC_Draw(e_yc_class* i_this) {
 }
 
 static void damage_check(e_yc_class* i_this) {
+#if TARGET_PC
+    daPy_py_c* player = NULL;
+#else
     daPy_py_c* player = static_cast<daPy_py_c*>(dComIfGp_getPlayer(0));
+#endif
     i_this->mCcStts.Move();
     if (i_this->mCcDisableTimer == 0 && i_this->mCcSph.ChkTgHit()) {
         i_this->mAtInfo.mpCollider = i_this->mCcSph.GetTgHitObj();
-        if (player->getCutType() != daPy_py_c::CUT_TYPE_WOLF_B_LEFT
+#if TARGET_PC
+        const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+            dusk::coop::damage_owner::resolveDamageOwner(i_this, i_this->mAtInfo.mpCollider);
+        dusk::coop::damage_owner::recordDamageOwnerHit("e_yc.damage", i_this, damageOwner,
+                                                       &i_this->mAtInfo);
+        player = dusk::coop::damage_owner::resolveDamageOwnerPlayer(damageOwner);
+#endif
+        if (player != NULL && player->getCutType() != daPy_py_c::CUT_TYPE_WOLF_B_LEFT
             && player->getCutType() != daPy_py_c::CUT_TYPE_WOLF_B_RIGHT
             && i_this->mAtInfo.mpCollider->ChkAtType(AT_TYPE_WOLF_ATTACK)
             && player->onWolfEnemyBiteAll(i_this, daPy_py_c::FLG2_WOLF_ENEMY_HANG_BITE))
         {
+#if TARGET_PC
+            dusk::coop::wolf_catch_owner::beginWolfCatchFromDamageOwner(
+                "e_yc.wolfbite_begin", i_this, damageOwner);
+#endif
             i_this->mAction = e_yc_class::ACT_WOLFBITE;
             i_this->mMode = 0;
             i_this->mCcDisableTimer = 1000;
@@ -189,7 +252,15 @@ static void e_yc_fly(e_yc_class* i_this) {
 }
 
 static void e_yc_f_fly(e_yc_class* i_this) {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectYcTargetState(i_this, "e_yc.f_fly", false,
+                            dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState,
+                            NULL, NULL);
+    fopAc_ac_c* player = targetState.available ? targetState.actor : dComIfGp_getPlayer(0);
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     int frame = i_this->mpMorf->getFrame();
     f32 delta_x, delta_y, delta_z;
 
@@ -270,7 +341,15 @@ static void e_yc_f_fly(e_yc_class* i_this) {
 }
 
 static void e_yc_hovering(e_yc_class* i_this) {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectYcTargetState(i_this, "e_yc.hovering", false,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL,
+                            NULL);
+    fopAc_ac_c* player = targetState.available ? targetState.actor : dComIfGp_getPlayer(0);
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     f32 target_speed = 0.0f;
 
     switch (i_this->mMode) {
@@ -308,7 +387,15 @@ static void e_yc_hovering(e_yc_class* i_this) {
 }
 
 static void e_yc_attack(e_yc_class* i_this) {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectYcTargetState(i_this, "e_yc.attack", true,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL,
+                            NULL);
+    fopAc_ac_c* player = targetState.available ? targetState.actor : dComIfGp_getPlayer(0);
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     cXyz delta;
     fopAc_ac_c* base_rdy = fopAcM_SearchByID(i_this->mRiderID);
     e_rdy_class* rider = (e_rdy_class*) base_rdy;
@@ -355,6 +442,13 @@ static void e_yc_attack(e_yc_class* i_this) {
 
     case 4:
         if (frame == 11 && rider->mDemoMode == 0 & i_this->mDistToPlayer < 200.0f) {
+#if TARGET_PC
+            // Co-op: the rider owns the native carry demo, but the carrier knows who it caught.
+            dusk::coop::retained_interaction_owner::beginRetainedInteraction(
+                "e_yc.rider_carry_begin", base_rdy,
+                dusk::coop::retained_interaction_owner::RetainedInteractionScope::Carry, player,
+                dusk::coop::retained_interaction_owner::RetainedInteractionReason::EnemyTarget);
+#endif
             rider->mDemoMode = 1;
             i_this->mCreatureSound.startCreatureSound(Z2SE_EN_YC_HIT_SIDE, 0, -1);
         }
@@ -428,7 +522,16 @@ static void e_yc_attack(e_yc_class* i_this) {
 
 static void e_yc_wolfbite(e_yc_class* i_this) {
     fopAc_ac_c* _this = static_cast<fopAc_ac_c*>(i_this);
+#if TARGET_PC
+    // Co-op: wolf-bite release/damage belongs to the retained wolf owner, not P1.
+    dusk::coop::wolf_catch_owner::WolfCatchOwnerState catchOwner =
+        dusk::coop::wolf_catch_owner::updateWolfCatch("e_yc.wolfbite", _this);
+    daPy_py_c* player = catchOwner.localPlayer != NULL
+                            ? catchOwner.localPlayer
+                            : static_cast<daPy_py_c*>(dComIfGp_getPlayer(0));
+#else
     daPy_py_c* player = static_cast<daPy_py_c*>(dComIfGp_getPlayer(0));
+#endif
     e_rdy_class* rider = (e_rdy_class*) fopAcM_SearchByID(i_this->mRiderID);
 
     int frame = i_this->mpMorf->getFrame();
@@ -559,8 +662,19 @@ static void action(e_yc_class* i_this) {
     cXyz vec1, vec2;
     fopAc_ac_c* _this = static_cast<fopAc_ac_c*>(i_this);
 
+#if TARGET_PC
+    const dusk::coop::EnemyTargetMode targetMode =
+        i_this->mAction == e_yc_class::ACT_FLY || i_this->mAction == e_yc_class::ACT_F_FLY
+            ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+            : dusk::coop::EnemyTargetMode::StickyCombat;
+    // Co-op: fill the vanilla angle/distance cache once before flight states consume it.
+    coOpSelectYcTargetState(i_this, "e_yc.action",
+                            i_this->mAction == e_yc_class::ACT_ATTACK, targetMode,
+                            NULL, NULL, NULL);
+#else
     i_this->mAngleToPlayer = fopAcM_searchPlayerAngleY(_this);
     i_this->mDistToPlayer = fopAcM_searchPlayerDistanceXZ(_this);
+#endif
     damage_check(i_this);
 
     switch (i_this->mAction) {
@@ -613,7 +727,16 @@ static void action(e_yc_class* i_this) {
 }
 
 static int daE_YC_Execute(e_yc_class* i_this) {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState areaState;
+    // Co-op: the scripted area-distance gate should react to the active selected player.
+    coOpSelectYcTargetState(i_this, "e_yc.area", false,
+                            dusk::coop::EnemyTargetMode::ImmediateAcquire, &areaState,
+                            NULL, NULL);
+    fopAc_ac_c* player = areaState.available ? areaState.actor : dComIfGp_getPlayer(0);
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     cXyz vec1, vec2;
 
     f32 dist_x = -103171.0f;
@@ -725,6 +848,16 @@ static int daE_YC_IsDelete(e_yc_class* i_this) {
 }
 
 static int daE_YC_Delete(e_yc_class* i_this) {
+#if TARGET_PC
+    dusk::coop::wolf_catch_owner::clearWolfCatch("e_yc.delete", i_this);
+    dusk::coop::clearAllEnemyTargets(i_this);
+    fopAc_ac_c* rider = fopAcM_SearchByID(i_this->mRiderID);
+    if (rider != NULL) {
+        dusk::coop::retained_interaction_owner::clearRetainedInteraction(
+            "e_yc.delete", rider,
+            dusk::coop::retained_interaction_owner::RetainedInteractionScope::Carry);
+    }
+#endif
     dComIfG_resDelete(&i_this->mPhase, "E_yc");
 
     if (i_this->mHIOInit) {

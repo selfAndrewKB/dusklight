@@ -15,6 +15,7 @@
 #include "d/d_msg_object.h"
 #include "c/c_damagereaction.h"
 #include "d/d_attention.h"
+#include "d/actor/d_a_horse.h"
 #include "d/actor/d_a_obj_h_saku.h"
 #include "f_op/f_op_camera_mng.h"
 #include "f_op/f_op_kankyo_mng.h"
@@ -25,6 +26,14 @@
 #include "Z2AudioLib/Z2Instances.h"
 #include "f_op/f_op_actor_enemy.h"
 #include <cstring>
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/defender_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/horse_owner.h"
+#include "dusk/coop/player_attention.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
 
 class daE_RD_HIO_c : public JORReflexible {
 public:
@@ -323,6 +332,119 @@ static fopAc_ac_c* get_pla(fopAc_ac_c* actor) {
 
     return dComIfGp_getPlayer(0);
 }
+
+#if TARGET_PC
+// Co-op: when native Rider logic means "Link", fill the one per-tick target cache from the
+// Combat owner. Native coach/wagon targets remain authored non-player setpiece targets.
+static bool coOpSelectRdTargetState(
+    e_rd_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state) {
+    fopEn_enemy_c* enemy = &i_this->enemy;
+    dusk::coop::EnemyTargetContext context;
+    context.observer = enemy;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        enemy, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    i_this->dis = target.distance;
+    if (targetState.horseRide) {
+        i_this->dis -= BREG_F(17) + 100.0f;
+    }
+    i_this->angleY = target.angleY;
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    return true;
+}
+
+// Co-op: ordinary Rider Link-target aim/arrow paths must share the retained Combat target, while
+// authored coach/wagon and setpiece targets keep the native target actor.
+static fopAc_ac_c* coOpRdResolveLinkTargetActor(e_rd_class* i_this, fopAc_ac_c* nativeTarget,
+                                                const char* label, bool committed) {
+    if (nativeTarget != dComIfGp_getPlayer(0) || i_this->actor_set != ACTOR_SET_NONE) {
+        return nativeTarget;
+    }
+
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    if (!coOpSelectRdTargetState(i_this, label, committed,
+                                 dusk::coop::EnemyTargetMode::StickyCombat, &targetState)) {
+        return nativeTarget;
+    }
+
+    return targetState.actor;
+}
+
+static f32 coOpRdTargetHorseSpeed(
+    const dusk::coop::selected_target_state::SelectedTargetState& targetState) {
+    if (!targetState.available || !targetState.horseRide) {
+        return 0.0f;
+    }
+
+    daHorse_c* horse = dusk::coop::horse_owner::getHorse(targetState.slot);
+    return horse != NULL ? horse->speedF : 0.0f;
+}
+
+static bool coOpRdTargetHorseSpeedAtLeast(
+    const dusk::coop::selected_target_state::SelectedTargetState& targetState, f32 speed) {
+    return coOpRdTargetHorseSpeed(targetState) >= speed;
+}
+
+// Co-op: Rider horse-speed gates either belong to the selected combat target's slot-assigned
+// horse, or fall back to vanilla P1 when the native path is an authored non-player target.
+static bool coOpRdPrimaryHorseSpeedAtLeast(f32 speed) {
+    return daPy_getPlayerActorClass()->checkHorseRide() && dComIfGp_getHorseActor()->speedF >= speed;
+}
+
+static bool coOpRdTargetOrPrimaryHorseSpeedAtLeast(
+    bool targetValid, const dusk::coop::selected_target_state::SelectedTargetState& targetState,
+    f32 speed) {
+    return targetValid ? coOpRdTargetHorseSpeedAtLeast(targetState, speed)
+                       : coOpRdPrimaryHorseSpeedAtLeast(speed);
+}
+
+static bool coOpRdSlotHorseSpeedAtLeast(dusk::coop::PlayerSlot slot, f32 speed) {
+    daHorse_c* horse = dusk::coop::horse_owner::getHorse(slot);
+    return horse != NULL && horse->speedF >= speed;
+}
+
+static bool coOpRdTargetOrPrimaryMounted(
+    bool targetValid, const dusk::coop::selected_target_state::SelectedTargetState& targetState) {
+    if (targetValid) {
+        return targetState.horseRide || targetState.boarRide;
+    }
+
+    return daPy_getPlayerActorClass()->checkHorseRide() ||
+           daPy_getPlayerActorClass()->checkBoarRide();
+}
+
+static void coOpRdApplyMountedLockFlag(
+    e_rd_class* i_this, e_wb_class* boar,
+    const dusk::coop::selected_target_state::SelectedTargetState& targetState) {
+    if (boar == NULL || !targetState.available || !targetState.horseRide) {
+        return;
+    }
+
+    // Co-op: mounted Rider boar behavior wants to know whether the mounted opponent is actively
+    // locking this Rider. P1 uses global attention; additional players use slot-local attention.
+    if (dusk::coop::player_attention::isActorLockedByAnyPlayer(&i_this->enemy)) {
+        boar->field_0x6c0 = 1;
+    }
+}
+#endif
 
 static void anm_init(e_rd_class* i_this, int i_no, f32 i_morf, u8 i_mode, f32 i_speed) {
     if (i_this->field_0x680 == 0) {
@@ -969,6 +1091,18 @@ static BOOL wb_init_ride(e_rd_class* i_this) {
 static BOOL pl_check(e_rd_class* i_this, f32 range, s16 angle) {
     fopEn_enemy_c* enemy = (fopEn_enemy_c*)&i_this->enemy;
     fopAc_ac_c* pl = get_pla(enemy);
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    if (pl == dComIfGp_getPlayer(0) &&
+        coOpSelectRdTargetState(i_this, "e_rd.pl_check", false,
+                                i_this->action == ACTION_NORMAL
+                                    ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                                    : dusk::coop::EnemyTargetMode::StickyCombat,
+                                &targetState))
+    {
+        pl = targetState.actor;
+    }
+#endif
 
     if ((desert_substage == 0 && dComIfGp_event_runCheck())) {
         return FALSE;
@@ -992,9 +1126,18 @@ static BOOL pl_check(e_rd_class* i_this, f32 range, s16 angle) {
         for (int i = 0; i <= 2; i++) {
             if (i_this->cc_sph[i].ChkCoHit()) {
                 cCcD_Obj* hit_obj = i_this->cc_sph[i].GetCoHitObj();
+#if TARGET_PC
+                // Co-op: body contact awareness accepts any active player slot, not just P1.
+                if (dusk::coop::getSlotForActor(dCc_GetAc(hit_obj->GetAc())) !=
+                    dusk::coop::PlayerSlot::Invalid)
+                {
+                    return TRUE;
+                }
+#else
                 if (daPy_getPlayerActorClass() == dCc_GetAc(hit_obj->GetAc())) {
                     return TRUE;
                 }
+#endif
             }
         }
     }
@@ -1266,6 +1409,15 @@ static void e_rd_normal(e_rd_class* i_this) {
 static void e_rd_fight_run(e_rd_class* i_this) {
     fopEn_enemy_c* enemy = (fopEn_enemy_c*)&i_this->enemy;
     fopAc_ac_c* pla = dComIfGp_getPlayer(0);
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    if (coOpSelectRdTargetState(i_this, "e_rd.fight_run", false,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &targetState))
+    {
+        // Co-op: close-range club spacing uses the retained target's vertical position, not P1.
+        pla = targetState.actor;
+    }
+#endif
     cXyz sp64, sp70;
     f32 speed = 0.0f;
     s8 attack_flag = true;
@@ -1536,7 +1688,16 @@ static void e_rd_fight(e_rd_class* i_this) {
     if (i_this->field_0x9ab != 0) {
         fopAc_ac_c* actor = at_hit_check(i_this);
         if (actor != NULL && fopAcM_GetName(actor) == fpcNm_ALINK_e) {
+#if TARGET_PC
+            // Co-op: club bounce reads the player this attack sphere touched, not P1.
+            const dusk::coop::defender_owner::DefenderOwnerResult defender =
+                dusk::coop::defender_owner::resolveDefenderOwner(enemy, &i_this->at_sph);
+            dusk::coop::defender_owner::recordDefenderOwnerContact("e_rd.club_guard", enemy,
+                                                                    defender);
+            if (defender.guarded) {
+#else
             if (daPy_getPlayerActorClass()->checkPlayerGuard()) {
+#endif
                 i_this->anm_p->setPlaySpeed(-1.0f);
                 dComIfGp_getVibration().StartShock(4, 31, cXyz(0.0f, 1.0f, 0.0f));
                 dKy_Sound_set(enemy->current.pos, 100, fopAcM_GetID(i_this), 5);
@@ -1557,7 +1718,12 @@ static void e_rd_bow_run(e_rd_class* i_this) {
     } else {
         dash_speed = l_HIO.dash_speed;
     }
+#if TARGET_PC
+    // Co-op: bow-run orbiting consumes the dispatcher Combat target cache, not a fresh P1 angle.
+    s16 target_angle = i_this->angleY;
+#else
     s16 target_angle = fopAcM_searchPlayerAngleY(enemy);
+#endif
     s8 bVar1 = 0;
 
     switch (i_this->mode) {
@@ -1736,6 +1902,10 @@ static void* s_command3_sub(void* i_actor, void* i_data) {
 static s8 e_rd_bow2(e_rd_class* i_this) {
     fopEn_enemy_c* enemy = (fopEn_enemy_c*)&i_this->enemy;
     fopAc_ac_c* actor = get_pla(enemy);
+#if TARGET_PC
+    // Co-op: archer shot gates use the same retained Link target as aim and arrow launch.
+    actor = coOpRdResolveLinkTargetActor(i_this, actor, "e_rd.bow2", true);
+#endif
     cXyz unused_vec_0, unused_vec_1;
     int frame = i_this->anm_p->getFrame();
     s8 rt = 0;
@@ -2213,12 +2383,22 @@ static void e_rd_wb_run(e_rd_class* i_this) {
         return;
     }
 
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectRdTargetState(i_this, "e_rd.wb_run",
+                            i_this->mode == 10 || i_this->mode == 11 || i_this->mode == 20 ||
+                                i_this->mode == 21 || i_this->mode == 25 || i_this->mode == 30 ||
+                                i_this->mode == 31 || i_this->mode == 32,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState);
+    coOpRdApplyMountedLockFlag(i_this, boar, targetState);
+#else
     if (daPy_getPlayerActorClass()->checkHorseRide()) {
         dAttention_c* attention = dComIfGp_getAttention();
         if (attention->Lockon() && enemy == attention->LockonTarget(0)) {
             boar->field_0x6c0 = 1;
         }
     }
+#endif
 
     if ((boar->status_flag & 1) == 0 && boar->action == ACTION_BOW2 && i_this->mode != 40) {
         anm_init(i_this, BCK_RD_RRUN02_BACK, 5.0f, 2, 1.0f);
@@ -2230,7 +2410,14 @@ static void e_rd_wb_run(e_rd_class* i_this) {
         }
     }
 
+#if TARGET_PC
+    // Co-op: mounted swing spacing is still the native XZ gate, but the player is the retained
+    // Combat target rather than P1.
+    f32 player_dist = targetState.available ? fopAcM_searchActorDistanceXZ(enemy, targetState.actor)
+                                            : fopAcM_searchPlayerDistanceXZ(enemy);
+#else
     f32 player_dist = fopAcM_searchPlayerDistanceXZ(enemy);
+#endif
     int frame = i_this->anm_p->getFrame();
 
     switch (i_this->mode) {
@@ -2289,7 +2476,11 @@ static void e_rd_wb_run(e_rd_class* i_this) {
                             i_this->mode = 20;
                         }
 
+#if TARGET_PC
+                        if (coOpRdTargetHorseSpeedAtLeast(targetState, 20.0f)) {
+#else
                         if (daPy_getPlayerActorClass()->checkHorseRide() && dComIfGp_getHorseActor()->speedF >= 20.0f) {
+#endif
                             i_this->timer[2] = cM_rndF(20.0f) + 20.0f;
                         }
                     }
@@ -2317,7 +2508,11 @@ static void e_rd_wb_run(e_rd_class* i_this) {
                 }
             } else if (player_dist < 550.0f && i_this->timer[2] == 0) {
                 i_this->mode = 25;
+#if TARGET_PC
+                if (targetState.horseRide) {
+#else
                 if (daPy_getPlayerActorClass()->checkHorseRide()) {
+#endif
                     anm_init(i_this, BCK_RD_RATTACK03, 5.0f, 0, 1.0f);
                 } else {
                     anm_init(i_this, BCK_RD_RATTACK01, 5.0f, 0, 1.0f);
@@ -2340,7 +2535,11 @@ static void e_rd_wb_run(e_rd_class* i_this) {
                 }
             } else if (player_dist < 550.0f && i_this->timer[2] == 0) {
                 i_this->mode = 25;
+#if TARGET_PC
+                if (targetState.horseRide) {
+#else
                 if (daPy_getPlayerActorClass()->checkHorseRide()) {
+#endif
                     anm_init(i_this, BCK_RD_RATTACK04, 5.0f, 0, 1.0f);
                 } else {
                     anm_init(i_this, BCK_RD_RATTACK02, 5.0f, 0, 1.0f);
@@ -4260,6 +4459,18 @@ static void damage_check(e_rd_class* i_this) {
             if (i_this->cc_sph[i].ChkTgHit() != 0) {
                 i_this->damage_timer = 6;
                 i_this->at_info.mpCollider = i_this->cc_sph[i].GetTgHitObj();
+#if TARGET_PC
+                // Co-op: Rider hit reactions follow the player/item that struck this body sphere.
+                const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+                    dusk::coop::damage_owner::resolveDamageOwner(enemy, i_this->at_info.mpCollider);
+                dusk::coop::damage_owner::recordDamageOwnerHit("e_rd.damage", enemy, damageOwner,
+                                                               &i_this->at_info);
+                daPy_py_c* damagePlayer =
+                    dusk::coop::damage_owner::resolveDamageOwnerPlayer(damageOwner);
+                if (damagePlayer != NULL) {
+                    pla = damagePlayer;
+                }
+#endif
                 if (i_this->actor_set == ACTOR_SET_IKKI2) {
                     s16 range = enemy->shape_angle.y - i_this->angleY;
                     at_power_check(&i_this->at_info);
@@ -4371,7 +4582,7 @@ static void damage_check(e_rd_class* i_this) {
                     }
 
                     cc_at_check(enemy, &i_this->at_info);
-                    if (daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_HEAD_JUMP) {
+                    if (pla->getCutType() == daPy_py_c::CUT_TYPE_HEAD_JUMP) {
                         enemy->health = 0;
                     }
 
@@ -4387,7 +4598,16 @@ static void damage_check(e_rd_class* i_this) {
 
                     i_this->field_0xa20 |= i_this->at_info.mHitBit;
 
-                    if (daPy_getPlayerActorClass()->checkHorseRide() != 0 && dComIfGp_getHorseActor()->speedF >= 20.0f && i_this->at_info.mHitType == 1) {
+#if TARGET_PC
+                    // Co-op: horseback hit power follows the slot that caused the hit, not P1's
+                    // canonical Epona.
+                    const bool fastHorseHit = pla->checkHorseRide() != 0 &&
+                                              coOpRdSlotHorseSpeedAtLeast(damageOwner.slot, 20.0f);
+#else
+                    const bool fastHorseHit = pla->checkHorseRide() != 0 &&
+                                              dComIfGp_getHorseActor()->speedF >= 20.0f;
+#endif
+                    if (fastHorseHit && i_this->at_info.mHitType == 1) {
                         i_this->at_info.mAttackPower = 20;
                     }
 
@@ -5003,14 +5223,34 @@ static void action(e_rd_class* i_this) {
     cXyz mae, ato;
 
     i_this->aim_type = 0;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState actionTargetState;
+    bool actionTargetStateValid = false;
+#endif
 
     if (actor == dComIfGp_getPlayer(0)) {
+#if TARGET_PC
+        const dusk::coop::EnemyTargetMode targetMode =
+            i_this->action == ACTION_NORMAL ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                                            : dusk::coop::EnemyTargetMode::StickyCombat;
+        // Co-op: dispatcher cache feeds Rider chase/attack states from the retained Combat target.
+        actionTargetStateValid =
+            coOpSelectRdTargetState(i_this, "e_rd.action",
+                                    i_this->action == ACTION_FIGHT ||
+                                        i_this->action == ACTION_BOW_RUN,
+                                    targetMode, &actionTargetState);
+        if (actionTargetStateValid) {
+            // Co-op: downstream aim bones use this local actor cache after the dispatcher switch.
+            actor = actionTargetState.actor;
+        }
+#else
         i_this->dis = fopAcM_searchPlayerDistance(enemy);
         if (daPy_getPlayerActorClass()->checkHorseRide()) {
             i_this->dis -= BREG_F(17) + 100.0f;
         }
 
         i_this->angleY = fopAcM_searchPlayerAngleY(enemy);
+#endif
     } else {
         mae = actor->current.pos - enemy->current.pos;
         i_this->dis = mae.abs();
@@ -5248,7 +5488,13 @@ static void action(e_rd_class* i_this) {
             if (!dComIfGp_event_runCheck() && i_this->yagura_timer == 0 && i_this->dis > 700.0f && i_this->field_0x5bb != 0) {
                 fopAcM_delete(enemy);
             }
-        } else if (daPy_getPlayerActorClass()->checkHorseRide() && dComIfGp_getHorseActor()->speedF >= 30.0f && i_this->field_0x5bb != 0) {
+        } else if (
+#if TARGET_PC
+            coOpRdTargetOrPrimaryHorseSpeedAtLeast(actionTargetStateValid, actionTargetState, 30.0f) &&
+#else
+            daPy_getPlayerActorClass()->checkHorseRide() && dComIfGp_getHorseActor()->speedF >= 30.0f &&
+#endif
+            i_this->field_0x5bb != 0) {
             fopAcM_delete(enemy);
         }
     }
@@ -5316,7 +5562,13 @@ static void action(e_rd_class* i_this) {
         }
 
         enemy->speedF = actor->speedF;
-        if (daPy_getPlayerActorClass()->checkHorseRide() && dComIfGp_getHorseActor()->speedF >= 30.0f) {
+        if (
+#if TARGET_PC
+            coOpRdTargetOrPrimaryHorseSpeedAtLeast(actionTargetStateValid, actionTargetState, 30.0f)
+#else
+            daPy_getPlayerActorClass()->checkHorseRide() && dComIfGp_getHorseActor()->speedF >= 30.0f
+#endif
+        ) {
             enemy->speed = actor->speed;
             enemy->speed.y = 0.0f;
         } else {
@@ -6774,7 +7026,24 @@ static int daE_RD_Execute(e_rd_class* i_this) {
         i_this->arrow_model->setBaseTRMtx(*calc_mtx);
 
         if (i_this->field_0x9ab != 0) {
+#if TARGET_PC
+            // Co-op: club attack volume follows whether the retained target is mounted, not
+            // whether P1 happens to be on Epona or a boar. Authored boss/setpiece variants keep
+            // their original P1/global mounted presentation until the encounter-owner pass.
+            bool mountedAttackTarget = daPy_getPlayerActorClass()->checkHorseRide() ||
+                                       daPy_getPlayerActorClass()->checkBoarRide();
+            if (i_this->actor_set == ACTOR_SET_NONE) {
+                dusk::coop::selected_target_state::SelectedTargetState targetState;
+                const bool targetValid =
+                    coOpSelectRdTargetState(i_this, "e_rd.club_collision", true,
+                                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState);
+                mountedAttackTarget = coOpRdTargetOrPrimaryMounted(targetValid, targetState);
+            }
+
+            if (mountedAttackTarget) {
+#else
             if (daPy_getPlayerActorClass()->checkHorseRide() || daPy_getPlayerActorClass()->checkBoarRide()) {
+#endif
                 mae.set(0.0f, nREG_F(15) + 50.0f, 0.0f);
                 i_this->at_sph.SetR((nREG_F(16) + 60.0f) * l_HIO.model_size);
             } else {
@@ -6860,11 +7129,17 @@ static int daE_RD_Execute(e_rd_class* i_this) {
                 angl.y = cM_atan2s(mae.x, mae.z);
                 angl.x = -cM_atan2s(mae.y, JMAFastSqrt(SQUARE(mae.x) + SQUARE(mae.z)));
             } else {
-                fopAc_ac_c* actor = get_pla(enemy);
-                if (actor != dComIfGp_getPlayer(0)) {
+                fopAc_ac_c* nativeActor = get_pla(enemy);
+                fopAc_ac_c* actor = nativeActor;
+                if (nativeActor != dComIfGp_getPlayer(0)) {
                     parameter |= 32;
                 }
 
+#if TARGET_PC
+                // Co-op: projectile launch math inherits the Rider's Combat target; the 0x20
+                // coach-homing flag still belongs only to native non-player coach/wagon targets.
+                actor = coOpRdResolveLinkTargetActor(i_this, nativeActor, "e_rd.arrow", true);
+#endif
                 mae = actor->eyePos;
 
                 if (i_this->field_0x1296 != 0) {
@@ -7060,6 +7335,10 @@ static int daE_RD_Delete(e_rd_class* i_this) {
 #endif
 
     fopEn_enemy_c* enemy = (fopEn_enemy_c*)&i_this->enemy;
+#if TARGET_PC
+    // Co-op: clear Rider's Combat target sidecar when the actor leaves the scene.
+    dusk::coop::clearAllEnemyTargets(enemy);
+#endif
     fopAcM_RegisterDeleteID(i_this, "E_RD");
 
     dComIfG_resDelete(&i_this->phase, i_this->resName);

@@ -20,6 +20,11 @@
 #include "res/Object/Always.h"
 #include "dusk/dusk.h"
 #include "dusk/frame_interpolation.h"
+#if TARGET_PC
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/horse_owner.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
 #include <cstring>
 
 
@@ -185,6 +190,84 @@ static s8 lbl_244_bss_47;
 static bool hio_set;
 
 static daE_WB_HIO_c l_HIO;
+
+#if TARGET_PC
+// Co-op: ordinary rider-owned boars steer from the mounted Rider's retained Combat target, not
+// their own independent target or P1. Leader/setpiece boars stay native until encounter ownership.
+static bool coOpSelectWbRiderTargetState(
+    e_wb_class* i_this, const char* label,
+    dusk::coop::selected_target_state::SelectedTargetState* state) {
+    if (i_this->leader != LEADER_NONE) {
+        return false;
+    }
+
+    fopAc_ac_c* riderActor = fopAcM_SearchByID(i_this->rd_id);
+    if (riderActor == NULL || fopAcM_GetName(riderActor) != fpcNm_E_RD_e) {
+        return false;
+    }
+
+    e_rd_class* rider = (e_rd_class*)riderActor;
+    dusk::coop::EnemyTargetContext context;
+    context.observer = &rider->enemy;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = dusk::coop::EnemyTargetMode::StickyCombat;
+    context.label = label;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        (fopAc_ac_c*)i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    return true;
+}
+
+static f32 coOpWbTargetDistanceXZ(
+    fopAc_ac_c* actor, const dusk::coop::selected_target_state::SelectedTargetState& targetState) {
+    return actor->current.pos.absXZ(targetState.pos);
+}
+
+static s16 coOpWbTargetAngleY(
+    fopAc_ac_c* actor, const dusk::coop::selected_target_state::SelectedTargetState& targetState) {
+    return cLib_targetAngleY(&actor->current.pos, &targetState.pos);
+}
+
+static bool coOpWbTargetPassCheck(
+    fopAc_ac_c* actor, const dusk::coop::selected_target_state::SelectedTargetState& targetState,
+    f32 pass) {
+    cXyz mae = actor->current.pos - targetState.pos;
+    cXyz ato;
+
+    cMtx_YrotS(*calc_mtx, -targetState.shapeAngleY);
+    MtxPosition(&mae, &ato);
+    return ato.z > pass;
+}
+
+static f32 coOpWbTargetHorseSpeed(
+    const dusk::coop::selected_target_state::SelectedTargetState& targetState) {
+    if (!targetState.available || !targetState.horseRide) {
+        return 0.0f;
+    }
+
+    daHorse_c* horse = dusk::coop::horse_owner::getHorse(targetState.slot);
+    return horse != NULL ? horse->speedF : 0.0f;
+}
+
+static bool coOpWbTargetHorseSpeedAtLeast(
+    const dusk::coop::selected_target_state::SelectedTargetState& targetState, f32 speed) {
+    return coOpWbTargetHorseSpeed(targetState) >= speed;
+}
+#endif
 
 #if TARGET_PC
 static void e_wb_rein_interp_callback(bool isSimFrame, void* pUserWork) {
@@ -1022,6 +1105,14 @@ static void e_wb_pl_ride(e_wb_class* i_this) {
 static void e_wb_f_wait(e_wb_class* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)i_this;
     s16 target_angle = fopAcM_searchPlayerAngleY(actor);
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    const bool targetValid = coOpSelectWbRiderTargetState(i_this, "e_wb.f_wait", &targetState);
+    if (targetValid) {
+        // Co-op: mounted boar wait/launch faces the Rider's retained target, not P1.
+        target_angle = coOpWbTargetAngleY(actor, targetState);
+    }
+#endif
 
     switch (i_this->ride_mode) {
     case 0:
@@ -1052,10 +1143,13 @@ static void e_wb_f_wait(e_wb_class* i_this) {
                     anm_init(i_this, 0x2a, 10.0f, 2, 1.0f);
                 }
             } else {
-                fopAc_ac_c* player = dComIfGp_getPlayer(0);
                 i_this->action = ACT_C_F_RUN;
                 i_this->ride_mode = 0;
-                i_this->field_0x5d0 = player->current.pos;
+#if TARGET_PC
+                i_this->field_0x5d0 = targetValid ? targetState.pos : dComIfGp_getPlayer(0)->current.pos;
+#else
+                i_this->field_0x5d0 = dComIfGp_getPlayer(0)->current.pos;
+#endif
             }
             break;
         } else if (i_this->anmID != 40) {
@@ -1090,9 +1184,33 @@ static void e_wb_f_wait(e_wb_class* i_this) {
     cLib_addCalc0(&actor->speedF, 1.0f, 2.0f);
 
     if (i_this->ride_mode >= 10) {
+#if TARGET_PC
+        f32 dist = targetValid ? coOpWbTargetDistanceXZ(actor, targetState)
+                               : fopAcM_searchPlayerDistanceXZ(actor);
+#else
         f32 dist = fopAcM_searchPlayerDistanceXZ(actor);
+#endif
 
         if (!(dist < 500.0f) && !(dist > 1500.0f)) {
+#if TARGET_PC
+            if (targetValid) {
+                if (!targetState.horseRide) {
+                    return;
+                }
+
+                if (!coOpWbTargetHorseSpeedAtLeast(targetState, 30.0f)) {
+                    return;
+                }
+            } else {
+                if (!daPy_getPlayerActorClass()->checkHorseRide()) {
+                    return;
+                }
+
+                if (!(dComIfGp_getHorseActor()->speedF >= 30.0f)) {
+                    return;
+                }
+            }
+#else
             if (!daPy_getPlayerActorClass()->checkHorseRide()) {
                 return;
             }
@@ -1100,6 +1218,7 @@ static void e_wb_f_wait(e_wb_class* i_this) {
             if (!(dComIfGp_getHorseActor()->speedF >= 30.0f)) {
                 return;
             }
+#endif
         }
 
         if (i_this->gake_flg == GAKE_FLG_NONE) {
@@ -1133,6 +1252,15 @@ static void e_wb_f_run(e_wb_class* i_this) {
     cXyz mae;
     cXyz ato;
     f32 dist = fopAcM_searchPlayerDistanceXZ(actor);
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    const bool targetValid = coOpSelectWbRiderTargetState(i_this, "e_wb.f_run", &targetState);
+    if (targetValid) {
+        // Co-op: the mounted boar follows the Rider's retained target slot for chase geometry.
+        pla = targetState.actor;
+        dist = coOpWbTargetDistanceXZ(actor, targetState);
+    }
+#endif
     f32 speed = 0.0f;
     f32 acceleration = 1.0f;
     if ((i_this->status_flag & 1) == 0) {
@@ -1151,11 +1279,19 @@ static void e_wb_f_run(e_wb_class* i_this) {
         }
         cLib_addCalcAngleS2(&i_this->field_0x6d6, 0, 1, 0x64);
         s8 run_check = false;
+#if TARGET_PC
+        if (targetValid ? coOpWbTargetHorseSpeedAtLeast(targetState, 30.0f)
+                        : (daPy_getPlayerActorClass()->checkHorseRide() &&
+                           dComIfGp_getHorseActor()->speedF >= 30.0f)) {
+            run_check = true;
+        }
+#else
         if (daPy_getPlayerActorClass()->checkHorseRide() &&
             dComIfGp_getHorseActor()->speedF >= 30.0f)
         {
             run_check = true;
         }
+#endif
 
         s16 angle = actor->current.angle.y;
 
@@ -1193,7 +1329,12 @@ static void e_wb_f_run(e_wb_class* i_this) {
         case 2:
             i_this->pursuit_flg = 1;
             if (run_check) {
+#if TARGET_PC
+                speed = targetValid ? coOpWbTargetHorseSpeed(targetState)
+                                    : dComIfGp_getHorseActor()->speedF;
+#else
                 speed = dComIfGp_getHorseActor()->speedF;
+#endif
                 if (speed > l_HIO.cavalry_battle_max_speed) {
                     speed = l_HIO.cavalry_battle_max_speed;
                 } else if (speed < l_HIO.max_speed) {
@@ -1202,7 +1343,11 @@ static void e_wb_f_run(e_wb_class* i_this) {
 
                 s16 local_a4 = 128;
                 if (i_this->field_0x6c0 != 0) {
+#if TARGET_PC
+                    i_this->target_ya = targetValid ? targetState.shapeAngleY : pla->shape_angle.y;
+#else
                     i_this->target_ya = pla->shape_angle.y;
+#endif
                     i_this->field_0x5de = 0;
                     acceleration = 0.5f;
                 } else {
@@ -1211,14 +1356,27 @@ static void e_wb_f_run(e_wb_class* i_this) {
                         mae.x = i_this->x_check;
                         mae.y = 0.0f;
                         mae.z = 1500.0f;
+#if TARGET_PC
+                        cMtx_YrotS(*calc_mtx, targetValid ? targetState.shapeAngleY : pla->shape_angle.y);
+#else
                         cMtx_YrotS(*calc_mtx, pla->shape_angle.y);
+#endif
                         MtxPosition(&mae, &ato);
+#if TARGET_PC
+                        ato += targetValid ? targetState.pos : pla->current.pos;
+#else
                         ato += pla->current.pos;
+#endif
                         mae = ato - actor->current.pos;
                         i_this->target_ya = cM_atan2s(mae.x, mae.z);
                     }
 
+#if TARGET_PC
+                    if (targetValid ? coOpWbTargetPassCheck(actor, targetState, i_this->pass)
+                                    : pl_pass_check(i_this, i_this->pass)) {
+#else
                     if (pl_pass_check(i_this, i_this->pass)) {
+#endif
                         speed *= 0.95f + TREG_F(7);
                         acceleration = 0.5f;
                     } else {
@@ -1378,6 +1536,15 @@ static void e_wb_b_run2(e_wb_class* i_this) {
     cXyz mae;
     cXyz ato;
     f32 dist = fopAcM_searchPlayerDistanceXZ(actor);
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    const bool targetValid = coOpSelectWbRiderTargetState(i_this, "e_wb.b_run2", &targetState);
+    if (targetValid) {
+        // Co-op: this boar path is generated around the Rider's target player.
+        pla = targetState.actor;
+        dist = coOpWbTargetDistanceXZ(actor, targetState);
+    }
+#endif
     f32 speed = 0.0f;
     f32 acceleration = 1.0f;
     s16 angle = actor->current.angle.y;
@@ -1429,7 +1596,11 @@ static void e_wb_b_run2(e_wb_class* i_this) {
             cMtx_YrotS(*calc_mtx, i << 13);
             mae.z = 3000.0f + ZREG_F(10);
             MtxPosition(&mae, &ato);
+#if TARGET_PC
+            ato += targetValid ? targetState.pos : pla->current.pos;
+#else
             ato += pla->current.pos;
+#endif
             b_path2[i] = ato;
         }
 
@@ -1564,6 +1735,15 @@ static void e_wb_b_run(e_wb_class* i_this) {
     cXyz mae;
     cXyz ato;
     f32 dist = fopAcM_searchPlayerDistanceXZ(actor);
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    const bool targetValid = coOpSelectWbRiderTargetState(i_this, "e_wb.b_run", &targetState);
+    if (targetValid) {
+        // Co-op: fixed-course boar run keeps its path but uses the Rider target for range/speed.
+        pla = targetState.actor;
+        dist = coOpWbTargetDistanceXZ(actor, targetState);
+    }
+#endif
     f32 speed = 0.0;
     f32 acceleration = 1.0;
 
@@ -1572,11 +1752,19 @@ static void e_wb_b_run(e_wb_class* i_this) {
         i_this->ride_mode = 0;
     } else {
         s8 is_player_on_fast_horse = false;
+#if TARGET_PC
+        if (targetValid ? coOpWbTargetHorseSpeedAtLeast(targetState, 30.0f)
+                        : (daPy_getPlayerActorClass()->checkHorseRide() &&
+                           dComIfGp_getHorseActor()->speedF >= 30.0f)) {
+            is_player_on_fast_horse = true;
+        }
+#else
         if (daPy_getPlayerActorClass()->checkHorseRide() &&
             dComIfGp_getHorseActor()->speedF >= 30.0f)
         {
             is_player_on_fast_horse = true;
         }
+#endif
 
         s16 initial_facing_angle = actor->current.angle.y;
         f32 anm_spd = 1.0f;
@@ -1668,7 +1856,12 @@ static void e_wb_b_run(e_wb_class* i_this) {
             cLib_addCalcAngleS2(&i_this->turn_step, 0x400, 1, 0x10);
 
             if (is_player_on_fast_horse) {
+#if TARGET_PC
+                speed = targetValid ? coOpWbTargetHorseSpeed(targetState)
+                                    : dComIfGp_getHorseActor()->speedF;
+#else
                 speed = dComIfGp_getHorseActor()->speedF;
+#endif
 
                 if (speed > l_HIO.leader_cavalry_battle_max_speed) {
                     speed = l_HIO.leader_cavalry_battle_max_speed;
@@ -1678,7 +1871,7 @@ static void e_wb_b_run(e_wb_class* i_this) {
                     }
                 }
 
-                if (fopAcM_searchPlayerDistanceXZ(actor) < 2000.0f + KREG_F(0)) {
+                if (dist < 2000.0f + KREG_F(0)) {
                     speed *= 1.2f;
 
                     if (actor->speedF < l_HIO.max_speed) {

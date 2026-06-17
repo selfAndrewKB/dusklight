@@ -38,6 +38,7 @@ struct SelectedTargetState {
     bool wolfBark = false;
     bool wolfThreat = false;
     bool horseRide = false;
+    bool boarRide = false;
     bool damageWaiting = false;
     bool status0_0x100 = false;
     bool status0_0x4000 = false;
