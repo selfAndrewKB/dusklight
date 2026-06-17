@@ -1485,7 +1485,11 @@ set(DUSK_FILES
         src/dusk/diagnostics.cpp
         src/dusk/dvd_asset.cpp
         src/d/actor/d_a_alink_dusk.cpp
+        src/dusk/android_frame_rate.hpp
+        src/dusk/android_frame_rate.cpp
         src/dusk/asserts.cpp
+        src/dusk/batch.cpp
+        src/dusk/batch.hpp
         src/dusk/config.cpp
         src/dusk/crash_handler.cpp
         src/dusk/crash_reporting.cpp
@@ -1499,6 +1503,8 @@ set(DUSK_FILES
         src/dusk/game_clock.cpp
         src/dusk/globals.cpp
         src/dusk/gyro.cpp
+        include/dusk/menu_pointer.h
+        src/dusk/menu_pointer.cpp
         src/dusk/mouse.cpp
 		src/dusk/gamepad_color.cpp
 		src/dusk/autosave.cpp
@@ -1512,6 +1518,7 @@ set(DUSK_FILES
         src/dusk/stubs.cpp
         include/dusk/texture_replacements.hpp
         src/dusk/texture_replacements.cpp
+        src/dusk/touch_camera.cpp
         src/dusk/update_check.cpp
         src/dusk/update_check.hpp
         #src/dusk/m_Do_ext_dusk.cpp
@@ -1541,6 +1548,7 @@ set(DUSK_FILES
         src/dusk/ui/button.hpp
         src/dusk/ui/component.cpp
         src/dusk/ui/component.hpp
+        src/dusk/ui/controls.hpp
         src/dusk/ui/controller_config.cpp
         src/dusk/ui/controller_config.hpp
         src/dusk/ui/document.cpp
@@ -1553,6 +1561,8 @@ set(DUSK_FILES
         src/dusk/ui/graphics_tuner.hpp
         src/dusk/ui/input.cpp
         src/dusk/ui/input.hpp
+        src/dusk/ui/icon_provider.cpp
+        src/dusk/ui/icon_provider.hpp
         src/dusk/ui/modal.cpp
         src/dusk/ui/modal.hpp
         src/dusk/ui/nav_types.hpp
@@ -1578,6 +1588,12 @@ set(DUSK_FILES
         src/dusk/ui/string_button.hpp
         src/dusk/ui/tab_bar.cpp
         src/dusk/ui/tab_bar.hpp
+        src/dusk/ui/touch_controls_common.cpp
+        src/dusk/ui/touch_controls_common.hpp
+        src/dusk/ui/touch_controls.cpp
+        src/dusk/ui/touch_controls.hpp
+        src/dusk/ui/touch_controls_editor.cpp
+        src/dusk/ui/touch_controls_editor.hpp
         src/dusk/ui/ui.cpp
         src/dusk/ui/ui.hpp
         src/dusk/ui/warp.cpp
