@@ -13,7 +13,12 @@
 #include "Z2AudioLib/Z2Instances.h"
 
 #if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/defender_owner.h"
+#include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/player_attention.h"
+#include "dusk/coop/retained_interaction_owner.h"
+#include "dusk/coop/selected_target_state.h"
 #endif
 
 class daE_SW_HIO_c {
@@ -201,6 +206,96 @@ static u8 data_807B0202;
 
 static u8 hio_set;
 
+#if TARGET_PC
+struct CoOpSwTargetState {
+    fopAc_ac_c* actor = NULL;
+    daPy_py_c* player = NULL;
+    dusk::coop::selected_target_state::SelectedTargetState state;
+    f32 distance = 0.0f;
+    f32 distanceXZ = 0.0f;
+    s16 angleY = 0;
+};
+
+struct CoOpSwHomeRangePredicateData {
+    const cXyz* homePos = NULL;
+    f32 range = 0.0f;
+};
+
+static dusk::coop::PlayerQueryEligibility coOpSwHomeRangePredicate(
+    dusk::coop::PlayerSlot, fopAc_ac_c* actor, void* userData) {
+    dusk::coop::PlayerQueryEligibility eligibility;
+    CoOpSwHomeRangePredicateData* data = static_cast<CoOpSwHomeRangePredicateData*>(userData);
+    if (actor == NULL || data == NULL || data->homePos == NULL ||
+        actor->current.pos.absXZ(*data->homePos) >= data->range)
+    {
+        eligibility.eligible = false;
+        eligibility.failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Range;
+    }
+    return eligibility;
+}
+
+// Co-op: Sandworm/Moldorm has two native action systems, but both should share one Combat target
+// instead of each callsite asking the P1 singleton independently.
+static bool coOpSelectSwTargetState(
+    daE_SW_c* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    CoOpSwTargetState* out, dusk::coop::PlayerQueryPredicate predicate = NULL,
+    void* predicateData = NULL) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+    context.candidatePredicate = predicate;
+    context.candidatePredicateData = predicateData;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (out != NULL) {
+        out->actor = target.localActor;
+        out->player = targetState.player;
+        out->state = targetState;
+        out->distance = target.distance;
+        out->distanceXZ = target.distanceXZ;
+        out->angleY = target.angleY;
+    }
+    return true;
+}
+
+static s16 coOpSwCameraAngleYForTarget(const CoOpSwTargetState& target) {
+    int cameraId = 0;
+    if (target.state.slot != dusk::coop::PlayerSlot::Invalid) {
+        cameraId = dComIfGp_getPlayerCameraID(static_cast<int>(target.state.slot));
+        if (cameraId < 0) {
+            cameraId = 0;
+        }
+    }
+    return fopCamM_GetAngleY(dComIfGp_getCamera(cameraId));
+}
+
+static dusk::coop::retained_interaction_owner::RetainedInteractionState
+coOpSwUpdateHookOwner(daE_SW_c* i_this, const char* label) {
+    return dusk::coop::retained_interaction_owner::updateRetainedInteraction(
+        label, i_this, dusk::coop::retained_interaction_owner::RetainedInteractionScope::Carry);
+}
+
+static void coOpSwClearHookOwner(daE_SW_c* i_this, const char* label) {
+    dusk::coop::retained_interaction_owner::clearRetainedInteraction(
+        label, i_this, dusk::coop::retained_interaction_owner::RetainedInteractionScope::Carry);
+}
+#endif
+
 void daE_SW_c::setActionMode(s16 i_actionMode, s16 i_moveMode) {
     if (field_0x6e6 != 0) {
         data_807B0200 = 0;
@@ -354,15 +449,37 @@ void daE_SW_c::executeWait() {
     shape_angle.y = current.angle.y;
 
     if (!bomb_check()) {
+#if TARGET_PC
+        // Co-op: wake acquisition must choose a player already inside the authored home range.
+        CoOpSwHomeRangePredicateData predicateData = {&home.pos, field_0x690};
+        CoOpSwTargetState target;
+        if (coOpSelectSwTargetState(this, "e_sw.wait", false,
+                                    dusk::coop::EnemyTargetMode::ImmediateAcquire, &target,
+                                    coOpSwHomeRangePredicate, &predicateData) &&
+            !checkSuddenAttack(0))
+        {
+            setActionMode(1, 0);
+        }
+#else
         if (daPy_getPlayerActorClass()->current.pos.absXZ(home.pos) < field_0x690 && !checkSuddenAttack(0)) {
             setActionMode(1, 0);
         }
+#endif
     }
 }
 
 int daE_SW_c::checkRunChase() {
     if (field_0x6ee == 0) {
         daPy_py_c* player = daPy_getPlayerActorClass();
+#if TARGET_PC
+        // Co-op: speed/horse checks belong to the retained combat target, not always P1.
+        CoOpSwTargetState target;
+        if (coOpSelectSwTargetState(this, "e_sw.run_chase", false,
+                                    dusk::coop::EnemyTargetMode::StickyCombat, &target))
+        {
+            player = target.player;
+        }
+#endif
         f32 fVar1;
         if (player->checkHorseRide() == 0) {
             fVar1 = 19.0f;
@@ -382,6 +499,15 @@ int daE_SW_c::checkRunChase() {
 
 void daE_SW_c::executeChaseSlow() {
     daPy_py_c* player = daPy_getPlayerActorClass();
+#if TARGET_PC
+    // Co-op: chase steering samples the retained target's position and speed facts.
+    CoOpSwTargetState target;
+    if (coOpSelectSwTargetState(this, "e_sw.chase_slow", false,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &target))
+    {
+        player = target.player;
+    }
+#endif
     cXyz sp3c(player->current.pos);
     cXyz sp48, sp54;
     f32 fVar1 = player->getSpeedF() + 5.0f;
@@ -403,7 +529,7 @@ void daE_SW_c::executeChaseSlow() {
         }
 
         if (checkRunChase() > 0) {
-            if (current.pos.absXZ(daPy_getPlayerActorClass()->current.pos) > 400.0f) {
+            if (current.pos.absXZ(player->current.pos) > 400.0f) {
                 setActionMode(2, 0);
                 return;
             }
@@ -463,7 +589,14 @@ void daE_SW_c::executeChaseSlow() {
                     }
 #endif
 
-                    if (((s16)cLib_distanceAngleS(fopCamM_GetAngleY(dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0))), field_0x6cc) > 0x6000 || bVar1) && data_807B0200 == 0) {
+                    s16 cameraAngleY;
+#if TARGET_PC
+                    // Co-op: camera-facing surprise checks use the selected slot's camera.
+                    cameraAngleY = coOpSwCameraAngleYForTarget(target);
+#else
+                    cameraAngleY = fopCamM_GetAngleY(dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0)));
+#endif
+                    if (((s16)cLib_distanceAngleS(cameraAngleY, field_0x6cc) > 0x6000 || bVar1) && data_807B0200 == 0) {
                         field_0x6ea = 60;
                         data_807B0200 = 1;
                         field_0x6e6 = 1;
@@ -539,6 +672,15 @@ void daE_SW_c::executeChaseSlow() {
 
 void daE_SW_c::executeChaseFast() {
     daPy_py_c* player = daPy_getPlayerActorClass();
+#if TARGET_PC
+    // Co-op: fast chase lead/prediction uses the retained target's movement state.
+    CoOpSwTargetState target;
+    if (coOpSelectSwTargetState(this, "e_sw.chase_fast", false,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &target))
+    {
+        player = target.player;
+    }
+#endif
     cXyz sp50(player->current.pos);
     cXyz sp5c, sp68;
 
@@ -703,6 +845,15 @@ void daE_SW_c::executeBomb() {
 
 void daE_SW_c::executeAttack() {
     daPy_py_c* player = daPy_getPlayerActorClass();
+#if TARGET_PC
+    // Co-op: committed attack launch math follows the retained target through the jump.
+    CoOpSwTargetState target;
+    if (coOpSelectSwTargetState(this, "e_sw.attack", true,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &target))
+    {
+        player = target.player;
+    }
+#endif
     s16 sVar1;
     f32 fVar1;
     cXyz sp54, sp60;
@@ -858,6 +1009,14 @@ void daE_SW_c::executeAttack() {
 
 void daE_SW_c::executeHook() {
     cXyz sp24;
+#if TARGET_PC
+    // Co-op: hook carry offsets must follow the player who actually hooked this Sandworm.
+    dusk::coop::retained_interaction_owner::RetainedInteractionState hookOwner =
+        coOpSwUpdateHookOwner(this, "e_sw.hook_update");
+    daPy_py_c* hookPlayer =
+        hookOwner.active && hookOwner.localPlayer != NULL ? hookOwner.localPlayer
+                                                          : daPy_getPlayerActorClass();
+#endif
 
     switch (mMoveMode) {
         case 0:
@@ -894,13 +1053,20 @@ void daE_SW_c::executeHook() {
                 sp24.set(0.0f, nREG_F(0) + 15.0f, 0.0f);
             }
 
+#if TARGET_PC
+            hookPlayer->setHookshotCarryOffset(fopAcM_GetID(this), &sp24);
+#else
             daPy_getPlayerActorClass()->setHookshotCarryOffset(fopAcM_GetID(this), &sp24);
+#endif
             // fallthrough
         case 1:
             cLib_addCalcAngleS(&shape_angle.y, (s16)(field_0x6cc + field_0x6a4), 4, 0x1000, 0x100);
             current.angle.y = shape_angle.y;
 
             if (!fopAcM_CheckStatus(this, fopAcStts_HOOK_CARRY_NOW_e)) {
+#if TARGET_PC
+                coOpSwClearHookOwner(this, "e_sw.hook_release");
+#endif
                 setActionMode(7, 10);
             }
             break;
@@ -909,6 +1075,15 @@ void daE_SW_c::executeHook() {
 
 void daE_SW_c::executeMoveOut() {
     daPy_py_c* player = daPy_getPlayerActorClass();
+#if TARGET_PC
+    // Co-op: move-out recovery tests the retained target's home range.
+    CoOpSwTargetState target;
+    if (coOpSelectSwTargetState(this, "e_sw.move_out", false,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &target))
+    {
+        player = target.player;
+    }
+#endif
     cXyz sp3c(player->current.pos);
     cXyz sp48;
     f32 fVar1;
@@ -1170,6 +1345,20 @@ static void* s_child_sub(void* i_actor, void* i_data) {
 
 void daE_SW_c::executeMaster() {
     camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
+#if TARGET_PC
+    // Co-op: master/child spawn staging follows the shared Combat target and its camera.
+    CoOpSwTargetState target;
+    bool hasTarget =
+        coOpSelectSwTargetState(this, "e_sw.master", false,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &target);
+    if (hasTarget) {
+        int cameraId = dComIfGp_getPlayerCameraID(static_cast<int>(target.state.slot));
+        if (cameraId < 0) {
+            cameraId = 0;
+        }
+        camera = dComIfGp_getCamera(cameraId);
+    }
+#endif
 
     fopAcM_OffStatus(this, fopAcStts_CULL_e);
     attention_info.flags = 0;
@@ -1179,7 +1368,13 @@ void daE_SW_c::executeMaster() {
     if (field_0x6ea == 0) {
         field_0x6ea = 30;
         if ((field_0x684 == 0 || !(field_0x6c8 < 1000.0f)) && !(field_0x6c8 > 10000.0f)) {
-            int iVar1 = abs((s16)(fopCamM_GetAngleY(camera) - (fopAcM_searchPlayerAngleY(this) + 0x8000)));
+            int iVar1;
+#if TARGET_PC
+            iVar1 = abs((s16)(fopCamM_GetAngleY(camera) -
+                              ((hasTarget ? target.angleY : fopAcM_searchPlayerAngleY(this)) + 0x8000)));
+#else
+            iVar1 = abs((s16)(fopCamM_GetAngleY(camera) - (fopAcM_searchPlayerAngleY(this) + 0x8000)));
+#endif
 
             if (iVar1 < 0x2000) {
                 data_807B0201 = 0;
@@ -1205,6 +1400,15 @@ void daE_SW_c::executeMaster() {
 
 bool daE_SW_c::checkSuddenAttack(int param_1) {
     daPy_py_c* player = daPy_getPlayerActorClass();
+#if TARGET_PC
+    // Co-op: sudden-attack setup follows the current Combat target's movement and facing.
+    CoOpSwTargetState target;
+    if (coOpSelectSwTargetState(this, "e_sw.sudden_check", false,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &target))
+    {
+        player = target.player;
+    }
+#endif
     f32 fVar1 = current.pos.absXZ(player->current.pos);
 
     if (field_0x6e7 != 0) {
@@ -1238,6 +1442,15 @@ bool daE_SW_c::checkSuddenAttack(int param_1) {
 
 void daE_SW_c::executeSuddenAttack() {
     daPy_py_c* player = daPy_getPlayerActorClass();
+#if TARGET_PC
+    // Co-op: sudden-attack follow-through stays committed to the selected target.
+    CoOpSwTargetState target;
+    if (coOpSelectSwTargetState(this, "e_sw.sudden_attack", true,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &target))
+    {
+        player = target.player;
+    }
+#endif
     cXyz sp1c(player->current.pos);
     cXyz sp28;
 
@@ -1463,7 +1676,16 @@ void daE_SW_c::damage_check() {
     if (field_0x98c.ChkAtShieldHit()) {
         field_0x98c.OffAtShieldHit();
 
+#if TARGET_PC
+        // Co-op: guard response belongs to the player touched by the attack collider.
+        const dusk::coop::defender_owner::DefenderOwnerResult defender =
+            dusk::coop::defender_owner::resolveDefenderOwner(this, &field_0x98c);
+        dusk::coop::defender_owner::recordDefenderOwnerContact("e_sw.attack_guard", this,
+                                                               defender);
+        if (defender.guarded) {
+#else
         if (daPy_getPlayerActorClass()->checkPlayerGuard()) {
+#endif
             setActionMode(ACTION_EXECUTE_CHANCE, 0);
             cc_at_check(this, &mAtInfo);
             return;
@@ -1481,7 +1703,24 @@ void daE_SW_c::damage_check() {
 
         cc_at_check(this, &mAtInfo);
 
+#if TARGET_PC
+        // Co-op: hit reactions and hook carry ownership follow the actual damage owner.
+        const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+            dusk::coop::damage_owner::resolveDamageOwner(this, mAtInfo.mpCollider);
+        dusk::coop::damage_owner::recordDamageOwnerHit("e_sw.damage", this, damageOwner,
+                                                       &mAtInfo, field_0x698);
+#endif
+
         if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_HOOKSHOT)) {
+#if TARGET_PC
+            dusk::coop::retained_interaction_owner::beginRetainedInteraction(
+                "e_sw.hookshot", this,
+                dusk::coop::retained_interaction_owner::RetainedInteractionScope::Carry,
+                damageOwner.localPlayerActor,
+                damageOwner.found
+                    ? dusk::coop::retained_interaction_owner::RetainedInteractionReason::DirectPlayer
+                    : dusk::coop::retained_interaction_owner::RetainedInteractionReason::FallbackPrimary);
+#endif
             setActionMode(ACTION_EXECUTE_HOOK, 0);
             executeHook();
         } else if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_SHIELD_ATTACK) || mAtInfo.mpCollider->ChkAtType(AT_TYPE_40) || mAtInfo.mpCollider->ChkAtType(AT_TYPE_BOOMERANG)) {
@@ -1497,7 +1736,12 @@ void daE_SW_c::damage_check() {
                 field_0x6f2 = KREG_S(8) + 10;
             }
 
-            int cutType = daPy_getPlayerActorClass()->getCutType();
+            int cutType;
+#if TARGET_PC
+            cutType = damageOwner.cutType;
+#else
+            cutType = daPy_getPlayerActorClass()->getCutType();
+#endif
 
             if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_NORMAL_SWORD) && (cutType == daPy_py_c::CUT_TYPE_LARGE_TURN_LEFT || cutType == daPy_py_c::CUT_TYPE_LARGE_TURN_RIGHT ||
                 cutType == daPy_py_c::CUT_TYPE_MORTAL_DRAW_B || cutType == daPy_py_c::CUT_TYPE_LARGE_JUMP_INIT || cutType == daPy_py_c::CUT_TYPE_LARGE_JUMP ||
@@ -1549,13 +1793,27 @@ int daE_SW_c::execute() {
         return d_execute();
     }
 
+#if TARGET_PC
+    // Co-op: fill Sandworm's native action cache once from the Combat target.
+    CoOpSwTargetState target;
+    if (coOpSelectSwTargetState(this, "e_sw.execute", false,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &target))
+    {
+        field_0x6c8 = target.distanceXZ;
+        field_0x6cc = target.angleY;
+    } else {
+        field_0x6c8 = fopAcM_searchPlayerDistance(this);
+        field_0x6cc = fopAcM_searchPlayerAngleY(this);
+    }
+#else
     field_0x6c8 = fopAcM_searchPlayerDistance(this);
+    field_0x6cc = fopAcM_searchPlayerAngleY(this);
+#endif
 
     if (field_0x684 != 0 && field_0x6c8 > nREG_F(15) + 5000.0f) {
         return 1;
     }
 
-    field_0x6cc = fopAcM_searchPlayerAngleY(this);
     field_0x6d0 = current.pos.abs(home.pos);
 
     if (field_0x6ea != 0) {
@@ -1589,9 +1847,18 @@ int daE_SW_c::execute() {
 
     if (mpModelMorf != NULL) {
         if (field_0x6e5 != 0) {
+#if TARGET_PC
+            // Co-op: disappearing Sandworms clear wolf lock on the slot that owns it.
+            daPy_py_c* lockingPlayer =
+                static_cast<daPy_py_c*>(dusk::coop::player_attention::lockingPlayerForActor(this));
+            if (lockingPlayer != NULL && lockingPlayer->checkWolfLock(this)) {
+                lockingPlayer->cancelWolfLock(this);
+            }
+#else
             if (daPy_getPlayerActorClass()->checkWolfLock(this)) {
                 daPy_getPlayerActorClass()->cancelWolfLock(this);
             }
+#endif
 
             onWolfNoLock();
         } else {
@@ -1618,6 +1885,12 @@ static int daE_SW_IsDelete(daE_SW_c* i_this) {
 
 int daE_SW_c::_delete() {
     dComIfG_resDelete(&mPhase, "E_SW");
+
+#if TARGET_PC
+    // Co-op: actor teardown releases retained combat and hook ownership.
+    dusk::coop::clearAllEnemyTargets(this);
+    dusk::coop::retained_interaction_owner::clearAllRetainedInteractions(this);
+#endif
 
     if (field_0xaf9 != 0) {
         hio_set = 0;
@@ -1866,7 +2139,16 @@ void daE_SW_c::d_damage_check() {
         if (field_0x98c.ChkAtShieldHit()) {
             field_0x98c.OffAtShieldHit();
 
+#if TARGET_PC
+            // Co-op: dungeon-form guard response belongs to the contacted defender.
+            const dusk::coop::defender_owner::DefenderOwnerResult defender =
+                dusk::coop::defender_owner::resolveDefenderOwner(this, &field_0x98c);
+            dusk::coop::defender_owner::recordDefenderOwnerContact("e_sw.d_attack_guard", this,
+                                                                   defender);
+            if (defender.guarded) {
+#else
             if (player->checkPlayerGuard()) {
+#endif
                 d_setAction(&daE_SW_c::d_chance);
                 return;
             }
@@ -1885,6 +2167,14 @@ void daE_SW_c::d_damage_check() {
 
             cc_at_check(this, &mAtInfo);
 
+#if TARGET_PC
+            // Co-op: dungeon-form cut and hookshot reactions use the actual damage owner.
+            const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+                dusk::coop::damage_owner::resolveDamageOwner(this, mAtInfo.mpCollider);
+            dusk::coop::damage_owner::recordDamageOwnerHit("e_sw.d_damage", this, damageOwner,
+                                                           &mAtInfo, field_0x698);
+#endif
+
             if (!mAtInfo.mpCollider->ChkAtType(AT_TYPE_SLINGSHOT)) {
                 if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_UNK)) {
                     field_0x6f2 = 20;
@@ -1896,10 +2186,17 @@ void daE_SW_c::d_damage_check() {
                     field_0x6f2 = 10;
                 }
 
-                if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_NORMAL_SWORD) && (player->getCutType() == daPy_py_c::CUT_TYPE_LARGE_TURN_LEFT ||
-                    player->getCutType() == daPy_py_c::CUT_TYPE_LARGE_TURN_RIGHT || player->getCutType() == daPy_py_c::CUT_TYPE_MORTAL_DRAW_B ||
-                    player->getCutType() == daPy_py_c::CUT_TYPE_LARGE_JUMP_INIT || player->getCutType() == daPy_py_c::CUT_TYPE_LARGE_JUMP ||
-                    player->getCutType() == daPy_py_c::CUT_TYPE_LARGE_JUMP_FINISH)) {
+                int cutType;
+#if TARGET_PC
+                cutType = damageOwner.cutType;
+#else
+                cutType = player->getCutType();
+#endif
+
+                if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_NORMAL_SWORD) && (cutType == daPy_py_c::CUT_TYPE_LARGE_TURN_LEFT ||
+                    cutType == daPy_py_c::CUT_TYPE_LARGE_TURN_RIGHT || cutType == daPy_py_c::CUT_TYPE_MORTAL_DRAW_B ||
+                    cutType == daPy_py_c::CUT_TYPE_LARGE_JUMP_INIT || cutType == daPy_py_c::CUT_TYPE_LARGE_JUMP ||
+                    cutType == daPy_py_c::CUT_TYPE_LARGE_JUMP_FINISH)) {
                     health = 0;
                     field_0x698 = 0;
                     d_setAction(&daE_SW_c::d_damage);
@@ -1909,6 +2206,15 @@ void daE_SW_c::d_damage_check() {
                     field_0x698 = 0;
                     d_setAction(&daE_SW_c::d_damage);
                 } else if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_HOOKSHOT)) {
+#if TARGET_PC
+                    dusk::coop::retained_interaction_owner::beginRetainedInteraction(
+                        "e_sw.d_hookshot", this,
+                        dusk::coop::retained_interaction_owner::RetainedInteractionScope::Carry,
+                        damageOwner.localPlayerActor,
+                        damageOwner.found
+                            ? dusk::coop::retained_interaction_owner::RetainedInteractionReason::DirectPlayer
+                            : dusk::coop::retained_interaction_owner::RetainedInteractionReason::FallbackPrimary);
+#endif
                     d_setAction(&daE_SW_c::d_hook);
                 } else if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_SHIELD_ATTACK) || mAtInfo.mpCollider->ChkAtType(AT_TYPE_40) ||
                            mAtInfo.mpCollider->ChkAtType(AT_TYPE_BOOMERANG)) {
@@ -2104,6 +2410,17 @@ void daE_SW_c::d_wait() {
 
 bool daE_SW_c::d_chaseCheck() {
     daPy_py_c* player = daPy_getPlayerActorClass();
+#if TARGET_PC
+    // Co-op: dungeon-form notice picks an eligible active player before applying camera gates.
+    CoOpSwHomeRangePredicateData predicateData = {&current.pos, l_HIO.character_notice_dist};
+    CoOpSwTargetState target;
+    if (coOpSelectSwTargetState(this, "e_sw.d_chase_check", false,
+                                dusk::coop::EnemyTargetMode::ImmediateAcquire, &target,
+                                coOpSwHomeRangePredicate, &predicateData))
+    {
+        player = target.player;
+    }
+#endif
     f32 fVar1 = current.pos.absXZ(player->current.pos);
     BOOL bVar1 = false;
 
@@ -2124,9 +2441,15 @@ bool daE_SW_c::d_chaseCheck() {
     }
 #endif
 
+#if TARGET_PC
+    // Co-op: camera-facing notice follows the selected slot's camera.
+    s16 cameraAngleY = coOpSwCameraAngleYForTarget(target);
+#else
     camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
-    
-    s16 sVar1 = cLib_distanceAngleS(fopCamM_GetAngleY(camera), field_0x6cc);
+    s16 cameraAngleY = fopCamM_GetAngleY(camera);
+#endif
+
+    s16 sVar1 = cLib_distanceAngleS(cameraAngleY, field_0x6cc);
     if (bVar1 || (sVar1 > 0x6000 && (abs((s16)(current.angle.y - field_0x6cc)) < 0x2000 ||
         fVar1 < l_HIO.human_attack_init_range))) {
         return true;
@@ -2137,6 +2460,15 @@ bool daE_SW_c::d_chaseCheck() {
 
 void daE_SW_c::d_chase() {
     daPy_py_c* player = daPy_getPlayerActorClass();
+#if TARGET_PC
+    // Co-op: dungeon-form chase follows the retained Combat target.
+    CoOpSwTargetState target;
+    if (coOpSelectSwTargetState(this, "e_sw.d_chase", false,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &target))
+    {
+        player = target.player;
+    }
+#endif
     s16 sVar1;
 
     switch (mMoveMode) {
@@ -2200,6 +2532,15 @@ void daE_SW_c::d_chase() {
 
 void daE_SW_c::d_attk() {
     daPy_py_c* player = daPy_getPlayerActorClass();
+#if TARGET_PC
+    // Co-op: dungeon-form attack launch consumes the retained target's position and speed.
+    CoOpSwTargetState target;
+    if (coOpSelectSwTargetState(this, "e_sw.d_attack", true,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &target))
+    {
+        player = target.player;
+    }
+#endif
     s16 sVar1;
 
     switch (mMoveMode) {
@@ -2391,7 +2732,12 @@ void daE_SW_c::d_chance2() {
             bckSet(BCK_SW_DAMAGE, 3.0f, 2, 1.0f);
             speedF = 12.0f;
             speed.y = 35.0f;
+#if TARGET_PC
+            // Co-op: shield/boomerang bounce faces away from the actual hit direction.
+            current.angle.y = mAtInfo.mHitDirection.y + 0x8000;
+#else
             current.angle.y = fopAcM_searchPlayerAngleY(this) + 0x8000;
+#endif
             mMoveMode++;
             break;
 
@@ -2573,6 +2919,14 @@ void daE_SW_c::d_die() {
 
 void daE_SW_c::d_hook() {
     daPy_py_c* player = daPy_getPlayerActorClass();
+#if TARGET_PC
+    // Co-op: dungeon-form hook carry offsets belong to the retained hookshot owner.
+    dusk::coop::retained_interaction_owner::RetainedInteractionState hookOwner =
+        coOpSwUpdateHookOwner(this, "e_sw.d_hook_update");
+    if (hookOwner.active && hookOwner.localPlayer != NULL) {
+        player = hookOwner.localPlayer;
+    }
+#endif
     cXyz spb4;
 
     switch (mMoveMode) {
@@ -2611,7 +2965,7 @@ void daE_SW_c::d_hook() {
                 spb4.set(0.0f, nREG_F(0) + 15.0f, 0.0f);
             }
 
-            daPy_getPlayerActorClass()->setHookshotCarryOffset(fopAcM_GetID(this), &spb4);
+            player->setHookshotCarryOffset(fopAcM_GetID(this), &spb4);
             break;
 
         case 1:
@@ -2619,6 +2973,9 @@ void daE_SW_c::d_hook() {
             current.angle.y = shape_angle.y;
 
             if (!fopAcM_CheckStatus(this, fopAcStts_HOOK_CARRY_NOW_e)) {
+#if TARGET_PC
+                coOpSwClearHookOwner(this, "e_sw.d_hook_release");
+#endif
                 speed.y = 20.0f;
                 speedF = -10.0f;
                 gravity = -5.0f;
@@ -2628,6 +2985,10 @@ void daE_SW_c::d_hook() {
             break;
 
         case -1:
+#if TARGET_PC
+            // Co-op: native action teardown also releases the retained hook owner.
+            coOpSwClearHookOwner(this, "e_sw.d_hook_teardown");
+#endif
             if (field_0x668.absXZ(current.pos) < 200.0f) {
                 dBgS_LinChk lin_chk;
                 lin_chk.Set(&field_0x668, &current.pos, NULL);
@@ -2697,7 +3058,21 @@ int daE_SW_c::d_execute() {
         field_0x6f6--;
     }
 
+#if TARGET_PC
+    // Co-op: dungeon-form action cache uses the same Combat owner as the overworld form.
+    CoOpSwTargetState target;
+    if (coOpSelectSwTargetState(this, "e_sw.d_execute", false,
+                                dusk::coop::EnemyTargetMode::StickyCombat, &target))
+    {
+        field_0x6c8 = target.distanceXZ;
+        field_0x6cc = target.angleY;
+    } else {
+        field_0x6c8 = fopAcM_searchPlayerDistance(this);
+        field_0x6cc = fopAcM_searchPlayerAngleY(this);
+    }
+#else
     field_0x6cc = fopAcM_searchPlayerAngleY(this);
+#endif
     field_0x6d0 = current.pos.abs(home.pos);
     d_action();
     mtx_set();
@@ -2705,9 +3080,18 @@ int daE_SW_c::d_execute() {
 
     if (mpModelMorf != NULL) {
         if (field_0x6e5 != 0) {
+#if TARGET_PC
+            // Co-op: hidden dungeon Sandworms clear wolf lock on the owning slot.
+            daPy_py_c* lockingPlayer =
+                static_cast<daPy_py_c*>(dusk::coop::player_attention::lockingPlayerForActor(this));
+            if (lockingPlayer != NULL && lockingPlayer->checkWolfLock(this)) {
+                lockingPlayer->cancelWolfLock(this);
+            }
+#else
             if (daPy_getPlayerActorClass()->checkWolfLock(this)) {
                 daPy_getPlayerActorClass()->cancelWolfLock(this);
             }
+#endif
 
             onWolfNoLock();
         } else {
