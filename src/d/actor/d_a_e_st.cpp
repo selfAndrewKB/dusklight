@@ -10,7 +10,11 @@
 #include "f_op/f_op_actor_enemy.h"
 #include "Z2AudioLib/Z2Instances.h"
 #if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/defender_owner.h"
 #include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/player_query.h"
+#include "dusk/coop/retained_interaction_owner.h"
 #include "dusk/coop/selected_target_state.h"
 #endif
 #include <cstring>
@@ -401,6 +405,41 @@ static bool coOpStPlayerAboveAndInXZ(e_st_class* i_this, const char* label, f32 
     return a_this->current.pos.absXZ(targetState.pos) < xzDistance &&
            a_this->current.pos.y - targetState.pos.y > 0.0f;
 }
+
+static dusk::coop::retained_interaction_owner::RetainedInteractionState
+coOpStCaughtPlayer(e_st_class* i_this, const char* label, bool acquire) {
+    fopAc_ac_c* actor = &i_this->actor;
+    dusk::coop::retained_interaction_owner::RetainedInteractionState retained =
+        dusk::coop::retained_interaction_owner::updateRetainedInteraction(
+            label, actor,
+            dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach);
+    if (retained.found || !acquire) {
+        return retained;
+    }
+
+    fopAc_ac_c* caughtActor = NULL;
+    dusk::coop::forEachActivePlayer(
+        [&](dusk::coop::PlayerSlot, fopAc_ac_c* playerActor) {
+            if (caughtActor == NULL && ((daPy_py_c*)playerActor)->getStCaught()) {
+                caughtActor = playerActor;
+            }
+        });
+    if (caughtActor == NULL) {
+        return retained;
+    }
+
+    // Co-op: the native StCaught producer is player-local; retain that exact player for the hug.
+    return dusk::coop::retained_interaction_owner::beginRetainedInteraction(
+        label, actor, dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach,
+        caughtActor,
+        dusk::coop::retained_interaction_owner::RetainedInteractionReason::DirectPlayer);
+}
+
+static void coOpStClearCaughtPlayer(e_st_class* i_this, const char* label) {
+    dusk::coop::retained_interaction_owner::clearRetainedInteraction(
+        label, &i_this->actor,
+        dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach);
+}
 #endif
 
 static int daE_ST_Draw(e_st_class* i_this) {
@@ -525,7 +564,9 @@ static BOOL pl_check(e_st_class* i_this, f32 i_distance) {
 
 static void damage_check(e_st_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
+#if !TARGET_PC
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
 
     i_this->mStts.Move();
 
@@ -536,12 +577,31 @@ static void damage_check(e_st_class* i_this) {
     if ((i_this->mAction == ACTION_HANG || i_this->mAction == ACTION_HANG_2 || i_this->mAction == ACTION_HANG_SHOOT) && i_this->mAtSph.ChkAtHit()) {
         i_this->field_0x7ec = JREG_F(8) + 40.0f + 160.0f;
         i_this->field_0x7f0 = 0;
+#if TARGET_PC
+        const dusk::coop::defender_owner::DefenderOwnerResult defender =
+            dusk::coop::defender_owner::resolveDefenderOwner(a_this, &i_this->mAtSph);
+        dusk::coop::defender_owner::recordDefenderOwnerContact("e_st.attack_contact", a_this,
+                                                                defender);
+        // Co-op: recoil orientation follows the defender this attack actually touched.
+        i_this->field_0x7f2 =
+            (defender.found && defender.localPlayerActor != NULL
+                 ? defender.localPlayerActor->shape_angle.y
+                 : dComIfGp_getPlayer(0)->shape_angle.y) +
+            0x8000;
+#else
         i_this->field_0x7f2 = player->shape_angle.y + 0x8000;
+#endif
     }
 
     if (i_this->mSph.ChkTgHit()) {
         i_this->mAtInfo.mpCollider = i_this->mSph.GetTgHitObj();
         cc_at_check(a_this, &i_this->mAtInfo);
+#if TARGET_PC
+        const dusk::coop::damage_owner::DamageOwnerResult owner =
+            dusk::coop::damage_owner::resolveDamageOwner(a_this, i_this->mAtInfo.mpCollider);
+        dusk::coop::damage_owner::recordDamageOwnerHit("e_st.damage", a_this, owner,
+                                                        &i_this->mAtInfo);
+#endif
 
         if (i_this->mAtInfo.mpCollider->ChkAtType(AT_TYPE_UNK)) {
             i_this->mInvulnerabilityTimer = 20;
@@ -591,7 +651,15 @@ static void damage_check(e_st_class* i_this) {
                     i_this->field_0x75c = 2.0f;
                 }
 
-                if (player->getCutType() == daPy_py_c::CUT_TYPE_JUMP && player->checkCutJumpCancelTurn()) {
+#if TARGET_PC
+                if (owner.localPlayer != NULL &&
+                    owner.cutType == daPy_py_c::CUT_TYPE_JUMP &&
+                    owner.localPlayer->checkCutJumpCancelTurn())
+#else
+                if (player->getCutType() == daPy_py_c::CUT_TYPE_JUMP &&
+                    player->checkCutJumpCancelTurn())
+#endif
+                {
                     i_this->mInvulnerabilityTimer = 3;
                     i_this->field_0x7e0 = 10.0f;
                 }
@@ -600,14 +668,31 @@ static void damage_check(e_st_class* i_this) {
                 i_this->mActionPhase = PHASE_INIT;
             }
         } else {
-            if (i_this->mAtInfo.mHitType == 1 && (daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_TURN_RIGHT || daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_UNK_9)) {
+            if (i_this->mAtInfo.mHitType == 1 &&
+#if TARGET_PC
+                (owner.cutType == daPy_py_c::CUT_TYPE_TURN_RIGHT ||
+                 owner.cutType == daPy_py_c::CUT_TYPE_UNK_9)
+#else
+                (daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_TURN_RIGHT ||
+                 daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_UNK_9)
+#endif
+            ) {
                 i_this->field_0x7d4 = cM_rndF(1000.0f) + 4000.0f;
             } else {
                 i_this->field_0x7d4 = cM_rndFX(2000.0f);
             }
 
             i_this->mSound.startCreatureVoice(Z2SE_EN_ST_V_DEATH, -1);
+#if TARGET_PC
+            // Co-op: enemy-death feedback belongs to the player who dealt the killing hit.
+            if (owner.localPlayer != NULL) {
+                owner.localPlayer->onEnemyDead();
+            } else {
+                daPy_getPlayerActorClass()->onEnemyDead();
+            }
+#else
             daPy_getPlayerActorClass()->onEnemyDead();
+#endif
             i_this->mDeathFlag = 1;
             i_this->mAction = ACTION_DAMAGE;
             i_this->mActionPhase = PHASE_INIT;
@@ -1010,7 +1095,13 @@ static void e_st_shoot(e_st_class* i_this) {
         case SHOOT_PHASE_WAIT02: {
             int _;  // needed to force b statement at end of case in dbg asm
             if (i_this->mTimers[0] == 0) {
+#if TARGET_PC
+                const dusk::coop::retained_interaction_owner::RetainedInteractionState caught =
+                    coOpStCaughtPlayer(i_this, "e_st.shoot_caught", true);
+                if (caught.found && fopAcM_GetParam(a_this) == 1) {
+#else
                 if (daPy_getPlayerActorClass()->getStCaught() && fopAcM_GetParam(a_this) == 1) {
+#endif
                     i_this->mAction = ACTION_JUMP_ATTACK;
                     i_this->mActionPhase = PHASE_INIT;
                 } else {
@@ -1028,7 +1119,17 @@ static void e_st_shoot(e_st_class* i_this) {
 
 static void e_st_jump_attack(e_st_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
+#if TARGET_PC
+    dusk::coop::retained_interaction_owner::RetainedInteractionState caught =
+        coOpStCaughtPlayer(i_this, "e_st.jump_caught", true);
+    fopAc_ac_c* player =
+        caught.found && caught.localPlayerActor != NULL ? caught.localPlayerActor
+                                                       : dComIfGp_getPlayer(0);
+    daPy_py_c* caughtPlayer =
+        caught.found && caught.localPlayer != NULL ? caught.localPlayer : (daPy_py_c*)player;
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     cXyz pos, target;
     s8 unk_flag = 0;
     int frame = i_this->mpModelMorf->getFrame();
@@ -1055,8 +1156,15 @@ static void e_st_jump_attack(e_st_class* i_this) {
 
         case JUMP_ATTACK_PHASE_HUG:
             unk_flag = 1;
+#if TARGET_PC
+            cLib_addCalcAngleS2(&a_this->current.angle.y,
+                                cLib_targetAngleY(&a_this->current.pos, &player->current.pos), 4,
+                                0x1000);
+            pos = caughtPlayer->getHeadTopPos() - a_this->current.pos;
+#else
             cLib_addCalcAngleS2(&a_this->current.angle.y, fopAcM_searchPlayerAngleY(a_this), 4, 0x1000);
             pos = daPy_getPlayerActorClass()->getHeadTopPos() - a_this->current.pos;
+#endif
             cMtx_YrotS(*calc_mtx, cM_atan2s(pos.x, pos.z));
             cMtx_XrotM(*calc_mtx, -cM_atan2s(pos.y, JMAFastSqrt(pos.x * pos.x + pos.z * pos.z)));
             pos.x = 0.0f;
@@ -1064,7 +1172,11 @@ static void e_st_jump_attack(e_st_class* i_this) {
             pos.z = KREG_F(5) + 80.0f;
             MtxPosition(&pos, &a_this->speed);
             a_this->current.pos += a_this->speed;
+#if TARGET_PC
+            pos = caughtPlayer->getHeadTopPos() - a_this->current.pos;
+#else
             pos = daPy_getPlayerActorClass()->getHeadTopPos() - a_this->current.pos;
+#endif
 
             if (pos.abs() <= 85.0f) {
                 i_this->mActionPhase = JUMP_ATTACK_PHASE_3;
@@ -1086,20 +1198,37 @@ static void e_st_jump_attack(e_st_class* i_this) {
             cMtx_YrotS(*calc_mtx, player->shape_angle.y);
             pos.set(0.0f, -20.0f, 40.0f);
             MtxPosition(&pos, &target);
+#if TARGET_PC
+            {
+                // Co-op: hug attachment follows the retained player's actor-local head position.
+                cXyz headTop = caughtPlayer->getHeadTopPos();
+                cLib_addCalc2(&a_this->current.pos.x, target.x + headTop.x, 1.0f, 70.0f);
+                cLib_addCalc2(&a_this->current.pos.y, target.y + headTop.y, 1.0f, 70.0f);
+                cLib_addCalc2(&a_this->current.pos.z, target.z + headTop.z, 1.0f, 70.0f);
+            }
+#else
             cLib_addCalc2(&a_this->current.pos.x, target.x + daPy_getPlayerActorClass()->getHeadTopPos().x, 1.0f, 70.0f);
             cLib_addCalc2(&a_this->current.pos.y, target.y + daPy_getPlayerActorClass()->getHeadTopPos().y, 1.0f, 70.0f);
             cLib_addCalc2(&a_this->current.pos.z, target.z + daPy_getPlayerActorClass()->getHeadTopPos().z, 1.0f, 70.0f);
+#endif
 
             if (i_this->mpModelMorf->checkFrame(4.0f)) {
                 i_this->mSound.startCreatureSound(Z2SE_EN_ST_HUG_ATTACK, 0, -1);
             }
             if (i_this->mTimers[0] > 15) {
+#if TARGET_PC
+                if (caughtPlayer == NULL || !caughtPlayer->getStCaught()) {
+#else
                 if (!daPy_getPlayerActorClass()->getStCaught()) {
+#endif
                     i_this->mTimers[0] = 15;
                 }
             }
 
             if (i_this->mTimers[0] == 0) {
+#if TARGET_PC
+                coOpStClearCaughtPlayer(i_this, "e_st.jump_release");
+#endif
                 i_this->mActionPhase = JUMP_ATTACK_PHASE_JUMPBACK;
                 anm_init(i_this, BCK_ST_HUG, 2.0f, J3DFrameCtrl::EMode_NONE, 0.0f);
                 i_this->mSound.startCreatureSound(Z2SE_EN_ST_JUMPBACK, 0, -1);
@@ -2378,7 +2507,6 @@ static s8 e_st_g_end(e_st_class* i_this) {
 
 static void damage_check_g(e_st_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
-    fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
 
     i_this->mStts.Move();
 
@@ -2388,6 +2516,10 @@ static void damage_check_g(e_st_class* i_this) {
 
     if (i_this->mSph.ChkTgHit()) {
         i_this->mAtInfo.mpCollider = i_this->mSph.GetTgHitObj();
+#if TARGET_PC
+        const dusk::coop::damage_owner::DamageOwnerResult owner =
+            dusk::coop::damage_owner::resolveDamageOwner(a_this, i_this->mAtInfo.mpCollider);
+#endif
 
         if (i_this->mAtInfo.mpCollider->ChkAtType(AT_TYPE_BOOMERANG)) {
             i_this->mAction = ACTION_G_WIND;
@@ -2397,6 +2529,10 @@ static void damage_check_g(e_st_class* i_this) {
         }
 
         cc_at_check(a_this, &i_this->mAtInfo);
+#if TARGET_PC
+        dusk::coop::damage_owner::recordDamageOwnerHit("e_st.ground_damage", a_this, owner,
+                                                        &i_this->mAtInfo);
+#endif
         OS_REPORT("E_st DAM %d\n", i_this->mAtInfo.mAttackPower);
         OS_REPORT("E_st HP  %d\n", a_this->health);
         i_this->mInvulnerabilityTimer = 10;
@@ -2408,22 +2544,59 @@ static void damage_check_g(e_st_class* i_this) {
         } else if (a_this->health <= 0) {
             i_this->mAction = ACTION_G_END;
             i_this->mActionPhase = G_END_PHASE_10;
+#if TARGET_PC
+            // Co-op: ground-form death and cut reactions use the actual damage owner.
+            if (owner.localPlayer != NULL) {
+                owner.localPlayer->onEnemyDead();
+                owner.localPlayer->onEnemyDead();
+            } else {
+                daPy_getPlayerActorClass()->onEnemyDead();
+                daPy_getPlayerActorClass()->onEnemyDead();
+            }
+#else
             daPy_getPlayerActorClass()->onEnemyDead();
+#endif
             a_this->speedF = KREG_F(14) + -40.0f;
+#if !TARGET_PC
             daPy_getPlayerActorClass()->onEnemyDead();
+#endif
             i_this->mDeathFlag = 1;
         } else {
-            if (daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_JUMP) {
+            if (
+#if TARGET_PC
+                owner.localPlayer != NULL && owner.cutType == daPy_py_c::CUT_TYPE_JUMP
+#else
+                daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_JUMP
+#endif
+            ) {
+#if TARGET_PC
+                if (owner.localPlayer->checkCutJumpCancelTurn()) {
+#else
                 if (daPy_getPlayerActorClass()->checkCutJumpCancelTurn()) {
+#endif
                     i_this->mInvulnerabilityTimer = NREG_S(7) + 3;
                 }
             }
 
-            if (i_this->mAtInfo.mHitType == 1 && (daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_TURN_RIGHT || daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_UNK_9)) {
+            if (i_this->mAtInfo.mHitType == 1 &&
+#if TARGET_PC
+                (owner.cutType == daPy_py_c::CUT_TYPE_TURN_RIGHT ||
+                 owner.cutType == daPy_py_c::CUT_TYPE_UNK_9)
+#else
+                (daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_TURN_RIGHT ||
+                 daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_UNK_9)
+#endif
+            ) {
                 i_this->mAction = ACTION_G_CHANCE;
                 a_this->speedF = KREG_F(14) + -40.0f;
                 i_this->mInvulnerabilityTimer = 30;
-            } else if (daPy_getPlayerActorClass()->getCutCount() >= 4) {
+            } else if (
+#if TARGET_PC
+                owner.cutCount >= 4
+#else
+                daPy_getPlayerActorClass()->getCutCount() >= 4
+#endif
+            ) {
                 i_this->mAction = ACTION_G_CHANCE;
                 a_this->speedF = KREG_F(14) + -40.0f;
                 i_this->mInvulnerabilityTimer = 20;
@@ -2828,8 +3001,20 @@ static void action(e_st_class* i_this) {
         a_this->shape_angle.y = a_this->current.angle.y;
 
         if (unk_flag_6 && (i_this->mFrameCounter & 0x30) != 0) {
+#if TARGET_PC
+            dusk::coop::selected_target_state::SelectedTargetState targetState;
+            coOpSelectStTargetState(i_this, "e_st.defense_read",
+                                    dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
+                                    NULL, NULL);
+            // Co-op: anticipatory defense reads the selected opponent's active cut state.
+            if (!targetState.available ||
+                targetState.cutType != daPy_py_c::CUT_TYPE_GUARD_ATTACK)
+            {
+                if (targetState.available && targetState.cutActive && !small) {
+#else
             if (daPy_getPlayerActorClass()->getCutType() != daPy_py_c::CUT_TYPE_GUARD_ATTACK) {
                 if (daPy_getPlayerActorClass()->getCutAtFlg() != 0 && !small) {
+#endif
                     i_this->mAction = ACTION_G_DEF;
                     i_this->mActionPhase = PHASE_INIT;
                     i_this->field_0xcf4 = 1;
@@ -3117,6 +3302,12 @@ static int daE_ST_IsDelete(e_st_class*) {
 
 static int daE_ST_Delete(e_st_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
+#if TARGET_PC
+    // Co-op: teardown clears both combat selection and any retained hug target.
+    coOpStClearCaughtPlayer(i_this, "e_st.delete");
+    dusk::coop::clearAllEnemyTargets(a_this);
+    dusk::coop::retained_interaction_owner::clearAllRetainedInteractions(a_this);
+#endif
     fopAcM_RegisterDeleteID(i_this, "E_ST");
 
     dComIfG_resDelete(&i_this->mPhase, "E_st");

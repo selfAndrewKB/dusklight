@@ -9,6 +9,12 @@
 #include "d/d_com_inf_game.h"
 #include "f_op/f_op_actor_enemy.h"
 
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 class daE_RB_HIO_c : public JORReflexible {
 public:
     daE_RB_HIO_c();
@@ -47,6 +53,42 @@ static u8 hio_set;
 
 static daE_RB_HIO_c l_HIO;
 
+#if TARGET_PC
+static bool coOpSelectRbTargetState(
+    e_rb_class* i_this, const char* label, dusk::coop::EnemyTargetMode mode, bool committed,
+    dusk::coop::selected_target_state::SelectedTargetState* state) {
+    fopAc_ac_c* observer = &i_this->enemy;
+    if (i_this->isChild && i_this->parent != NULL) {
+        // Co-op: the Leever master coordinates one group target; children inherit that intent.
+        observer = i_this->parent;
+    }
+
+    dusk::coop::EnemyTargetContext context;
+    context.observer = observer;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        &i_this->enemy, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    return true;
+}
+#endif
+
 static int daE_RB_Draw(e_rb_class* i_this) {
     if (!i_this->isChild) {
         return 1;
@@ -78,7 +120,15 @@ static void damage_check(e_rb_class* i_this) {
     if (i_this->invincibilityTimer == 0) {
         if (i_this->ccSph.ChkTgHit()) {
             i_this->atInfo.mpCollider = i_this->ccSph.GetTgHitObj();
+#if TARGET_PC
+            const dusk::coop::damage_owner::DamageOwnerResult owner =
+                dusk::coop::damage_owner::resolveDamageOwner(enemy, i_this->atInfo.mpCollider);
+#endif
             cc_at_check(enemy, &i_this->atInfo);
+#if TARGET_PC
+            dusk::coop::damage_owner::recordDamageOwnerHit("e_rb.damage", enemy, owner,
+                                                            &i_this->atInfo);
+#endif
     
             if (i_this->atInfo.mpCollider->ChkAtType(AT_TYPE_SLINGSHOT)) {
                 return;
@@ -90,7 +140,18 @@ static void damage_check(e_rb_class* i_this) {
                 i_this->invincibilityTimer = 10;
             }
 
-            if ((i_this->atInfo.mHitType == 1 && daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_TURN_RIGHT) || daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_UNK_9) {
+            if (
+#if TARGET_PC
+                (i_this->atInfo.mHitType == 1 &&
+                 owner.cutType == daPy_py_c::CUT_TYPE_TURN_RIGHT) ||
+                owner.cutType == daPy_py_c::CUT_TYPE_UNK_9
+#else
+                (i_this->atInfo.mHitType == 1 &&
+                 daPy_getPlayerActorClass()->getCutType() ==
+                     daPy_py_c::CUT_TYPE_TURN_RIGHT) ||
+                daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_UNK_9
+#endif
+            ) {
                 i_this->rot_step = KREG_S(9) + 5000;
                 i_this->rot_x = 0x2000;
                 i_this->field_0xa30 = 60.0f + TREG_F(10);
@@ -198,7 +259,15 @@ static s8 e_rb_appear(e_rb_class* i_this) {
 
 static void e_rb_move(e_rb_class* i_this) {
     fopEn_enemy_c* enemy = &i_this->enemy;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectRbTargetState(i_this, "e_rb.move", dusk::coop::EnemyTargetMode::StickyCombat,
+                            false, &targetState);
+    fopAc_ac_c* player =
+        targetState.available ? targetState.actor : dComIfGp_getPlayer(0);
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
 
     cXyz spC;
     spC.x = i_this->field_0xa10.x - enemy->current.pos.x;
@@ -491,7 +560,15 @@ static void action(e_rb_class* i_this) {
 }
 
 static void e_rb_base_0(e_rb_class* i_this) {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectRbTargetState(i_this, "e_rb.base_wait",
+                            dusk::coop::EnemyTargetMode::ImmediateAcquire, false, &targetState);
+    fopAc_ac_c* player =
+        targetState.available ? targetState.actor : dComIfGp_getPlayer(0);
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
 
     if (i_this->distToPlayer < 100.0f * i_this->appearRange) {
         i_this->action = ACTION_APPEAR;
@@ -521,7 +598,15 @@ static void* s_s_sub(void* i_actor, void* i_data) {
 
 static void e_rb_base_1(e_rb_class* i_this) {
     fopAc_ac_c* enemy = &i_this->enemy;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectRbTargetState(i_this, "e_rb.base_active",
+                            dusk::coop::EnemyTargetMode::StickyCombat, false, &targetState);
+    fopAc_ac_c* player =
+        targetState.available ? targetState.actor : dComIfGp_getPlayer(0);
+#else
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+#endif
     target_info_count = 0;
 
     for (int i = 0; i < 10; i++) {
@@ -665,8 +750,26 @@ static int daE_RB_Execute(e_rb_class* i_this) {
     cXyz sp30;
     cXyz sp24;
 
+#if TARGET_PC
+    if (i_this->isChild) {
+        fopAcM_SearchByID(enemy->parentActorID, &i_this->parent);
+    }
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    const bool targetFound = coOpSelectRbTargetState(
+        i_this, "e_rb.action_cache",
+        i_this->action == ACTION_STAY ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                                      : dusk::coop::EnemyTargetMode::StickyCombat,
+        i_this->action == ACTION_ATTACK, &targetState);
+    i_this->angleToPlayer =
+        targetFound ? cLib_targetAngleY(&enemy->current.pos, &targetState.pos)
+                    : fopAcM_searchPlayerAngleY(enemy);
+    i_this->distToPlayer =
+        targetFound ? (targetState.pos - enemy->current.pos).absXZ()
+                    : fopAcM_searchPlayerDistanceXZ(enemy);
+#else
     i_this->angleToPlayer = fopAcM_searchPlayerAngleY(enemy);
     i_this->distToPlayer = fopAcM_searchPlayerDistanceXZ(enemy);
+#endif
     i_this->counter++;
 
     for (int i = 0; i < 4; i++) {
@@ -739,6 +842,9 @@ static int daE_RB_IsDelete(e_rb_class* i_this) {
 static int daE_RB_Delete(e_rb_class* i_this) {
     fopEn_enemy_c* enemy = &i_this->enemy;
     fopAcM_GetID(i_this);
+#if TARGET_PC
+    dusk::coop::clearAllEnemyTargets(enemy);
+#endif
     dComIfG_resDelete(&i_this->phase, "E_rb");
 
     if (i_this->HIOInit) {

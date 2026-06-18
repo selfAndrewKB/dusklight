@@ -13,6 +13,10 @@
 #include "f_op/f_op_kankyo_mng.h"
 
 #if TARGET_PC
+#include "dusk/coop/defender_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/retained_interaction_owner.h"
+#include "dusk/coop/selected_target_state.h"
 #include "dusk/frame_interpolation.h"
 #endif
 
@@ -90,6 +94,72 @@ static BOOL leaf_anm_init(e_yh_class* i_this, int param_2, f32 param_3, u8 param
 }
 
 #if TARGET_PC
+static bool coOpSelectYhTargetState(
+    e_yh_class* i_this, const char* label, dusk::coop::EnemyTargetMode mode, bool committed,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* homeDistance,
+    s16* angleY) {
+    fopAc_ac_c* actor = (fopAc_ac_c*)i_this;
+    dusk::coop::EnemyTargetContext context;
+    context.observer = actor;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        actor, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (homeDistance != NULL) {
+        // Co-op: Twilit Baba Serpent stores full home-to-player distance.
+        *homeDistance = (actor->home.pos - targetState.pos).abs();
+    }
+    if (angleY != NULL) {
+        *angleY = target.angleY;
+    }
+    return true;
+}
+
+static fopAc_ac_c* coOpYhTargetPlayer(e_yh_class* i_this, const char* label) {
+    dusk::coop::selected_target_state::SelectedTargetState state;
+    if (coOpSelectYhTargetState(i_this, label, dusk::coop::EnemyTargetMode::StickyCombat, true,
+                                &state, NULL, NULL))
+    {
+        return state.actor;
+    }
+    return dComIfGp_getPlayer(0);
+}
+
+static dusk::coop::retained_interaction_owner::RetainedInteractionState
+coOpYhBiteOwner(e_yh_class* i_this, const char* label) {
+    return dusk::coop::retained_interaction_owner::updateRetainedInteraction(
+        label, (fopAc_ac_c*)i_this,
+        dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach);
+}
+
+static void coOpYhClearBite(e_yh_class* i_this, const char* label) {
+    dusk::coop::retained_interaction_owner::RetainedInteractionState owner =
+        coOpYhBiteOwner(i_this, label);
+    if (owner.found && owner.localPlayer != NULL) {
+        owner.localPlayer->offDkCaught();
+        owner.localPlayer->offDkCaught2();
+    }
+    dusk::coop::retained_interaction_owner::clearRetainedInteraction(
+        label, (fopAc_ac_c*)i_this,
+        dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach);
+}
+
 static void daE_YH_interp_callback(bool isSimFrame, void* pUserWork) {
     e_yh_class* i_this = (e_yh_class*)pUserWork;
     if (!i_this->mLineInterpPrevValid || !i_this->mLineInterpCurrValid) {
@@ -158,6 +228,16 @@ static int daE_YH_Draw(e_yh_class* i_this) {
 
 static BOOL pl_check(e_yh_class* i_this, f32 param_2) {
     fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    if (coOpSelectYhTargetState(i_this, "e_yh.pl_check",
+                                dusk::coop::EnemyTargetMode::ImmediateAcquire, false,
+                                &targetState, NULL, NULL))
+    {
+        return (targetState.pos - a_this->home.pos).abs() < param_2 &&
+               !fopAcM_otherBgCheck(a_this, targetState.actor);
+    }
+#endif
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
     if (i_this->field_0x68c < param_2 && !fopAcM_otherBgCheck(a_this, player)) {
         return 1;
@@ -528,7 +608,11 @@ static void e_yh_wait(e_yh_class* i_this) {
             i_this->field_0x670 = 2;
             i_this->mSound.startCreatureSound(Z2SE_EN_DB_HIKKOMU, 0, -1);
         } else {
+#if TARGET_PC
+            daPy_py_c* player = (daPy_py_c*)coOpYhTargetPlayer(i_this, "e_yh.wait_caught");
+#else
             daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
             if (player->getDkCaught() == 0) {
                 if (!player->getDkCaught2() && i_this->field_0x698[1] == 0 &&
                     pl_check(i_this, 700.0f))
@@ -542,7 +626,11 @@ static void e_yh_wait(e_yh_class* i_this) {
     }
 
     if (i_this->field_0x854 != 0) {
+#if TARGET_PC
+        fopAc_ac_c* player = coOpYhTargetPlayer(i_this, "e_yh.wait_pitch");
+#else
         fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
         cLib_addCalcAngleS2(&a_this->shape_angle.y, i_this->field_0x688 + 0x8000, 8, 0x800);
         cXyz local_6c = player->eyePos - a_this->current.pos;
         s16 angle = (s16)cM_atan2s(local_6c.y, JMAFastSqrt(local_6c.x * local_6c.x + local_6c.z * local_6c.z));
@@ -604,7 +692,11 @@ static void e_yh_mk_roof(e_yh_class* i_this) {
 
 static void e_yh_attack(e_yh_class* i_this) {
     fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
+#if TARGET_PC
+    fopAc_ac_c* player = coOpYhTargetPlayer(i_this, "e_yh.attack");
+#else
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+#endif
     cXyz local_68;
     cXyz cStack_74;
     s16 local_e6 = 0;
@@ -703,24 +795,47 @@ static void e_yh_attack(e_yh_class* i_this) {
         cLib_addCalc2(&i_this->field_0x690, 0.2f, 1.0f, 0.05f);
         cLib_addCalcAngleS2(&a_this->shape_angle.z, i_this->field_0x864, 2, 0x2000);
 
-        daPy_py_c* pdVar6 = (daPy_py_c*)daPy_getPlayerActorClass();
-        if (!pdVar6->getDkCaught()) {
-            if (!pdVar6->getDkCaught2() && i_this->mAtSph.ChkAtHit()) {
+        if (i_this->mAtSph.ChkAtHit()) {
+#if TARGET_PC
+            const dusk::coop::defender_owner::DefenderOwnerResult defender =
+                dusk::coop::defender_owner::resolveDefenderOwner(a_this, &i_this->mAtSph);
+            dusk::coop::defender_owner::recordDefenderOwnerContact("e_yh.bite_contact", a_this,
+                                                                    defender);
+            daPy_py_c* caughtPlayer = defender.localPlayer;
+            if (defender.found && caughtPlayer != NULL && !caughtPlayer->getDkCaught() &&
+                !caughtPlayer->getDkCaught2())
+            {
+#else
+            daPy_py_c* pdVar6 = (daPy_py_c*)daPy_getPlayerActorClass();
+            if (!pdVar6->getDkCaught() && !pdVar6->getDkCaught2()) {
                 cCcD_Obj* hitObj = i_this->mAtSph.GetAtHitObj();
 
                 if (player == dCc_GetAc(hitObj->GetAc())) {
+#endif
                     OS_REPORT("E_DB//////////////AT  SET 1 !!\n");
                     i_this->field_0x670 = 5;
                     i_this->field_0x690 = 20.0f;
                     anm_init(i_this, 8, 2.0f, 2, 1.0f);
                     i_this->field_0x698[0] = 120;
 
+#if TARGET_PC
+                    // Co-op: retain the defender through the complete rooted bite.
+                    dusk::coop::retained_interaction_owner::beginRetainedInteraction(
+                        "e_yh.bite_begin", a_this,
+                        dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach,
+                        defender.localPlayerActor,
+                        dusk::coop::retained_interaction_owner::RetainedInteractionReason::DirectPlayer);
+                    caughtPlayer->setDkCaught(a_this);
+#else
                     daPy_py_c* pyPlayer = (daPy_py_c*)daPy_getPlayerActorClass();
                     pyPlayer->setDkCaught(a_this);
+#endif
 
                     dComIfGp_getVibration().StartShock(6, 0x1f, cXyz(0.0f, 1.0f, 0.0f));
                     break;
+#if !TARGET_PC
                 }
+#endif
             }
         }
 
@@ -743,7 +858,19 @@ static void e_yh_attack(e_yh_class* i_this) {
         i_this->mCcSph.OffCoSetBit();
         local_e6 = 0;
         
+#if TARGET_PC
+        {
+            dusk::coop::retained_interaction_owner::RetainedInteractionState biteOwner =
+                coOpYhBiteOwner(i_this, "e_yh.bite_hold");
+            if (biteOwner.found && biteOwner.localPlayerActor != NULL) {
+                player = biteOwner.localPlayerActor;
+            }
+            daPy_py_c* bitePlayer =
+                biteOwner.found && biteOwner.localPlayer != NULL ? biteOwner.localPlayer : NULL;
+        if (bitePlayer != NULL && bitePlayer->getDkCaught()) {
+#else
         if (daPy_getPlayerActorClass()->getDkCaught()) {
+#endif
             if (i_this->field_0x698[0] == 30) {
                 dComIfGp_setItemLifeCount(-1.0f, 0);
             }
@@ -763,7 +890,11 @@ static void e_yh_attack(e_yh_class* i_this) {
                     pushDist = 100.0f;
                 }
                 
+#if TARGET_PC
+                bitePlayer->setOutPower(pushDist, sVar12_2 + 0x8000, 0);
+#else
                 daPy_getPlayerActorClass()->setOutPower(pushDist, sVar12_2 + 0x8000, 0);
+#endif
             }
             
             if (i_this->field_0x854 == 0) {
@@ -796,6 +927,9 @@ static void e_yh_attack(e_yh_class* i_this) {
             cLib_addCalc2(&a_this->current.pos.y, i_this->field_0x678.y, 1.0f, i_this->field_0x690);
             cLib_addCalc2(&i_this->field_0x690, 200.0f, 1.0f, 10.0f);
         } else {
+#if TARGET_PC
+            coOpYhClearBite(i_this, "e_yh.bite_release");
+#endif
             i_this->field_0x66e = 3;
             i_this->field_0x670 = -1;
             anm_init(i_this, 17, 2.0f, 0, 1.0f);
@@ -803,6 +937,9 @@ static void e_yh_attack(e_yh_class* i_this) {
             i_this->field_0x85c = 20.0f;
             i_this->field_0x860 = a_this->shape_angle.y;
         }
+#if TARGET_PC
+        }
+#endif
         break;
     }
     
@@ -1313,7 +1450,11 @@ static void kuki_control1_e(e_yh_class* i_this) {
 
 static s8 e_yh_escape(e_yh_class* i_this) {
     fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
+#if TARGET_PC
+    fopAc_ac_c* player = coOpYhTargetPlayer(i_this, "e_yh.escape");
+#else
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+#endif
     cXyz local_bc;
     cXyz local_c8;
     f32 groundY;
@@ -1330,7 +1471,11 @@ static s8 e_yh_escape(e_yh_class* i_this) {
     local_bc.y += 100.0f;
     gndChk.SetPos(&local_bc);
     groundY = dComIfG_Bgsp().GroundCross(&gndChk);
+#if TARGET_PC
+    playerDistance = (player->current.pos - a_this->current.pos).abs();
+#else
     playerDistance = fopAcM_searchPlayerDistance(a_this);
+#endif
     local_115 = 1;
     local_116 = 2;
     bVar5 = 1;
@@ -1362,7 +1507,11 @@ static s8 e_yh_escape(e_yh_class* i_this) {
         } else if (i_this->field_0x698[1] == 0) {
             s16 angleDiff = (s16)(i_this->field_0x688 - a_this->shape_angle.y);
             if (angleDiff < 0x1000 && angleDiff > -0x1000 && playerDistance < 300.0f) {
+#if TARGET_PC
+                daPy_py_c* pyPlayer = (daPy_py_c*)player;
+#else
                 daPy_py_c* pyPlayer = (daPy_py_c*)daPy_getPlayerActorClass();
+#endif
                 if (!pyPlayer->getDkCaught() && !pyPlayer->getDkCaught2()) {
                     i_this->field_0x670 = 15;
                     i_this->mSound.startCreatureVoice(Z2SE_EN_DB_V_BITE, -1);
@@ -1436,14 +1585,42 @@ static s8 e_yh_escape(e_yh_class* i_this) {
         
         if (i_this->field_0x698[1] == 0) {
             i_this->field_0xb18 = 2;
-            if (!daPy_getPlayerActorClass()->getDkCaught() && !daPy_getPlayerActorClass()->getDkCaught2() &&
-                i_this->mAtSph.ChkAtHit() && !i_this->mAtSph.ChkAtShieldHit()) {
+            if (i_this->mAtSph.ChkAtHit() && !i_this->mAtSph.ChkAtShieldHit()) {
+#if TARGET_PC
+                const dusk::coop::defender_owner::DefenderOwnerResult defender =
+                    dusk::coop::defender_owner::resolveDefenderOwner(a_this, &i_this->mAtSph);
+                dusk::coop::defender_owner::recordDefenderOwnerContact(
+                    "e_yh.escape_bite_contact", a_this, defender);
+                daPy_py_c* caughtPlayer = defender.localPlayer;
+                if (!defender.found || caughtPlayer == NULL || caughtPlayer->getDkCaught() ||
+                    caughtPlayer->getDkCaught2())
+                {
+                    break;
+                }
+                player = defender.localPlayerActor;
+#else
+                if (daPy_getPlayerActorClass()->getDkCaught() ||
+                    daPy_getPlayerActorClass()->getDkCaught2())
+                {
+                    break;
+                }
                 OS_REPORT("E_YH//////////////AT  SET 1 %d !!\n", daPy_getPlayerActorClass()->getDkCaught2());
+#endif
                 i_this->field_0x670 = 20;
                 i_this->field_0x690 = 15.0f;
                 i_this->field_0x698[0] = 120;
+#if TARGET_PC
+                // Co-op: the detached Twilit head retains its actual collision defender.
+                dusk::coop::retained_interaction_owner::beginRetainedInteraction(
+                    "e_yh.escape_bite_begin", a_this,
+                    dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach,
+                    defender.localPlayerActor,
+                    dusk::coop::retained_interaction_owner::RetainedInteractionReason::DirectPlayer);
+                caughtPlayer->onDkCaught2();
+#else
                 daPy_getPlayerActorClass()->onDkCaught2();
                 OS_REPORT("E_YH//////////////AT  SET 2 %d !!\n", daPy_getPlayerActorClass()->getDkCaught2());
+#endif
                 i_this->field_0x862 = a_this->shape_angle.y - player->shape_angle.y;
                 anm_init(i_this, 8, 2.0f, 2, 1.0f);
                 break;
@@ -1469,9 +1646,21 @@ static s8 e_yh_escape(e_yh_class* i_this) {
         local_116 = 0;
         i_this->mCcSph.OffCoSetBit();
         i_this->mAcch.CrrPos(dComIfG_Bgsp());
-        
+
+#if TARGET_PC
+        {
+            dusk::coop::retained_interaction_owner::RetainedInteractionState biteOwner =
+                coOpYhBiteOwner(i_this, "e_yh.escape_bite_hold");
+            if (biteOwner.found && biteOwner.localPlayerActor != NULL) {
+                player = biteOwner.localPlayerActor;
+            }
+            daPy_py_c* bitePlayer =
+                biteOwner.found && biteOwner.localPlayer != NULL ? biteOwner.localPlayer : NULL;
+        if (!i_this->mAcch.ChkWallHit() && bitePlayer != NULL && bitePlayer->getDkCaught2()) {
+#else
         if (!i_this->mAcch.ChkWallHit()) {
             if (daPy_getPlayerActorClass()->getDkCaught2()) {
+#endif
                 if (i_this->field_0x698[0] == 30) {
                     dComIfGp_setItemLifeCount(-1.0f, 0);
                 }
@@ -1494,7 +1683,9 @@ static s8 e_yh_escape(e_yh_class* i_this) {
                 cLib_addCalcAngleS2(&a_this->shape_angle.x, 0, 2, 0x800);
                 break;
             }
+#if !TARGET_PC
         }
+#endif
         
         i_this->field_0x670 = 21;
         i_this->field_0x698[1] = 30;
@@ -1502,7 +1693,12 @@ static s8 e_yh_escape(e_yh_class* i_this) {
         i_this->mSound.startCreatureVoice(Z2SE_EN_DB_V_RELEASE, -1);
         a_this->speedF = -10.0f;
         a_this->speed.y = 15.0f;
+#if TARGET_PC
+        coOpYhClearBite(i_this, "e_yh.escape_bite_release");
+        }
+#else
         daPy_getPlayerActorClass()->offDkCaught2();
+#endif
         break;
         
     case 21:
@@ -1718,21 +1914,41 @@ static void e_yh_e_dead(e_yh_class* i_this) {
 
 static void action(e_yh_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)i_this;
+#if TARGET_PC
+    // Co-op: fill the native target cache once from this actor's retained combat owner.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    const bool targetFound = coOpSelectYhTargetState(
+        i_this, "e_yh.action_cache",
+        i_this->field_0x66e == 0 ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                                : dusk::coop::EnemyTargetMode::StickyCombat,
+        i_this->field_0x66e == 4 || i_this->field_0x66e == 5 ||
+            i_this->field_0x66e == 20,
+        &targetState, &i_this->field_0x68c, &i_this->field_0x688);
+    fopAc_ac_c* player = targetFound ? targetState.actor : dComIfGp_getPlayer(0);
+#else
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+#endif
     cXyz cStack_20;
     cXyz cStack_2c;
+#if !TARGET_PC
     s16 playerAngle = fopAcM_searchPlayerAngleY(a_this);
     i_this->field_0x688 = playerAngle;
     
     i_this->field_0x68c = (a_this->home.pos - player->current.pos).abs();
+#endif
     
     a_this->field_0x566 = 0;
     i_this->field_0x123d = 1;
     damage_check(i_this);
     
     if (i_this->field_0x69e != 0 && i_this->field_0x855 != 0) {
+#if TARGET_PC
+        // Co-op: damage releases whichever player this bite retained.
+        coOpYhClearBite(i_this, "e_yh.damage_release");
+#else
         daPy_getPlayerActorClass()->offDkCaught();
         daPy_getPlayerActorClass()->offDkCaught2();
+#endif
     }
     
     s8 local_85 = 0;
@@ -2087,6 +2303,12 @@ static int daE_YH_IsDelete(e_yh_class* i_this) {
 
 static int daE_YH_Delete(e_yh_class* i_this) {
     fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
+#if TARGET_PC
+    // Co-op: actor teardown must not leave stale combat or bite ownership.
+    coOpYhClearBite(i_this, "e_yh.delete");
+    dusk::coop::clearAllEnemyTargets(a_this);
+    dusk::coop::retained_interaction_owner::clearAllRetainedInteractions(a_this);
+#endif
     fopAcM_RegisterDeleteID(a_this, "E_YH");
     dComIfG_resDelete(&i_this->mPhase, "E_yd");
     if (i_this->mIsHIOOwner) {

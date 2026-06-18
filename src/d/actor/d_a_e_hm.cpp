@@ -10,8 +10,11 @@
 #include "f_op/f_op_actor_enemy.h"
 #include "Z2AudioLib/Z2Instances.h"
 #if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/defender_owner.h"
+#include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/player_attention.h"
-#include "dusk/coop/player_query.h"
+#include "dusk/coop/selected_target_state.h"
 #endif
 
 class daE_HM_HIO_c : public JORReflexible {
@@ -40,6 +43,20 @@ daE_HM_HIO_c::daE_HM_HIO_c() {
      gravity = -9.0f;
      attackRange = 1.1f;
      galeStunTime = 0.0f;
+}
+
+namespace {
+static f32 s_dis;
+
+static u8 s_gnd[4];
+
+static cXyz s_up;
+
+static cXyz s_down;
+
+static cXyz* sLink_Pos;
+
+static s16 s_TargetAngle;
 }
 
 
@@ -264,12 +281,8 @@ s16 daE_HM_c::W_TargetAngle(cXyz param_0, cXyz param_1) {
 void daE_HM_c::W_DeathSpSet() {
     cXyz unkXyz1;
 
-    daPy_py_c* player = daPy_getPlayerActorClass();
-
-    cXyz& playerPos = fopAcM_GetPosition(player);
-    s16 targetYaw = W_TargetAngle(current.pos, playerPos);
     mDoMtx_stack_c::ZXYrotS(field_0x5cc);
-    mDoMtx_stack_c::YrotM(targetYaw);
+    mDoMtx_stack_c::YrotM(s_TargetAngle);
 
     if (field_0x5af == 0) {
         unkXyz1.set(0.0f, KREG_F(5) + 20.0f, KREG_F(6) + -20.0f);
@@ -586,6 +599,43 @@ static bool hio_set;
 
 static daE_HM_HIO_c l_HIO;
 
+#if TARGET_PC
+static bool coOpSelectHmTargetState(
+    daE_HM_c* i_this, const char* label, dusk::coop::EnemyTargetMode mode, bool committed,
+    dusk::coop::selected_target_state::SelectedTargetState* state) {
+    fopAc_ac_c* observer = i_this;
+    fopAc_ac_c* parent = fopAcM_SearchByID(i_this->parentActorID);
+    if (parent != NULL && fopAcM_GetName(parent) == fpcNm_E_HM_e) {
+        // Co-op: runtime Torch Slug clones inherit their spawning master's combat intent.
+        observer = parent;
+    }
+
+    dusk::coop::EnemyTargetContext context;
+    context.observer = observer;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    return true;
+}
+#endif
+
 void daE_HM_c::UpMoveAction() {
     switch (field_0x5d6) {
     case 0:
@@ -655,11 +705,14 @@ void daE_HM_c::UpWaitAction() {
 
         bool playerInSearchArea = fopAcM_searchPlayerDistanceXZ(this) < l_HIO.searchArea;
 #if TARGET_PC
-        // Co-op: this first world-acknowledgement proof lets the hanging Helmasaur wake for P2.
-        const dusk::coop::PlayerQueryResult query =
-            dusk::coop::findNearestPlayer(this, "e_hm.up_wait");
-        if (query.found) {
-            playerInSearchArea = query.distanceXZ < l_HIO.searchArea;
+        dusk::coop::selected_target_state::SelectedTargetState targetState;
+        // Co-op: ceiling wake uses immediate XZ awareness on the same Combat owner used below.
+        if (coOpSelectHmTargetState(this, "e_hm.up_wait",
+                                    dusk::coop::EnemyTargetMode::ImmediateAcquire, false,
+                                    &targetState))
+        {
+            playerInSearchArea =
+                (targetState.pos - current.pos).absXZ() < l_HIO.searchArea;
         }
 #endif
         if (playerInSearchArea) {
@@ -812,20 +865,6 @@ void daE_HM_c::ShieldMotion() {
         speedF = 0.0f;
         speed.y = 0.0f;
     }
-}
-
-namespace {
-static f32 s_dis;
-
-static u8 s_gnd[4];
-
-static cXyz s_up;
-
-static cXyz s_down;
-
-static cXyz* sLink_Pos;
-
-static s16 s_TargetAngle;
 }
 
 void daE_HM_c::ShieldAction() {
@@ -1127,7 +1166,9 @@ void daE_HM_c::At_Check() {
 }
 
 void daE_HM_c::Obj_Damage() {
+#if !TARGET_PC
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
 
     if (field_0x5c2 > 0) {
         mSph.ClrTgHit();
@@ -1137,9 +1178,20 @@ void daE_HM_c::Obj_Damage() {
 
         if (mSph.ChkAtHit() && (field_0x5d2 == 1 || field_0x5d2 == 3)) {
             field_0x5c2 = 10;
+#if TARGET_PC
+            const dusk::coop::defender_owner::DefenderOwnerResult defender =
+                dusk::coop::defender_owner::resolveDefenderOwner(this, &mSph);
+            dusk::coop::defender_owner::recordDefenderOwnerContact("e_hm.attack_contact", this,
+                                                                    defender);
+            daPy_py_c* player = defender.localPlayer;
+            if (player != NULL && !player->checkPlayerGuard() && field_0x5b0 > 50.0f) {
+                player->setThrowDamage(s_TargetAngle, 15.0f, 20.0f, 1, 0, 0);
+            }
+#else
             if (!player->checkPlayerGuard() && field_0x5b0 > 50.0f) {
                 player->setThrowDamage(s_TargetAngle, 15.0f, 20.0f, 1, 0, 0);
             }
+#endif
         }
 
         if (checkCutDownHitFlg()) {
@@ -1151,6 +1203,15 @@ void daE_HM_c::Obj_Damage() {
         if (mSph.ChkTgHit()) {
             mAtInfo.mpCollider = mSph.GetTgHitObj();
             cCcD_ObjHitInf* tgHitObj = mSph.GetTgHitObj();
+#if TARGET_PC
+            const dusk::coop::damage_owner::DamageOwnerResult owner =
+                dusk::coop::damage_owner::resolveDamageOwner(this, mAtInfo.mpCollider);
+            dusk::coop::damage_owner::recordDamageOwnerHit("e_hm.damage", this, owner, &mAtInfo);
+            if (owner.localPlayerActor != NULL) {
+                // Co-op: death/knockback direction follows the player who caused this hit.
+                s_TargetAngle = W_TargetAngle(current.pos, owner.localPlayerActor->current.pos);
+            }
+#endif
             if (!tgHitObj->ChkAtType(16)) {
                 At_Check();
             }
@@ -1196,7 +1257,7 @@ void daE_HM_c::ActionMode() {
         break;
     case 1:
 #if TARGET_PC
-        // Co-op: Helmasaur down/stab response should accept the player slot that actually locked on.
+        // Co-op: Torch Slug down/stab response should accept the player slot that actually locked on.
         if (dusk::coop::player_attention::isActorLockedByAnyPlayer(this)) {
             daE_HM_c* hm = this;
 #else
@@ -1287,7 +1348,15 @@ void daE_HM_c::ActionMode() {
 }
 
 void daE_HM_c::Yazirushi() {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectHmTargetState(this, "e_hm.attention",
+                            dusk::coop::EnemyTargetMode::StickyCombat, false, &targetState);
+    fopAc_ac_c* player =
+        targetState.available ? targetState.actor : daPy_getPlayerActorClass();
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
     if (!other_bg_check(this, player) && (field_0x5d4 != 1)) {
         attention_info.flags = fopAc_AttnFlag_BATTLE_e;
         eyePos = current.pos;
@@ -1304,7 +1373,18 @@ void daE_HM_c::setStabPos() {
 }
 
 int daE_HM_c::Execute() {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    const bool targetFound = coOpSelectHmTargetState(
+        this, "e_hm.action_cache",
+        field_0x5d4 == 4 ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+                         : dusk::coop::EnemyTargetMode::StickyCombat,
+        field_0x5d4 == 2, &targetState);
+    fopAc_ac_c* player =
+        targetFound ? targetState.actor : daPy_getPlayerActorClass();
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
 
     sLink_Pos = &fopAcM_GetPosition(player);
     s_dis = current.pos.abs(*sLink_Pos);
@@ -1319,7 +1399,12 @@ int daE_HM_c::Execute() {
 
     cXyz bindEffectSize(1.0f, 1.0f, 1.0f);
 
-    u32 cutType = daPy_getPlayerActorClass()->getCutType();
+    u32 cutType =
+#if TARGET_PC
+        targetFound ? targetState.cutType : daPy_getPlayerActorClass()->getCutType();
+#else
+        daPy_getPlayerActorClass()->getCutType();
+#endif
     if (cutType == daPy_py_c::CUT_TYPE_WOLF_LOCK && mSph.ChkAtSet() != 0) {
         mSph.OffAtSetBit();
         field_0x5ac = 1;
@@ -1377,6 +1462,9 @@ int daE_HM_c::Draw() {
 }
 
 int daE_HM_c::Delete() {
+#if TARGET_PC
+    dusk::coop::clearAllEnemyTargets(this);
+#endif
     dComIfG_resDelete(&mPhase,"E_HM");
 
     if (field_0xa84 != 0) {
