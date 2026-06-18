@@ -2566,18 +2566,21 @@ class fopAc_ac_c;
 namespace dusk::coop::world_switch_probe {
 void recordSwitchOn(const fopAc_ac_c* sourceActor, int switchNo, int roomNo, bool wasOnBefore,
                     const char* source);
+const fopAc_ac_c* getExecutingActor();
 }
 #endif
 
 inline void dComIfGs_onSwitch(int i_no, int i_roomNo) {
 #if TARGET_PC
-    // Co-op: direct switch activations have no source actor, but they still identify authored
-    // gates that may need active-player-aware trigger producers.
+    // Co-op: direct switch writes omit their source actor. Inherit the actor currently inside
+    // the native execute lifecycle so authored wake gates can be traced back to their producer.
     const bool wasOnBefore = (i_no != -1 && i_no != 255) ?
                                  g_dComIfG_gameInfo.info.isSwitch(i_no, i_roomNo) != 0 :
                                  false;
-    dusk::coop::world_switch_probe::recordSwitchOn(nullptr, i_no, i_roomNo, wasOnBefore,
-                                                   "dComIfGs_onSwitch");
+    const fopAc_ac_c* sourceActor = dusk::coop::world_switch_probe::getExecutingActor();
+    dusk::coop::world_switch_probe::recordSwitchOn(
+        sourceActor, i_no, i_roomNo, wasOnBefore,
+        sourceActor != nullptr ? "dComIfGs_onSwitch.actor_execute" : "dComIfGs_onSwitch");
 #endif
     g_dComIfG_gameInfo.info.onSwitch(i_no, i_roomNo);
 }

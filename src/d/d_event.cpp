@@ -13,6 +13,7 @@
 #include "SSystem/SComponent/c_counter.h"
 #if TARGET_PC
 #include "dusk/coop/midna_owner.h"
+#include "dusk/coop/world_switch_probe.h"
 #endif
 #include <cstring>
 
@@ -224,6 +225,15 @@ void dEvt_control_c::setParam(dEvt_order_c* order) {
         field_0xea = mapdata->data.maptool.field_0x16;
 
         if (mapdata->switch_no != 0xFF) {
+#if TARGET_PC
+            const bool wasOnBefore = dComIfGs_isSwitch(mapdata->switch_no, roomNo);
+            // Co-op: map-event switches often gate enemy wake lifecycles. Attribute the switch
+            // to the native requesting actor so P1-only trigger producers can be fixed there.
+            dusk::coop::world_switch_probe::recordSwitchOn(
+                order->mpRequestActor, mapdata->switch_no, roomNo, wasOnBefore,
+                "dEvt_control_c::setParam");
+            dusk::coop::world_switch_probe::suppressNextDirectSwitchOn(mapdata->switch_no, roomNo);
+#endif
             dComIfGs_onSwitch(mapdata->switch_no, roomNo);
         }
 

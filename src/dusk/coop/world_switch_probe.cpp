@@ -11,6 +11,7 @@ WorldSwitchDebugState s_debugState;
 u32 s_currentSimFrame = 0;
 u64 s_nextEventId = 1;
 int s_nextRecordEvict = 0;
+const fopAc_ac_c* s_executingActor = nullptr;
 
 struct SuppressedSwitch {
     bool active = false;
@@ -52,7 +53,10 @@ void recordSwitchOn(const fopAc_ac_c* sourceActor, int switchNo, int roomNo, boo
         return;
     }
 
-    if (sourceActor == nullptr && consumeSuppressedSwitch(switchNo, roomNo)) {
+    // Attributed wrappers record first and suppress the immediately following inline write.
+    // Consume that marker regardless of actor-execution context so the lower probe cannot
+    // duplicate an already-attributed switch event.
+    if (consumeSuppressedSwitch(switchNo, roomNo)) {
         return;
     }
 
@@ -82,6 +86,19 @@ void suppressNextDirectSwitchOn(int switchNo, int roomNo) {
     s_suppressedSwitch.active = true;
     s_suppressedSwitch.switchNo = switchNo;
     s_suppressedSwitch.roomNo = roomNo;
+}
+
+const fopAc_ac_c* getExecutingActor() {
+    return s_executingActor;
+}
+
+ScopedExecutingActor::ScopedExecutingActor(const fopAc_ac_c* actor)
+    : mPreviousActor(s_executingActor) {
+    s_executingActor = actor;
+}
+
+ScopedExecutingActor::~ScopedExecutingActor() {
+    s_executingActor = mPreviousActor;
 }
 
 const WorldSwitchDebugState& getWorldSwitchDebugState() {

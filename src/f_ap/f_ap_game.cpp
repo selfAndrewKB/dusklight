@@ -28,6 +28,7 @@
 
 #if TARGET_PC
 #include "tracy/Tracy.hpp"
+#include "dusk/coop/beamos_state_probe.h"
 #include "dusk/coop/bokoblin_attack_probe.h"
 #include "dusk/coop/caught_stun_owner.h"
 #include "dusk/coop/damage_owner.h"
@@ -862,6 +863,8 @@ void fapGm_Execute() {
     dusk::coop::item_awareness::advanceItemAwarenessFrame(sExecCount);
     // Co-op: Bokoblin attack-loop diagnostics compare attack-state progress by simulation frame.
     dusk::coop::bokoblin_attack_probe::advanceBokoblinAttackProbeFrame(sExecCount);
+    // Co-op: Beamos diagnostics retain wake-gate evidence independently of shared query buffers.
+    dusk::coop::beamos_state_probe::advanceBeamosStateProbeFrame(sExecCount);
     // Co-op: Gibdo diagnostics track native wake/chase/scream gates by simulation frame.
     dusk::coop::gibdo_state_probe::advanceGibdoStateProbeFrame(sExecCount);
     // Co-op: Ghost Rat diagnostics track native wake/drop gates by simulation frame.

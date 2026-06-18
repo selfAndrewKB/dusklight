@@ -7,6 +7,7 @@
 #include "d/d_item.h"
 #include "dusk/coop/alink_form_resources.h"
 #include "dusk/coop/alink_probes.h"
+#include "dusk/coop/beamos_state_probe.h"
 #include "dusk/coop/bokoblin_attack_probe.h"
 #include "dusk/coop/camera.h"
 #include "dusk/coop/caught_stun_owner.h"
@@ -35,6 +36,7 @@
 #include "dusk/io.hpp"
 #include "dusk/logging.h"
 #include "dusk/main.h"
+#include "c/c_dylink.h"
 #include "f_op/f_op_actor_mng.h"
 #include "f_op/f_op_camera_mng.h"
 #include "fmt/format.h"
@@ -657,6 +659,9 @@ void emitEnemyTargetingEvents(const Provider& provider, const json& data) {
             {"retain_seconds", decision.value("retain_seconds", 0.0f)},
             {"sticky_elapsed_seconds", decision.value("sticky_elapsed_seconds", 0.0f)},
             {"changed", decision.value("changed", false)},
+            // Candidate facts are event context only. They do not participate in the semantic
+            // event key, so rotating sight cones and distance drift cannot create JSONL spam.
+            {"candidates", decision.value("candidates", json::array())},
         };
         emitProviderEvent(provider, "decision", eventData);
     }
@@ -852,6 +857,34 @@ void emitBokoblinAttackProbeEvents(const Provider& provider, const json& data) {
         };
         emitProviderEvent(provider, probe.value("loop_suspect", false) ? "loop_suspect" : "state",
                           eventData);
+    }
+}
+
+void emitBeamosStateProbeEvents(const Provider& provider, const json& data) {
+    if (!data.contains("probes") || !data["probes"].is_array()) {
+        return;
+    }
+
+    for (const json& probe : data["probes"]) {
+        const u64 eventId = probe.value("event_id", 0ull);
+        if (eventId == 0) {
+            continue;
+        }
+
+        const json eventKey = {
+            {"event_id", eventId},
+        };
+        const std::string stateKey = fmt::format(
+            FMT_STRING("beamos.state:{}"), static_cast<unsigned long long>(eventId));
+        if (provider.emitOnChange && !shouldEmitProviderEvent(stateKey, eventKey)) {
+            continue;
+        }
+
+        const json eventData = {
+            {"schema_version", data.value("schema_version", 1)},
+            {"probe", probe},
+        };
+        emitProviderEvent(provider, "state", eventData);
     }
 }
 
@@ -2046,12 +2079,39 @@ json playerQueryActorSummary(const coop::PlayerQueryActorDebug& actor) {
 }
 
 json playerQueryCandidateSummary(const coop::PlayerQueryCandidateDebug& candidate) {
+    json eligibilityFailures = json::array();
+    const u32 flags = candidate.eligibilityFailureFlags;
+    if ((flags & coop::PlayerQueryEligibilityFailure_Range) != 0) {
+        eligibilityFailures.push_back("range");
+    }
+    if ((flags & coop::PlayerQueryEligibilityFailure_Vertical) != 0) {
+        eligibilityFailures.push_back("vertical");
+    }
+    if ((flags & coop::PlayerQueryEligibilityFailure_Facing) != 0) {
+        eligibilityFailures.push_back("facing");
+    }
+    if ((flags & coop::PlayerQueryEligibilityFailure_LineOfSight) != 0) {
+        eligibilityFailures.push_back("line_of_sight");
+    }
+    if ((flags & coop::PlayerQueryEligibilityFailure_Form) != 0) {
+        eligibilityFailures.push_back("form");
+    }
+    if ((flags & coop::PlayerQueryEligibilityFailure_Status) != 0) {
+        eligibilityFailures.push_back("status");
+    }
+    if ((flags & coop::PlayerQueryEligibilityFailure_Room) != 0) {
+        eligibilityFailures.push_back("room");
+    }
+
     return {
         {"slot", candidate.slot != coop::PlayerSlot::Invalid ? static_cast<int>(candidate.slot) : -1},
         {"actor", playerQueryActorSummary(candidate.actorDebug)},
         {"distance", candidate.distance},
         {"distance_xz", candidate.distanceXZ},
         {"angle_y", static_cast<int>(candidate.angleY)},
+        {"eligible", candidate.eligible},
+        {"eligibility_failure_flags", static_cast<unsigned int>(flags)},
+        {"eligibility_failures", eligibilityFailures},
     };
 }
 
@@ -2627,6 +2687,89 @@ json collectGibdoStateProbe() {
     };
 }
 
+json beamosWakeCandidateSummary(
+    const coop::beamos_state_probe::BeamosWakeCandidate& candidate) {
+    json failures = json::array();
+    const u32 flags = candidate.failureFlags;
+    if ((flags & coop::PlayerQueryEligibilityFailure_Range) != 0) {
+        failures.push_back("range");
+    }
+    if ((flags & coop::PlayerQueryEligibilityFailure_Vertical) != 0) {
+        failures.push_back("vertical");
+    }
+    if ((flags & coop::PlayerQueryEligibilityFailure_Facing) != 0) {
+        failures.push_back("facing");
+    }
+    if ((flags & coop::PlayerQueryEligibilityFailure_LineOfSight) != 0) {
+        failures.push_back("line_of_sight");
+    }
+    if ((flags & coop::PlayerQueryEligibilityFailure_Status) != 0) {
+        failures.push_back("status");
+    }
+
+    return {
+        {"slot", candidate.slot != coop::PlayerSlot::Invalid
+                     ? static_cast<int>(candidate.slot)
+                     : -1},
+        {"available", candidate.available},
+        {"eligible", candidate.eligible},
+        {"distance_xz", candidate.distanceXZ},
+        {"angle_y", static_cast<int>(candidate.angleY)},
+        {"failure_flags", static_cast<unsigned int>(flags)},
+        {"failures", failures},
+    };
+}
+
+json beamosStateProbeSummary(const coop::beamos_state_probe::BeamosStateProbe& probe) {
+    json candidates = json::array();
+    for (int i = 0; i < coop::kPlayerSlotCount; i++) {
+        candidates.push_back(beamosWakeCandidateSummary(probe.candidates[i]));
+    }
+
+    return {
+        {"event_id", static_cast<unsigned long long>(probe.eventId)},
+        {"sim_frame", static_cast<unsigned int>(probe.simFrame)},
+        {"actor", ptrString(probe.actor)},
+        {"actor_id", probe.actorId},
+        {"room", probe.room},
+        {"argument", probe.argument},
+        {"action", probe.action},
+        {"mode", probe.mode},
+        {"warning_timer", probe.warningTimer},
+        {"activation_switch", probe.activationSwitch},
+        {"eye_switch", probe.eyeSwitch},
+        {"body_switch", probe.bodySwitch},
+        {"activation_switch_on", probe.activationSwitchOn},
+        {"eye_switch_on", probe.eyeSwitchOn},
+        {"body_switch_on", probe.bodySwitchOn},
+        {"wake_check_ran", probe.wakeCheckRan},
+        {"wake_found", probe.wakeFound},
+        {"wake_slot", probe.wakeSlot != coop::PlayerSlot::Invalid
+                          ? static_cast<int>(probe.wakeSlot)
+                          : -1},
+        {"last_wake_check_frame", static_cast<unsigned int>(probe.lastWakeCheckFrame)},
+        {"candidates", candidates},
+    };
+}
+
+json collectBeamosStateProbe() {
+    const coop::beamos_state_probe::BeamosStateProbeDebugState& state =
+        coop::beamos_state_probe::getBeamosStateProbeDebugState();
+    json probes = json::array();
+    for (int i = 0; i < state.probeCount; i++) {
+        if (state.probes[i].eventId == 0) {
+            continue;
+        }
+        probes.push_back(beamosStateProbeSummary(state.probes[i]));
+    }
+
+    return {
+        {"schema_version", 1},
+        {"current_sim_frame", static_cast<unsigned int>(state.currentSimFrame)},
+        {"probes", probes},
+    };
+}
+
 json youngGohmaStateProbeSummary(
     const coop::young_gohma_state_probe::YoungGohmaStateProbe& probe) {
     return {
@@ -2711,12 +2854,16 @@ json collectGhostRatStateProbe() {
 }
 
 json worldSwitchRecordSummary(const coop::world_switch_probe::WorldSwitchRecord& record) {
+    const char* sourceModule =
+        record.sourceProfile >= 0 ? cDyl_getModuleName(static_cast<s16>(record.sourceProfile))
+                                  : nullptr;
     return {
         {"event_id", static_cast<unsigned long long>(record.eventId)},
         {"sim_frame", static_cast<unsigned int>(record.simFrame)},
         {"source_actor", ptrString(record.sourceActor)},
         {"source_actor_id", record.sourceActorId},
         {"source_profile", record.sourceProfile},
+        {"source_module", sourceModule != nullptr ? sourceModule : ""},
         {"source_room", record.sourceRoom},
         {"switch_no", record.switchNo},
         {"room_no", record.roomNo},
@@ -3033,6 +3180,7 @@ Provider s_providers[] = {
     {"caught_stun.owner", 1, "cheap", 1, true, 240, 8192, collectCaughtStunOwner},
     {"wolf_catch.owner", 1, "cheap", 1, true, 240, 8192, collectWolfCatchOwner},
     {"item.awareness", 1, "cheap", 1, true, 240, 8192, collectItemAwareness},
+    {"beamos.state", 1, "cheap", 1, true, 240, 8192, collectBeamosStateProbe},
     {"bokoblin.attack", 1, "cheap", 1, true, 240, 8192, collectBokoblinAttackProbe},
     {"bokoblin.steering", 1, "cheap", 1, true, 240, 8192, collectBokoblinSteeringProbe},
     {"gibdo.state", 1, "cheap", 1, true, 240, 8192, collectGibdoStateProbe},
@@ -3216,6 +3364,10 @@ void tick(u32 frame) {
         }
         if (std::string(provider.name) == "item.awareness") {
             emitItemAwarenessEvents(provider, data);
+            continue;
+        }
+        if (std::string(provider.name) == "beamos.state") {
+            emitBeamosStateProbeEvents(provider, data);
             continue;
         }
         if (std::string(provider.name) == "bokoblin.attack") {

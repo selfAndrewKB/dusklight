@@ -11,6 +11,11 @@
 #include "d/d_com_inf_game.h"
 #include "d/d_camera.h"
 #include "d/d_s_play.h"
+#if TARGET_PC
+#include "dusk/coop/beamos_state_probe.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
 #include <cstring>
 
 enum E_bm6_RES_File_ID {
@@ -173,6 +178,119 @@ static DUSK_CONSTEXPR dCcD_SrcCyl l_cyl_src = {
         } // mCyl
     }
 };
+
+#if TARGET_PC
+// Co-op: this Beamos variant is still a turret target owner. Search, find, and beam
+// states share one Combat target instead of sampling P1 independently.
+static bool coOpSelectLv6Bemos2Target(
+    daObjLv6Bm_c* i_this, const char* label, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance_xz,
+    s16* angle_y, dusk::coop::PlayerQueryPredicate candidatePredicate = nullptr,
+    void* candidatePredicateData = nullptr) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.candidatePredicate = candidatePredicate;
+    context.candidatePredicateData = candidatePredicateData;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance_xz != NULL) {
+        *distance_xz = target.distanceXZ;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    return true;
+}
+
+struct CoOpLv6Bemos2VisibilityContext {
+    daObjLv6Bm_c* observer = nullptr;
+    f32 searchDistance = 0.0f;
+    s16 searchAngle = 0;
+    dusk::coop::beamos_state_probe::BeamosWakeCandidate candidates[
+        dusk::coop::kPlayerSlotCount] = {};
+};
+
+// Co-op: preserve the native wake-gate order while exposing which eligibility test rejected
+// each active player, so an intermittent P2 miss can be distinguished from P1-only ownership.
+static dusk::coop::PlayerQueryEligibility coOpLv6Bemos2CanSeePlayer(
+    dusk::coop::PlayerSlot slot, fopAc_ac_c* actor, void* userData) {
+    CoOpLv6Bemos2VisibilityContext* context =
+        static_cast<CoOpLv6Bemos2VisibilityContext*>(userData);
+    if (context == nullptr || context->observer == nullptr || actor == nullptr) {
+        return {false, dusk::coop::PlayerQueryEligibilityFailure_Status};
+    }
+
+    daObjLv6Bm_c* observer = context->observer;
+    const int slotIndex = static_cast<int>(slot);
+    dusk::coop::beamos_state_probe::BeamosWakeCandidate* candidate =
+        slotIndex >= 0 && slotIndex < dusk::coop::kPlayerSlotCount
+            ? &context->candidates[slotIndex]
+            : nullptr;
+    const f32 distanceXZ = fopAcM_searchActorDistanceXZ(observer, actor);
+    const s16 targetAngle = fopAcM_searchActorAngleY(observer, actor);
+    if (candidate != nullptr) {
+        candidate->slot = slot;
+        candidate->available = true;
+        candidate->distanceXZ = distanceXZ;
+        candidate->angleY = targetAngle;
+    }
+    if (distanceXZ > context->searchDistance) {
+        if (candidate != nullptr) {
+            candidate->failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Range;
+        }
+        return {false, dusk::coop::PlayerQueryEligibilityFailure_Range};
+    }
+
+    const f32 yDiff = observer->current.pos.y - actor->current.pos.y;
+    if (fabsf(yDiff) >
+        (1.0f - (distanceXZ / context->searchDistance)) * l_eye_offset[1])
+    {
+        if (candidate != nullptr) {
+            candidate->failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Vertical;
+        }
+        return {false, dusk::coop::PlayerQueryEligibilityFailure_Vertical};
+    }
+
+    if ((s16)abs((s16)(targetAngle - observer->field_0x9c2 - observer->home.angle.y)) >=
+        context->searchAngle)
+    {
+        if (candidate != nullptr) {
+            candidate->failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Facing;
+        }
+        return {false, dusk::coop::PlayerQueryEligibilityFailure_Facing};
+    }
+
+    cXyz eye(observer->eyePos);
+    cXyz playerEye(actor->eyePos);
+    if (fopAcM_lc_c::lineCheck(&eye, &playerEye, observer)) {
+        if (candidate != nullptr) {
+            candidate->failureFlags = dusk::coop::PlayerQueryEligibilityFailure_LineOfSight;
+        }
+        return {false, dusk::coop::PlayerQueryEligibilityFailure_LineOfSight};
+    }
+    if (candidate != nullptr) {
+        candidate->eligible = true;
+    }
+    return {};
+}
+#endif
 
 int daObjLv6Bm_c::Create() {
     fopAcM_SetMtx(this, mBeamosModel->getBaseTRMtx());
@@ -345,6 +463,27 @@ int daObjLv6Bm_c::Execute(f32 (**param_1)[3][4]) {
     
     action();
 
+#if TARGET_PC
+    dusk::coop::beamos_state_probe::BeamosStateProbe probe;
+    probe.actor = reinterpret_cast<uintptr_t>(this);
+    probe.actorId = static_cast<int>(fopAcM_GetID(this));
+    probe.room = fopAcM_GetRoomNo(this);
+    probe.argument = static_cast<int>(fopAcM_GetParam(this));
+    probe.action = field_0xa10;
+    probe.mode = mMode;
+    probe.warningTimer = field_0xa30;
+    probe.activationSwitch = getSwNo();
+    probe.eyeSwitch = getSwNo2();
+    probe.bodySwitch = getSwNo3();
+    probe.activationSwitchOn =
+        getSwNo() != 0xff && fopAcM_isSwitch(this, getSwNo());
+    probe.eyeSwitchOn = getSwNo2() != 0xff && fopAcM_isSwitch(this, getSwNo2());
+    probe.bodySwitchOn = getSwNo3() != 0xff && fopAcM_isSwitch(this, getSwNo3());
+    // Co-op: keep the native warning lifecycle visible even when shared player-query entries
+    // are displaced by other enemies before a diagnostics flush.
+    dusk::coop::beamos_state_probe::recordBeamosState(probe);
+#endif
+
     eyePos.x = l_eye_offset[0];
     eyePos.y = l_eye_offset[1];
     eyePos.z = l_eye_offset[2];
@@ -447,7 +586,17 @@ void daObjLv6Bm_c::action() {
 }
 
 void daObjLv6Bm_c::calcBeam() {
+#if TARGET_PC
+    // Co-op: this runs before the action state every tick, including while the turret is passive.
+    // Beam geometry may consume a target acquired by warning/search, but must not acquire or
+    // advance Combat ownership itself or it bypasses the native wake boundary.
+    const dusk::coop::EnemyTargetResult target =
+        dusk::coop::getEnemyTarget(this, dusk::coop::EnemyTargetScope::Combat);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
     fopAcM_searchPlayerDistanceXZ(this);
 
     mDoMtx_stack_c::copy(mBeamosModel->getAnmMtx(getHeadJoint()));
@@ -461,7 +610,11 @@ void daObjLv6Bm_c::calcBeam() {
     mDoMtx_stack_c::transS(current.pos);
     mDoMtx_stack_c::YrotM(shape_angle.y + field_0x9c2);
     mDoMtx_stack_c::multVec(&sp6c, &field_0x9f8);
+#if TARGET_PC
+    field_0x9f8.y += (targetState.available ? targetState.pos.y : daPy_getPlayerActorClass()->current.pos.y) - current.pos.y;
+#else
     field_0x9f8.y += player->current.pos.y - current.pos.y;
+#endif
 
     cXyz sp78(field_0x9e4 - field_0x9f8);
     field_0x9f0.x = cM_atan2s(sp78.y, field_0x9f8.absXZ(field_0x9e4));
@@ -508,13 +661,45 @@ void daObjLv6Bm_c::calcBeam() {
 }
 
 int daObjLv6Bm_c::checkFindPlayer() {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    f32 playerDistanceXZ = fopAcM_searchPlayerDistanceXZ(this);
+    CoOpLv6Bemos2VisibilityContext visibility;
+    visibility.observer = this;
+    visibility.searchDistance = getSearchDistance();
+    visibility.searchAngle = 0x30D4;
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        visibility.candidates[i].slot = static_cast<dusk::coop::PlayerSlot>(i);
+    }
+    // Co-op: wake acquisition must choose the nearest player this turret can actually see.
+    // Filtering after nearest selection lets an out-of-cone or occluded P1 mask a visible P2.
+    const bool targetFound =
+        coOpSelectLv6Bemos2Target(this, "obj_lv6bemos2.find_player",
+                                  dusk::coop::EnemyTargetMode::ImmediateAcquire,
+                                  &targetState, &playerDistanceXZ, NULL,
+                                  coOpLv6Bemos2CanSeePlayer, &visibility);
+    dusk::coop::beamos_state_probe::recordBeamosWakeCheck(
+        this, targetFound, targetFound ? targetState.slot : dusk::coop::PlayerSlot::Invalid,
+        visibility.candidates);
+    if (!targetFound) {
+        return -1;
+    }
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+    f32 playerDistanceXZ = fopAcM_searchPlayerDistanceXZ(this);
+#endif
     f32 searchDistance = getSearchDistance();
     int rv = -1;
 
     field_0xa15 = 0;
-    f32 playerDistanceXZ = fopAcM_searchPlayerDistanceXZ(this);
+#if TARGET_PC
+    if (!targetState.available) {
+        return -1;
+    }
+    f32 fVar1 = current.pos.y - targetState.pos.y;
+#else
     f32 fVar1 = current.pos.y - player->current.pos.y;
+#endif
     if (playerDistanceXZ > searchDistance) {
         return -1;
     }
@@ -523,13 +708,22 @@ int daObjLv6Bm_c::checkFindPlayer() {
         return -1;
     }
 
+#if TARGET_PC
+    s16 targetAngle = cLib_targetAngleY(&current.pos, &targetState.pos);
+    if ((s16)abs((s16)(targetAngle - field_0x9c2 - home.angle.y)) < 0x30D4) {
+#else
     if ((s16)abs((s16)(fopAcM_searchPlayerAngleY(this) - field_0x9c2 - home.angle.y)) < 0x30D4) {
+#endif
         rv = 0;
     }
 
     if ((s8)rv == 0) {
         cXyz sp5c(eyePos);
+#if TARGET_PC
+        cXyz sp68(targetState.player != NULL ? targetState.player->eyePos : targetState.pos);
+#else
         cXyz sp68(player->eyePos);
+#endif
         if (fopAcM_lc_c::lineCheck(&sp5c, &sp68, this)) {
             field_0xa15 = 1;
         }
@@ -539,14 +733,30 @@ int daObjLv6Bm_c::checkFindPlayer() {
 }
 
 s8 daObjLv6Bm_c::checkSearchPlayer() {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    f32 playerDistanceXZ = fopAcM_searchPlayerDistanceXZ(this);
+    // Co-op: attack maintenance checks the retained active target, not P1.
+    coOpSelectLv6Bemos2Target(this, "obj_lv6bemos2.search_player",
+                              dusk::coop::EnemyTargetMode::StickyCombat,
+                              &targetState, &playerDistanceXZ, NULL);
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+    f32 playerDistanceXZ = fopAcM_searchPlayerDistanceXZ(this);
+#endif
     f32 searchDistance = getSearchDistance();
     s8 rv = -1;
 
     field_0xa15 = 0;
 
-    f32 playerDistanceXZ = fopAcM_searchPlayerDistanceXZ(this);
+#if TARGET_PC
+    if (!targetState.available) {
+        return -1;
+    }
+    f32 fVar1 = current.pos.y - targetState.pos.y;
+#else
     f32 fVar1 = current.pos.y - player->current.pos.y;
+#endif
     if (playerDistanceXZ > searchDistance) {
         return -1;
     }
@@ -555,13 +765,22 @@ s8 daObjLv6Bm_c::checkSearchPlayer() {
         return -1;
     }
 
+#if TARGET_PC
+    s16 targetAngle = cLib_targetAngleY(&current.pos, &targetState.pos);
+    if ((s16)abs((s16)(targetAngle - field_0x9c2 - home.angle.y)) < 0x3A98) {
+#else
     if ((s16)abs((s16)(fopAcM_searchPlayerAngleY(this) - field_0x9c2 - home.angle.y)) < 0x3A98) {
+#endif
         rv = 0;
     }
 
     if (rv == 0) {
         cXyz sp5c(eyePos);
+#if TARGET_PC
+        cXyz sp68(targetState.player != NULL ? targetState.player->eyePos : targetState.pos);
+#else
         cXyz sp68(player->eyePos);
+#endif
         if (fopAcM_lc_c::lineCheck(&sp5c, &sp68, this)) {
             field_0xa15 = 1;
         }
@@ -694,7 +913,12 @@ void daObjLv6Bm_c::initActionWarning() {
 
 void daObjLv6Bm_c::actionWarning() {
     field_0x9d8 = 500;
+#if !TARGET_PC
     fopAcM_searchPlayerAngleY(this);
+#else
+    // Co-op: the native call discards a pure P1 angle result; wake ownership is produced only
+    // by checkFindPlayer() so passive warning rotation cannot accidentally sample P1.
+#endif
 
     switch (mMode) {
         case 0:
@@ -737,15 +961,30 @@ void daObjLv6Bm_c::initActionFindPlayer() {
 }
 
 void daObjLv6Bm_c::actionFindPlayer() {
+#if TARGET_PC
+    s16 targetAngle = fopAcM_searchPlayerAngleY(this);
+    // Co-op: find-state turn follows the retained turret target.
+    coOpSelectLv6Bemos2Target(this, "obj_lv6bemos2.find_turn",
+                              dusk::coop::EnemyTargetMode::StickyCombat,
+                              NULL, NULL, &targetAngle);
+#endif
     switch (mMode) {
         case 0:
+#if TARGET_PC
+            field_0x9c4 = targetAngle - home.angle.y;
+#else
             field_0x9c4 = fopAcM_searchPlayerAngleY(this) - home.angle.y;
+#endif
             field_0x9c8 = field_0x9c6 - field_0x9da;
             field_0x9cc = field_0x9ca + field_0x9da;
             field_0x9d0 = field_0x9ce + field_0x9da;
             field_0x9d4 = field_0x9d2 + field_0x9da;
 
+#if TARGET_PC
+            if ((s16)abs((s16)(targetAngle - field_0x9c2 - home.angle.y)) < 2000) {
+#else
             if ((s16)abs((s16)(fopAcM_searchPlayerAngleY(this) - field_0x9c2 - home.angle.y)) < 2000) {
+#endif
                 mMode = 1;
             }
             break;
@@ -780,7 +1019,16 @@ void daObjLv6Bm_c::initActionAttack() {
     };
 
     f32 fVar1 = 0.0f;
+#if TARGET_PC
+    // Co-op: seed beam length from the retained turret target before attack starts.
+    f32 targetDistanceXZ = fopAcM_searchPlayerDistanceXZ(this);
+    coOpSelectLv6Bemos2Target(this, "obj_lv6bemos2.attack_init",
+                              dusk::coop::EnemyTargetMode::StickyCombat,
+                              NULL, &targetDistanceXZ, NULL);
+    field_0xa2c = targetDistanceXZ - fVar1;
+#else
     field_0xa2c = fopAcM_searchPlayerDistanceXZ(this) - fVar1;
+#endif
 
     mpBtkAnm->init(mBeamEffectModel->getModelData(), (J3DAnmTextureSRTKey*)dComIfG_getObjectRes(l_arcName, BTK_EF_BIMOL6_ON),
                    1, 0, 0.0f, 0, -1);
@@ -813,7 +1061,16 @@ void daObjLv6Bm_c::actionAttack() {
 
     bool sp_0x15 = false;
     bool bVar2 = false;
+#if TARGET_PC
+    s16 targetAngle = fopAcM_searchPlayerAngleY(this);
     f32 fVar1 = fopAcM_searchPlayerDistanceXZ(this);
+    // Co-op: active beam tracking follows the retained Combat target.
+    coOpSelectLv6Bemos2Target(this, "obj_lv6bemos2.attack_track",
+                              dusk::coop::EnemyTargetMode::StickyCombat,
+                              NULL, &fVar1, &targetAngle);
+#else
+    f32 fVar1 = fopAcM_searchPlayerDistanceXZ(this);
+#endif
     if (fVar1 > getBeamSearchDistance()) {
         fVar1 = getBeamSearchDistance();
     }
@@ -835,7 +1092,11 @@ void daObjLv6Bm_c::actionAttack() {
 
         case 1:
             field_0x9d8 = sp_0x16;
+#if TARGET_PC
+            field_0x9c4 = targetAngle - home.angle.y;
+#else
             field_0x9c4 = fopAcM_searchPlayerAngleY(this) - home.angle.y;
+#endif
 
             cLib_chaseF(&field_0xa2c, fVar1, 5.0f + KREG_F(16));
             if (!bVar1) {
@@ -849,7 +1110,11 @@ void daObjLv6Bm_c::actionAttack() {
 
         case 2:
             field_0x9d8 = 450;
+#if TARGET_PC
+            field_0x9c4 = targetAngle - home.angle.y;
+#else
             field_0x9c4 = fopAcM_searchPlayerAngleY(this) - home.angle.y;
+#endif
             cLib_chaseF(&field_0xa2c, fVar1, 15.0f + KREG_F(16));
             if (!bVar1) {
                 mMode = 3;
@@ -1115,6 +1380,11 @@ int daObjLv6Bm_c::Draw() {
 }
 
 int daObjLv6Bm_c::Delete() {
+#if TARGET_PC
+    // Co-op: Lv6 Beamos target state is keyed by this actor and must clear on deletion.
+    dusk::coop::clearAllEnemyTargets(this);
+    dusk::coop::beamos_state_probe::clearBeamosStateProbe(this);
+#endif
     if (field_0xa50 != NULL) {
         field_0xa50->becomeInvalidEmitter();
         field_0xa50->quitImmortalEmitter();

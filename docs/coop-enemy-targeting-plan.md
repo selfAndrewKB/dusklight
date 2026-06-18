@@ -131,7 +131,7 @@ For each `(observer actor, EnemyTargetScope)` pair:
 1. Query active candidates through `player_query`.
 2. If no candidate is found, clear or mark the state lost.
 3. If the actor says it is committed, retain the previous valid target and pause the sticky timer.
-4. If the callsite uses `EnemyTargetMode::ImmediateAcquire`, choose the nearest visible candidate immediately and write it back to the same scope. This is for awareness/wake gates that must not be blocked by stale chase stickiness.
+4. If the callsite uses `EnemyTargetMode::ImmediateAcquire`, choose the nearest eligible visible candidate immediately and write it back to the same scope. Actor-specific range, height, facing-cone, LOS, form, or status rules must filter candidates before nearest selection; selecting nearest first and rejecting that player afterward can let an ineligible P1 mask an eligible P2. This is for awareness/wake gates that must not be blocked by stale chase stickiness.
 5. Otherwise, if the previous target is still valid and the sticky timer has not expired, retain it.
 6. Otherwise acquire the nearest active player.
 7. Record the reason, diagnostic label, mode, and retain timer.

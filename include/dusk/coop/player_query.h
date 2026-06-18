@@ -37,6 +37,8 @@ struct PlayerQueryCandidateDebug {
     f32 distance = 0.0f;
     f32 distanceXZ = 0.0f;
     s16 angleY = 0;
+    bool eligible = true;
+    u32 eligibilityFailureFlags = 0;
 };
 
 struct PlayerQueryDecisionDebug {
@@ -65,7 +67,28 @@ void forEachActivePlayer(Func fn) {
     }
 }
 
+enum PlayerQueryEligibilityFailure : u32 {
+    PlayerQueryEligibilityFailure_None = 0,
+    PlayerQueryEligibilityFailure_Range = 1 << 0,
+    PlayerQueryEligibilityFailure_Vertical = 1 << 1,
+    PlayerQueryEligibilityFailure_Facing = 1 << 2,
+    PlayerQueryEligibilityFailure_LineOfSight = 1 << 3,
+    PlayerQueryEligibilityFailure_Form = 1 << 4,
+    PlayerQueryEligibilityFailure_Status = 1 << 5,
+    PlayerQueryEligibilityFailure_Room = 1 << 6,
+};
+
+struct PlayerQueryEligibility {
+    bool eligible = true;
+    u32 failureFlags = PlayerQueryEligibilityFailure_None;
+};
+
+using PlayerQueryPredicate =
+    PlayerQueryEligibility (*)(PlayerSlot slot, fopAc_ac_c* actor, void* userData);
+
 PlayerQueryResult findNearestPlayer(const fopAc_ac_c* observer, const char* system);
+PlayerQueryResult findNearestPlayerMatching(const fopAc_ac_c* observer, const char* system,
+                                            PlayerQueryPredicate predicate, void* userData);
 PlayerQueryResult findNearestPlayerToPos(const cXyz& pos, const char* system);
 
 const PlayerQueryDebugState& getPlayerQueryDebugState();

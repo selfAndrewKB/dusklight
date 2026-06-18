@@ -9,6 +9,10 @@
 #include "SSystem/SComponent/c_lib.h"
 #include "d/actor/d_a_player.h"
 #include "d/d_cc_d.h"
+#if TARGET_PC
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
 
 enum Obj_lv6bm_RES_File_ID {
     /* BCK */
@@ -43,6 +47,14 @@ const static dCcD_SrcSph l_sph_src = {
     } // mSphAttr
 };
 
+#if TARGET_PC
+// Co-op: node callbacks are defined before the local turret-target helper body.
+static bool coOpSelectLv6BemosTarget(
+    daObjL6Bm_c* i_this, const char* label, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance_xz,
+    s16* angle_y);
+#endif
+
 static int nodeCallBack(J3DJoint* i_joint, int param_2) {
     if (param_2 == 0) {
         int jntNo = i_joint->getJntNo();
@@ -56,7 +68,16 @@ static int nodeCallBack(J3DJoint* i_joint, int param_2) {
         } else if (jntNo == 2) {
             mDoMtx_stack_c::push();
             mDoMtx_stack_c::multVecZero(&i_this->field_0x894);
+#if TARGET_PC
+            // Co-op: model callbacks consume the target selected by the actor state machine.
+            // Running acquisition from model calculation would make presentation own AI state.
+            const dusk::coop::EnemyTargetResult target =
+                dusk::coop::getEnemyTarget(i_this, dusk::coop::EnemyTargetScope::Combat);
+            const dusk::coop::selected_target_state::SelectedTargetState targetState =
+                dusk::coop::selected_target_state::stateForEnemyTarget(target);
+#else
             daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
 
             if (i_this->field_0x891 != 0) {
                 cLib_addCalc0(&i_this->field_0x914, 0.1f, 20.0f);
@@ -64,8 +85,15 @@ static int nodeCallBack(J3DJoint* i_joint, int param_2) {
                 i_this->field_0x914 = 200.0f;
             }
 
+#if TARGET_PC
+            const cXyz targetPos =
+                targetState.available ? targetState.pos : daPy_getPlayerActorClass()->current.pos;
+            f32 fVar1 = targetPos.absXZ(i_this->field_0x894);
+            f32 yDiff = i_this->field_0x894.y - targetPos.y;
+#else
             f32 fVar1 = player->current.pos.absXZ(i_this->field_0x894);
             f32 yDiff = i_this->field_0x894.y - player->current.pos.y;
+#endif
             if (fVar1 > i_this->field_0x914) {
                 fVar1 -= i_this->field_0x914;
             }
@@ -126,6 +154,44 @@ static dCcD_SrcCps l_cps_src = {
         {{0.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, 50.0f}, // mCps
     } // mCpsAttr
 };
+
+#if TARGET_PC
+// Co-op: Lv6 Beamos is a turret object; keep search, turn, and beam math on one
+// Combat target instead of allowing each native state to read P1 independently.
+static bool coOpSelectLv6BemosTarget(
+    daObjL6Bm_c* i_this, const char* label, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance_xz,
+    s16* angle_y) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance_xz != NULL) {
+        *distance_xz = target.distanceXZ;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    return true;
+}
+#endif
 
 int daObjL6Bm_c::Create() {
     initBaseMtx();
@@ -272,7 +338,16 @@ void daObjL6Bm_c::actionWait() {
     bool var_r28 = false;
     bool var_r27 = false;
     f32 fVar1;
+#if TARGET_PC
     f32 playerDistance = fopAcM_searchPlayerDistanceXZ(this);
+    s16 targetAngle = fopAcM_searchPlayerAngleY(this);
+    // Co-op: wait-state acquire checks all active players before waking.
+    coOpSelectLv6BemosTarget(this, "obj_lv6bemos.wait",
+                             dusk::coop::EnemyTargetMode::ImmediateAcquire,
+                             NULL, &playerDistance, &targetAngle);
+#else
+    f32 playerDistance = fopAcM_searchPlayerDistanceXZ(this);
+#endif
 
     if (getArg0() != 0xFF) {
         fVar1 = getArg0() * 50.0f;
@@ -284,7 +359,9 @@ void daObjL6Bm_c::actionWait() {
         var_r28 = true;
     }
 
+#if !TARGET_PC
     s16 targetAngle = cLib_targetAngleY(fopAcM_GetPosition_p(this), fopAcM_GetPosition_p(dComIfGp_getPlayer(0)));
+#endif
     s16 angleDiff = (s16)abs((s16)(targetAngle - current.angle.y));
     s16 unkBound = 0x2000;
     if (angleDiff < unkBound / 2) {
@@ -313,7 +390,16 @@ void daObjL6Bm_c::actionWait() {
 void daObjL6Bm_c::actionFindPlayer() {
     f32 fVar1;
     bool var_r28 = false;
+#if TARGET_PC
     f32 playerDistance = fopAcM_searchPlayerDistanceXZ(this);
+    s16 targetAngle = fopAcM_searchPlayerAngleY(this);
+    // Co-op: find-state turn/beam maintenance follows the selected active player.
+    coOpSelectLv6BemosTarget(this, "obj_lv6bemos.find",
+                             dusk::coop::EnemyTargetMode::StickyCombat,
+                             NULL, &playerDistance, &targetAngle);
+#else
+    f32 playerDistance = fopAcM_searchPlayerDistanceXZ(this);
+#endif
 
     if (getArg0() != 0xFF) {
         fVar1 = getArg0() * 50.0f;
@@ -335,7 +421,13 @@ void daObjL6Bm_c::actionFindPlayer() {
             field_0x891 = 0;
         }
     } else {
-        cLib_addCalcAngleS2(&current.angle.y, fopAcM_searchPlayerAngleY(this), 10, 0x400);
+        cLib_addCalcAngleS2(&current.angle.y,
+#if TARGET_PC
+                            targetAngle,
+#else
+                            fopAcM_searchPlayerAngleY(this),
+#endif
+                            10, 0x400);
         if (cLib_calcTimer(&field_0x911) == 0) {
             if (field_0x891 == 0) {
                 mpBtkAnm->init(mBeamEffectModel->getModelData(), (J3DAnmTextureSRTKey*)dComIfG_getObjectRes(l_arcName, BTK_EF_BIMOBEAM_ON),
@@ -386,6 +478,10 @@ int daObjL6Bm_c::Draw() {
 }
 
 int daObjL6Bm_c::Delete() {
+#if TARGET_PC
+    // Co-op: Lv6 Beamos target state is keyed by this actor and must clear on deletion.
+    dusk::coop::clearAllEnemyTargets(this);
+#endif
     dComIfG_resDelete(&mPhase, l_arcName);
     return 1;
 }

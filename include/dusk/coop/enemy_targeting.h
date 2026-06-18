@@ -35,6 +35,11 @@ struct EnemyTargetContext {
     EnemyTargetScope scope = EnemyTargetScope::Combat;
     EnemyTargetMode mode = EnemyTargetMode::StickyCombat;
     const char* label = nullptr;
+    // Co-op: awareness callsites may restrict acquisition to players who pass the actor's
+    // native visibility/eligibility rules. The chosen candidate still becomes the one Combat
+    // owner; this is not an independent per-callsite target.
+    PlayerQueryPredicate candidatePredicate = nullptr;
+    void* candidatePredicateData = nullptr;
     bool committed = false;
     // Co-op: tune enemy target stickiness in simulation seconds, not render frames.
     float retainSeconds = kDefaultEnemyTargetRetainSeconds;
@@ -85,6 +90,9 @@ struct EnemyTargetingDebugState {
 // Co-op: called once per game simulation tick so retention is independent of presentation FPS.
 void advanceEnemyTargetingFrame(u32 frame);
 EnemyTargetResult selectEnemyTarget(const EnemyTargetContext& context);
+// Co-op: presentation and geometry consumers may inspect an existing target without running
+// acquisition policy, advancing retention time, or emitting a new targeting decision.
+EnemyTargetResult getEnemyTarget(fopAc_ac_c* observer, EnemyTargetScope scope);
 void clearEnemyTarget(fopAc_ac_c* observer, EnemyTargetScope scope);
 void clearAllEnemyTargets(fopAc_ac_c* observer);
 

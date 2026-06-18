@@ -18,6 +18,9 @@
 #include "f_pc/f_pc_debug_sv.h"
 #include "c/c_dylink.h"
 #include "dusk/coop/render_visibility.h"
+#if TARGET_PC
+#include "dusk/coop/world_switch_probe.h"
+#endif
 #include "m_Do/m_Do_printf.h"
 
 #if DEBUG
@@ -290,6 +293,11 @@ static int fopAc_Draw(void* i_this) {
 static int fopAc_Execute(void* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)i_this;
     int ret = 1;
+#if TARGET_PC
+    // Co-op diagnostics: direct native switch writes do not carry their producer. Retain the
+    // executing actor for this lifecycle only so switch-gated wake paths can identify it.
+    dusk::coop::world_switch_probe::ScopedExecutingActor switchProbeActor(actor);
+#endif
 
     #if DEBUG
     fapGm_HIO_c::startCpuTimer();

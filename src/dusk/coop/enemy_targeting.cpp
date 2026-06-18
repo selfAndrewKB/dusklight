@@ -254,7 +254,11 @@ EnemyTargetResult selectEnemyTarget(const EnemyTargetContext& context) {
         state->stickyElapsedSeconds += static_cast<float>(frameDelta) * game_clock::sim_pace();
     }
 
-    const PlayerQueryResult nearest = findNearestPlayer(context.observer, context.label);
+    const PlayerQueryResult nearest =
+        context.candidatePredicate != nullptr
+            ? findNearestPlayerMatching(context.observer, context.label, context.candidatePredicate,
+                                        context.candidatePredicateData)
+            : findNearestPlayer(context.observer, context.label);
     EnemyTargetResult result;
     const bool retainedValid = isValidTarget(state->slot, state->actor);
     const PlayerQueryResult retained =
@@ -274,13 +278,16 @@ EnemyTargetResult selectEnemyTarget(const EnemyTargetContext& context) {
         // Without this, prolonged awareness (head-search loops) pre-drains the combat window
         // before the enemy has engaged, causing a spurious AcquireNearest on the first chase frame.
         state->stickyElapsedSeconds = 0.0f;
-    } else if (retainedValid && state->stickyElapsedSeconds < context.retainSeconds) {
+    } else if (retainedValid && state->stickyElapsedSeconds < context.retainSeconds &&
+               !(context.mode == EnemyTargetMode::ImmediateAcquire &&
+                 context.candidatePredicate != nullptr))
+    {
         // Co-op: sticky combat is for continuity after the enemy has engaged. Chase, close-range
         // gates, retreat/re-engage, and attack setup should not flicker between players just
         // because nearest distance crosses back and forth by small amounts.
-        // Note: ImmediateAcquire falls through here when no candidate is found. The retained target
-        // is kept because there is no fresher candidate to replace it. The diagnostic record will
-        // show mode=ImmediateAcquire alongside reason=RetainSticky in that case.
+        // Unfiltered ImmediateAcquire may retain when there is no fresher candidate. A filtered
+        // wake query may not: "no eligible candidate" is the native gate result for this tick, and
+        // returning stale Combat ownership would bypass the range/cone/LOS predicate.
         result = targetResultFromQuery(retained, EnemyTargetReason::RetainSticky, previous);
     } else if (nearest.found) {
         // Co-op: when the sticky window expires but the nearest player is still the retained target,
@@ -291,7 +298,12 @@ EnemyTargetResult selectEnemyTarget(const EnemyTargetContext& context) {
                                                                    : EnemyTargetReason::AcquireNearest,
                                        previous);
         state->stickyElapsedSeconds = 0.0f;
-    } else if (getPlayer(PlayerSlot::Slot0) != nullptr) {
+    } else if (context.candidatePredicate == nullptr &&
+               getPlayer(PlayerSlot::Slot0) != nullptr)
+    {
+        // Co-op: the vanilla-like P1 safety fallback is valid only for unrestricted selection.
+        // A filtered awareness query with no eligible players must remain empty; otherwise an
+        // occluded or out-of-cone P1 can mask a visible added player at the wake boundary.
         result = targetResultFromQuery(resultForTarget(context.observer, PlayerSlot::Slot0,
                                                        getPlayer(PlayerSlot::Slot0)),
                                        EnemyTargetReason::FallbackPrimary, previous);
@@ -305,6 +317,28 @@ EnemyTargetResult selectEnemyTarget(const EnemyTargetContext& context) {
     updateStateFromResult(state, result);
 
     recordDecision(context, result, nearest, *state, retainedValid);
+    return result;
+}
+
+EnemyTargetResult getEnemyTarget(fopAc_ac_c* observer, EnemyTargetScope scope) {
+    if (observer == nullptr) {
+        return EnemyTargetResult{};
+    }
+
+    TargetState* state = findState(observer, scope, false);
+    if (state == nullptr || !isValidTarget(state->slot, state->actor)) {
+        return EnemyTargetResult{};
+    }
+
+    const PlayerQueryResult current = resultForTarget(observer, state->slot, state->actor);
+    EnemyTargetResult result;
+    result.slot = current.slot;
+    result.localActor = current.actor;
+    result.distance = current.distance;
+    result.distanceXZ = current.distanceXZ;
+    result.angleY = current.angleY;
+    result.found = current.found;
+    result.reason = EnemyTargetReason::RetainSticky;
     return result;
 }
 

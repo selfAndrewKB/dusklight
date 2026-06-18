@@ -1416,6 +1416,7 @@ set(DUSK_FILES
         include/dusk/config.hpp
         include/dusk/coop/alink_model_data_owner.h
         include/dusk/coop/alink_probes.h
+        include/dusk/coop/beamos_state_probe.h
         include/dusk/coop/bokoblin_attack_probe.h
         include/dusk/coop/camera.h
         include/dusk/coop/caught_stun_owner.h
@@ -1456,6 +1457,7 @@ set(DUSK_FILES
         src/dusk/coop/alink_model_data_owner.cpp
         src/dusk/coop/alink_form_resources.cpp
         src/dusk/coop/alink_probes.cpp
+        src/dusk/coop/beamos_state_probe.cpp
         src/dusk/coop/bokoblin_attack_probe.cpp
         src/dusk/coop/camera.cpp
         src/dusk/coop/caught_stun_owner.cpp

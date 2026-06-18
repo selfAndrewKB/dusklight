@@ -32,6 +32,16 @@ void advanceWorldSwitchProbeFrame(u32 frame);
 void recordSwitchOn(const fopAc_ac_c* sourceActor, int switchNo, int roomNo, bool wasOnBefore,
                     const char* source);
 void suppressNextDirectSwitchOn(int switchNo, int roomNo);
+const fopAc_ac_c* getExecutingActor();
+
+class ScopedExecutingActor {
+public:
+    explicit ScopedExecutingActor(const fopAc_ac_c* actor);
+    ~ScopedExecutingActor();
+
+private:
+    const fopAc_ac_c* mPreviousActor;
+};
 
 const WorldSwitchDebugState& getWorldSwitchDebugState();
 

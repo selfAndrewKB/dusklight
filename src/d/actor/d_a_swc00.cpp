@@ -15,6 +15,7 @@
 
 #if TARGET_PC
 #include "dusk/coop/horse_owner.h"
+#include "dusk/coop/player_query.h"
 #endif
 
 static BOOL hitCheckActor(daSwc00_c* i_swc, fopAc_ac_c* player) {
@@ -67,7 +68,44 @@ static BOOL hitCheck(daSwc00_c* i_swc) {
 #endif
     }
 
+#if TARGET_PC
+    BOOL hit = FALSE;
+    // Co-op: SwAreaC/SwAreaS actors produce authored world switches before their consumers can
+    // run. Test each active player's native condition and volume membership together so P2+
+    // receives the same wake/event lifecycle as P1.
+    dusk::coop::forEachActivePlayer(
+        [&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+            if (hit) {
+                return;
+            }
+
+            daPy_py_c* player = static_cast<daPy_py_c*>(actor);
+            switch (daSwc00_getCondition(i_swc)) {
+            case 1:
+                if (!player->checkHorseRide()) {
+                    return;
+                }
+                break;
+            case 3:
+                if (player->checkWolf() || player->checkHorseRide()) {
+                    return;
+                }
+                break;
+            case 4:
+                if (player->getKandelaarFlamePos() == NULL) {
+                    return;
+                }
+                break;
+            }
+
+            if (hitCheckActor(i_swc, actor)) {
+                hit = TRUE;
+            }
+        });
+    return hit;
+#else
     return hitCheckActor(i_swc, daPy_getPlayerActorClass());
+#endif
 }
 
 #if DEBUG
@@ -113,6 +151,7 @@ inline static int daSwc00_getSw2No(daSwc00_c* i_this) {
 }
 
 int daSwc00_c::execute() {
+#if !TARGET_PC
     daPy_py_c* player = daPy_getPlayerActorClass();
     u8 condition = daSwc00_getCondition(this);
     switch(condition) {
@@ -132,6 +171,7 @@ int daSwc00_c::execute() {
         }
         break;
     }
+#endif
 
     int type = daSwc00_getType(this);
     int sw2 = daSwc00_getSw2No(this);

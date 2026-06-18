@@ -70,7 +70,8 @@ void recordDecision(const char* system, const fopAc_ac_c* observer,
     }
 }
 
-PlayerQueryResult chooseNearest(const fopAc_ac_c* observer, const cXyz& pos, const char* system) {
+PlayerQueryResult chooseNearest(const fopAc_ac_c* observer, const cXyz& pos, const char* system,
+                                PlayerQueryPredicate predicate, void* userData) {
     PlayerQueryResult result;
     PlayerQueryCandidateDebug candidates[kPlayerSlotCount] = {};
     int candidateCount = 0;
@@ -90,8 +91,12 @@ PlayerQueryResult chooseNearest(const fopAc_ac_c* observer, const cXyz& pos, con
             candidate.distanceXZ = delta.absXZ();
             candidate.angleY = cLib_targetAngleY(pos, actor->current.pos);
         }
+        const PlayerQueryEligibility eligibility =
+            predicate != nullptr ? predicate(slot, actor, userData) : PlayerQueryEligibility{};
+        candidate.eligible = eligibility.eligible;
+        candidate.eligibilityFailureFlags = eligibility.failureFlags;
 
-        if (!result.found || candidate.distanceXZ < result.distanceXZ) {
+        if (candidate.eligible && (!result.found || candidate.distanceXZ < result.distanceXZ)) {
             result.slot = candidate.slot;
             result.actor = candidate.actor;
             result.distance = candidate.distance;
@@ -112,11 +117,20 @@ PlayerQueryResult findNearestPlayer(const fopAc_ac_c* observer, const char* syst
         return PlayerQueryResult{};
     }
 
-    return chooseNearest(observer, observer->current.pos, system);
+    return chooseNearest(observer, observer->current.pos, system, nullptr, nullptr);
+}
+
+PlayerQueryResult findNearestPlayerMatching(const fopAc_ac_c* observer, const char* system,
+                                            PlayerQueryPredicate predicate, void* userData) {
+    if (observer == nullptr) {
+        return PlayerQueryResult{};
+    }
+
+    return chooseNearest(observer, observer->current.pos, system, predicate, userData);
 }
 
 PlayerQueryResult findNearestPlayerToPos(const cXyz& pos, const char* system) {
-    return chooseNearest(nullptr, pos, system);
+    return chooseNearest(nullptr, pos, system, nullptr, nullptr);
 }
 
 const PlayerQueryDebugState& getPlayerQueryDebugState() {
