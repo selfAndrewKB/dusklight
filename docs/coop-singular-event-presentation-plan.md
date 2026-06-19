@@ -1,5 +1,10 @@
 # Singular Event Presentation Plan
 
+Status: the generic Poe ItemGet ownership, post-camera split rebuild, and Camera-1 fullscreen kankyo
+slice were field-validated on June 19, 2026. Active implementation work has moved to the remaining
+enemy queue in `docs/coop-enemy-audit.md`; this document remains the lifecycle source of truth for
+future singular-presentation and ItemGet producer work.
+
 ## Summary
 
 Some Twilight Princess sequences are intentionally singular: they present one authored camera,
@@ -12,9 +17,10 @@ menu surfaces are the second classified family: the item ring, Start-menu collec
 map, dungeon map, and Agitha's standalone insect screen now reuse the same presentation override.
 
 This is a presentation policy, not a broad event-ownership conversion. Interactive dialogue is now
-an explicit classified consumer through `message_owner`; passive message overlays, interaction
-prompts, item cameras, and gameplay events should continue to use their existing narrow ownership
-APIs unless a specific sequence is classified as singular.
+an explicit classified consumer through `message_owner`, and the generic `DEFAULT_GETITEM`
+sequence is classified through `item_get_owner`. Passive message overlays, interaction prompts,
+other item cameras, and gameplay events should continue to use their existing narrow ownership APIs
+unless a specific sequence is classified as singular.
 
 ## Ownership Question
 
@@ -50,6 +56,7 @@ enum class Source : u8 {
     AgithaInsect,
     MidnaService,
     Dialogue,
+    ItemGet,
     EnemyRetainedInteraction,
 };
 
@@ -64,6 +71,7 @@ void reset();
 
 bool isFullscreen();
 bool shouldPresentSplitViewports();
+bool shouldRefreshViewportOwnedWorldState();
 bool shouldDrawWindow(int windowIndex);
 bool shouldHideSlot(PlayerSlot slot);
 PlayerSlot presenterSlot();
@@ -100,6 +108,157 @@ override above the camera sidecar, not a gameplay-mode toggle.
 Do not implement hiding by mutating persistent actor `NODRAW` state unless investigation proves a
 central draw-policy query is insufficient. A presentation override must not be able to leave P2
 invisible after an interrupted event.
+
+## Validated Item-Get Ownership
+
+The first field-validated generic item-get owner is P2 Poe soul collection. The implementation is
+split across three ownership phases:
+
+1. The producer retains who collected the item.
+2. `PROC_GET_ITEM` promotes that pending collector into the active item-get owner.
+3. Event teardown requests release, native camera recovery runs, and the renderer performs the
+   final release immediately before viewport replay.
+
+This separation is intentional. The actor that detects or produces an item, the ALINK that consumes
+the singular `"Alink"` event staff, and the renderer that safely restores split presentation run at
+different times.
+
+### Producer handoff
+
+`item_get_owner::retainForEventSource(source, player)` must run before the producer orders
+`DEFAULT_GETITEM`. The pending record stores:
+
+- the exact event-source actor pointer;
+- that source actor's process ID, so pointer reuse cannot validate a stale owner;
+- the collecting ALINK pointer;
+- the collecting player slot.
+
+When `PROC_GET_ITEM` starts, `item_get_owner::begin(player)` accepts the pending owner only if the
+current event source still matches both pointer and process ID and the retained slot still resolves
+to the same live player. This prevents a pending owner from one acquisition leaking into an
+unrelated item event.
+
+Poe `E_HP` and `E_PO` bridge their retained soul `Collect` owner into this API immediately before
+ordering `DEFAULT_GETITEM`. That producer handoff is the validated path. The generic API has a
+best-effort fallback for already owner-routed events, but a fallback is not proof that an unaudited
+pickup, chest, NPC reward, insect, key, equipment object, or scripted item source is P2-correct.
+
+### Active sequence ownership
+
+After promotion:
+
+- only the retained ALINK consumes the singular `DEFAULT_GETITEM` `"Alink"` staff track;
+- `Demo_Item` follows that ALINK's live position, facing, horse state, and human/wolf form;
+- item-message input uses that slot's pad;
+- item-get camera/action status `0x4000000` is produced through `player_camera_status`;
+- `event_presentation::Source::ItemGet` expands the retained slot's existing window fullscreen and
+  hides non-presenting player visuals;
+- inventory, save, and event mutation remain shared/global.
+
+Do not infer the collector from the nearest player after the event starts. Do not give every ALINK
+an independent copy of the authored staff. The owner must cross the source-to-event boundary once,
+then remain retained for the sequence.
+
+## Item-Get Teardown And Split Rebuild
+
+The teardown order is a render-lifecycle contract, not a cosmetic delay:
+
+```text
+DEFAULT_GETITEM reaches END
+  -> dEvent_manager_c::endProc() classifies event->getName()
+  -> item_get_owner::requestEnd()
+  -> native event manager sets cameraPlay = 2
+  -> dEvt_control_c::Step() later sets cameraPlay = 0
+  -> camera actors execute and consume native recovery state
+  -> mDoGph_Painter() begins
+  -> item_get_owner::finishPendingEnd()
+  -> event_presentation::end(ItemGet)
+  -> camera::refreshWindowLayout()
+  -> painter samples window count and render policy
+  -> restored split viewports replay with per-view world state
+```
+
+Each boundary matters:
+
+- `dEvent_manager_c::endProc()` must classify the closing `dEvDtEvent_c` directly with
+  `event->getName()`. `getRunEventName()` returns `"NOT RUNNING"` once the event enters END state,
+  so using it here silently prevents `requestEnd()` from ever running.
+- `endProc()` must request release, not release presentation immediately. It sets
+  `mCameraPlay = 2`; native camera recovery still has work to consume.
+- `dEvt_control_c::Step()` later calls `setCameraPlay(0)`, but play-scene execution invokes event
+  `Step()` before the camera actors execute. Zero means recovery has been released to the cameras;
+  it does not mean those cameras have already rebuilt their native state.
+- Releasing presentation inside `Step()` is too early. It can reopen split layout before camera
+  execution, after which camera recovery can overwrite the layout or leave renderer globals
+  mismatched. Field testing showed missing split restoration plus broken ground and lighting from
+  this ordering.
+- `mDoGph_Painter()` is the first narrow boundary after actor/camera execution and before the
+  renderer samples `dComIfGp_getWindowNum()`, chooses visible windows, primes shadows, reloads
+  lights, or replays kankyo materials. Ending there lets `camera::refreshWindowLayout()` rebuild the
+  two viewports before the first restored frame is configured.
+
+Do not replace this with an arbitrary one-frame timer. Interpolated presentation may call the
+painter more than once per simulation tick; the semantic condition is pending event end plus native
+camera play being clear at the post-camera/pre-render handoff.
+
+## Camera-1 Fullscreen And Kankyo
+
+`kankyo` is the engine's environment/lighting family. A P2-owned fullscreen item-get sequence draws
+only camera 1, but camera 1 is still not allowed to inherit camera-0 world-render state.
+
+Two policy questions must remain separate:
+
+| Policy | Meaning during P2 fullscreen |
+| --- | --- |
+| `shouldPresentSplitViewports()` | `false`: draw only the selected fullscreen window and suppress split-only framebuffer replay |
+| `shouldRefreshViewportOwnedWorldState()` | `true`: camera 1 still needs its own culling, shadow, kankyo material, particle-culling, and GX-light setup |
+
+The second policy keeps these paths active for camera 1:
+
+- shared draw-culling bypass through `render_visibility`;
+- real-shadow setup through `render_shadows`;
+- registered kankyo/J3D material replay through `render_materials`;
+- particle-creation culling policy through `render_effects`;
+- `dKy_setLight_again()` after camera 1's view is installed.
+
+The distinction was field-proven. Suppressing all split render refresh merely because one fullscreen
+window was visible made room lighting move with the camera, matching the earlier camera-0/kankyo
+ownership bug. Restoring only the viewport layout fixed ground rendering but not lighting. Camera 1
+fullscreen must therefore be treated as a single presented window that still owns non-native
+viewport world state.
+
+P1-owned fullscreen presentation can continue using native camera-0 world state. Do not broaden
+camera-1 refresh into fullscreen framebuffer ownership: bloom, captures, and other screen-sized
+effects remain governed by `shouldPresentSplitViewports()` and their explicit `render_effects`
+classification.
+
+## Remaining Item-Get Audit
+
+The generic sequence machinery is field-validated, but producer coverage is not complete. Future
+ItemGet work should audit producers in families rather than mass-patching every
+`"DEFAULT_GETITEM"` string:
+
+- ordinary world item/pickup objects, including which actor owns collection radius and callback;
+- treasure chests and small keys;
+- life containers, equipment, swords, shields, lanterns, and dungeon-exit items;
+- insects and other dedicated collection managers;
+- NPC rewards and shop/scripted `fopAcM_orderChangeEventId()` paths;
+- special variants such as wolf-only or authored non-default get-item events.
+
+For each producer:
+
+1. Find the native player-selection or collection callback before the event is ordered.
+2. Retain the exact slot at that producer boundary; do not infer from event source alone when the
+   source is an NPC, chest, manager, or shared object.
+3. Call `retainForEventSource()` before ordering or changing into `DEFAULT_GETITEM`.
+4. Verify the accepted event source pointer/process ID matches the retained source.
+5. Field-test P1 and P2 item position/form, message input, camera 1 fullscreen lighting, control
+   restoration, split-layout restoration, and interruption/scene-change cleanup.
+6. Keep shared inventory/save mutation global unless a separate inventory ownership milestone says
+   otherwise.
+
+Also audit non-`DEFAULT_GETITEM` acquisition sequences separately. Do not route them through
+`item_get_owner` merely because they display an item model.
 
 ## First Consumer: Howling Stones
 
@@ -169,9 +328,10 @@ Evaluate later consumers case by case:
 - passive or scripted message-camera scenes that visibly assume one camera.
 
 Interactive talk/choice messages now opt into `event_presentation::Source::Dialogue` through
-`message_owner`. Do not collapse split-screen for every passive message overlay, item-get surface,
-boss-name/title card, shop-special surface, or demo by default. Many can remain split-screen, and
-some should become correctly owner-routed instead.
+`message_owner`. Generic `DEFAULT_GETITEM` acquisition sequences opt into
+`event_presentation::Source::ItemGet` through `item_get_owner`. Do not infer the same policy for
+every passive message overlay, unrelated item camera, boss-name/title card, shop-special surface,
+or demo; those still require explicit classification.
 
 ## Implemented Slice
 
@@ -188,14 +348,25 @@ some should become correctly owner-routed instead.
   message controller accepts the message, retaining the slot, pad, listener, speaker, and presenter
   actor while leaving native global dialogue movement locking intact. `talkStartInit()` is fallback
   insurance, not the primary presentation timing boundary.
+- Generic item-get sequences promote a source-tied pending collector through `item_get_owner` when
+  `PROC_GET_ITEM` begins. Only the retained ALINK consumes the singular staff track; `Demo_Item`,
+  item-message input, slot-local item-get status, and fullscreen presentation follow that owner
+  until `DEFAULT_GETITEM` closes, native camera recovery executes, and the renderer reaches its
+  pre-viewport handoff. Inventory/save mutation remains shared.
+- P2-owned fullscreen presentation continues viewport-owned world refresh for camera 1: shared
+  culling is bypassed, real shadows and kankyo materials are rebuilt, and GX lights are reloaded.
+  Only the second viewport and split-only framebuffer replay are suppressed.
 - Wolf howl begins after the global event is accepted and ends on its explicit close, scene-change,
   Sun's Song, horse-call, and Golden Wolf handoffs. Scene lifecycle reset remains interruption
   insurance.
 
 ## Follow-Up Order
 
-1. Validate the test matrix below in game.
-2. Classify later singular sequences individually as they are encountered.
+1. Continue enemy ownership review from `docs/coop-enemy-audit.md`, beginning with the remaining
+   untouched regular/special candidates such as `E_FK`, `E_GOB`, `E_HZ`, and `E_BUG`.
+2. Return to the producer-family ItemGet audit when a non-Poe P2 acquisition is selected for field
+   testing.
+3. Classify later singular sequences individually as they are encountered.
 
 ## Test Plan
 
@@ -213,6 +384,20 @@ some should become correctly owner-routed instead.
 - Interactive dialogue fullscreen-presents the retained owner. Doors, HUD prompts, Hawkeye,
   boomerang, fishing rod, and passive message overlays remain unchanged unless explicitly
   classified as singular consumers.
+- A P2-collected Poe soul runs the item-get pose on P2, displays the soul above P2, advances from
+  P2's controller, presents camera 1 fullscreen, hides P1 visuals, and restores split-screen when
+  `DEFAULT_GETITEM` closes. P1 item gets remain unchanged.
+
+Validation result, June 19, 2026:
+
+- P2 Poe soul ownership, item position, message input, control restoration, and fullscreen
+  presentation were field-tested successfully.
+- Releasing presentation at painter entry fixed ground rendering by restoring layout after native
+  camera execution.
+- Keeping Camera 1 viewport-owned kankyo/GX-light refresh active during P2 fullscreen fixed the
+  remaining camera-relative room-lighting corruption.
+- Split-screen restoration was confirmed after changing END-state classification from
+  `getRunEventName()` to the closing event object's name.
 
 ## Non-Goals
 

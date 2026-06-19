@@ -61,7 +61,17 @@ The follow-up duplication audit is documented in `docs/coop-alink-duplication-au
 
 The first item/action ownership pass is documented in `docs/coop-secondary-alink-item-ownership-plan.md`. Boomerang, fishing rod, Dominion Rod, bow/arrow, Spinner, bombs, slingshot, and Iron Boots all confirmed the same broad lesson: item actors often know their concrete owning ALINK, but still reach through P1/global helpers for matrices, counters, camera/status, sound, or lifecycle cleanup. Narrow owner-routing fixes made those item families usable for P2 without regressing P1.
 
-The current active plan is `docs/coop-p2-independent-control-plan.md`. Split-screen is now usable enough for co-op testing, with known V1 render/HUD limitations documented in `docs/coop-native-split-screen-camera-plan.md`. The first world-acknowledgement proof exists: Dusk-owned player-query helpers can let ordinary enemy logic react to P2 without mass-rewriting global player helpers. Bokoblin and Tektite validated the first enemy API families: `enemy_targeting` for combat target choice, `damage_owner` for who hit an enemy, `selected_target_state` for facts about a known target, and `defender_owner` for who an enemy attack touched. Enemy coverage remains tracked in `docs/coop-enemy-audit.md`.
+The current active work surface is the remaining enemy review queue in
+`docs/coop-enemy-audit.md`, beginning with `E_FK`, `E_GOB`, `E_HZ`, and `E_BUG`.
+`docs/coop-p2-independent-control-plan.md` remains the control-ownership root plan rather than the
+immediate queue. Split-screen is usable for co-op testing, with known V1 render/HUD limitations in
+`docs/coop-native-split-screen-camera-plan.md` and validated singular-presentation/ItemGet teardown
+evidence in `docs/coop-singular-event-presentation-plan.md`. The first world-acknowledgement proof
+exists: Dusk-owned player-query helpers can let ordinary enemy logic react to P2 without
+mass-rewriting global player helpers. Bokoblin and Tektite validated the first enemy API families:
+`enemy_targeting` for combat target choice, `damage_owner` for who hit an enemy,
+`selected_target_state` for facts about a known target, and `defender_owner` for who an enemy attack
+touched.
 
 The secondary Link experiment has graduated into the supported local additional-player path for current co-op testing. Runtime systems should identify player actors through the slot registry, not by inspecting ALINK's spawn argument. Spawn arguments now encode requested extra slots (`-2` for slot 1, `-3` for slot 2, `-4` for slot 3) only as a create-time bootstrap so `daAlink_c::create()` can avoid claiming vanilla player 0 before it has registered in the sidecar.
 

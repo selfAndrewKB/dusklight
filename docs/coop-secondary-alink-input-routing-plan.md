@@ -2,7 +2,9 @@
 
 This milestone is complete. It moved the secondary ALINK prototype from "a second ALINK can exist under containment" to "a second ALINK consumes player 2 input for basic movement and simple actions."
 
-The next completed milestone was `docs/coop-secondary-alink-item-ownership-plan.md`; the current active milestone is `docs/coop-native-split-screen-camera-plan.md`.
+The next completed milestones were `docs/coop-secondary-alink-item-ownership-plan.md` and
+`docs/coop-native-split-screen-camera-plan.md`. Current work is tracked in
+`docs/coop-enemy-audit.md`.
 
 ## Purpose
 

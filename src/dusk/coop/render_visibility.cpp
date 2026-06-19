@@ -6,7 +6,7 @@ namespace dusk::coop::render_visibility {
 
 bool shouldBypassDrawCulling() {
 #if TARGET_PC
-    return dusk::coop::event_presentation::shouldPresentSplitViewports();
+    return dusk::coop::event_presentation::shouldRefreshViewportOwnedWorldState();
 #else
     return false;
 #endif

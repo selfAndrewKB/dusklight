@@ -60,6 +60,7 @@
 #include "dusk/coop/debug_overlay.h"
 #include "dusk/coop/event_presentation.h"
 #include "dusk/coop/horse_owner.h"
+#include "dusk/coop/item_get_owner.h"
 #include "dusk/coop/player_attention.h"
 #include "dusk/dusk.h"
 #include "dusk/endian.h"
@@ -2226,6 +2227,11 @@ static void drawItem3D() {
 int mDoGph_Painter() {
     ZoneScoped;
 
+#if TARGET_PC
+    // Co-op: reopen split presentation after recovered cameras execute, before viewport replay.
+    dusk::coop::item_get_owner::finishPendingEnd();
+#endif
+
     // Diagnostic: log windowNum to track game state machine progress
     static bool sDiagLoggedWindow = false;
     if (!sDiagLoggedWindow) {
@@ -2296,6 +2302,8 @@ int mDoGph_Painter() {
 #if TARGET_PC
             const bool split_screen_active =
                 dusk::coop::event_presentation::shouldPresentSplitViewports();
+            const bool refresh_viewport_world_state =
+                dusk::coop::event_presentation::shouldRefreshViewportOwnedWorldState();
             bool refreshed_kankyo_materials = false;
             // Co-op: real-shadow texture generation happens before the main viewport replay,
             // but its matrices depend on active camera/light state. Prime the render globals for
@@ -2423,13 +2431,13 @@ int mDoGph_Painter() {
 #endif
             dKy_setLight();
 #if TARGET_PC
-            if (split_screen_active || dusk::frame_interp::is_enabled()) {
+            if (refresh_viewport_world_state || dusk::frame_interp::is_enabled()) {
                 // Co-op: dKy_setLight() updates environment state, but dKy_setLight_again()
-                // reloads the GX light objects. Split-screen needs that reload per viewport.
+                // reloads GX light objects for split views and P2 fullscreen presentation.
                 dKy_setLight_again();
             }
-            // Co-op: draw submission patches kankyo material state once before split-screen.
-            // Re-patch after this viewport's camera matrix is active so P2 gets its own lighting.
+            // Co-op: draw submission patches kankyo state once under camera 0. Re-patch after
+            // the presented viewport camera is active so camera 1 gets its own lighting.
             if (!refreshed_kankyo_materials) {
                 dusk::coop::render_materials::refreshKankyoMaterialsForCurrentView();
             }

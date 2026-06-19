@@ -14,6 +14,7 @@ enum class Source : u8 {
     AgithaInsect,
     MidnaService,
     Dialogue,
+    ItemGet,
     EnemyRetainedInteraction,
     Count,
 };
@@ -41,6 +42,7 @@ struct DebugState {
     int agithaInsectDepth = 0;
     int midnaServiceDepth = 0;
     int dialogueDepth = 0;
+    int itemGetDepth = 0;
     int enemyRetainedInteractionDepth = 0;
     Transition lastTransition = Transition::None;
     Source lastSource = Source::WolfHowl;
@@ -56,6 +58,7 @@ void reset();
 
 bool isFullscreen();
 bool shouldPresentSplitViewports();
+bool shouldRefreshViewportOwnedWorldState();
 bool shouldDrawWindow(int windowIndex);
 bool shouldHideSlot(PlayerSlot slot);
 PlayerSlot presenterSlot();

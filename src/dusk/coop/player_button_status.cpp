@@ -3,6 +3,7 @@
 #include "d/actor/d_a_alink.h"
 #include "d/d_com_inf_game.h"
 #include "dusk/coop/event_owner.h"
+#include "dusk/coop/item_get_owner.h"
 #include "dusk/coop/message_owner.h"
 #include "m_Do/m_Do_controller_pad.h"
 
@@ -277,7 +278,14 @@ void set3DStatusForPlayer(const daAlink_c* player, u8 status, u8 direction, u8 f
 }
 
 int messagePad() {
-    return message_owner::isActive() ? message_owner::currentPad() : event_owner::currentOwnerPad();
+    if (message_owner::isActive()) {
+        return message_owner::currentPad();
+    }
+    if (item_get_owner::isActive()) {
+        // Co-op: item-get text advances from the same retained slot that presents the item.
+        return getPadForSlot(item_get_owner::currentSlot());
+    }
+    return event_owner::currentOwnerPad();
 }
 
 bool messageTrigA() {

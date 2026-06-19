@@ -192,13 +192,15 @@ void registerKankyoModel(J3DModel* model, dKy_tevstr_c* tevstr) {
 
 void refreshKankyoMaterialsForCurrentView() {
 #if TARGET_PC
-    if (!dusk::coop::event_presentation::shouldPresentSplitViewports() || s_refreshing) {
+    if (!dusk::coop::event_presentation::shouldRefreshViewportOwnedWorldState() ||
+        s_refreshing)
+    {
         return;
     }
 
     // Co-op: actor/background draw submission patches shared J3D material state once before
-    // split-screen replay. Refresh those same patches after each viewport camera is active so
-    // P2 does not inherit camera-0 TEV/light material state.
+    // viewport replay. Refresh those same patches after the presented camera is active so
+    // split views and P2 fullscreen presentation do not inherit camera-0 TEV/light state.
     const unsigned int frame = currentFrame();
     sweepStaleRegistrations(frame);
 

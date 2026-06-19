@@ -1,6 +1,8 @@
 # Co-op Secondary ALINK Item Ownership Plan
 
-This was the active co-op milestone after `docs/coop-secondary-alink-input-routing-plan.md`. The main item/action ownership pass is now complete enough to move on; the current active milestone is `docs/coop-native-split-screen-camera-plan.md`.
+This was the active co-op milestone after `docs/coop-secondary-alink-input-routing-plan.md`. The
+main item/action ownership pass and native split-screen camera milestone are complete enough to
+serve as evidence; current work is tracked in `docs/coop-enemy-audit.md`.
 
 ## Purpose
 

@@ -1828,7 +1828,7 @@ json collectEventPresentation() {
     }
 
     return {
-        {"schema_version", 4},
+        {"schema_version", 5},
         {"revision", state.revision},
         {"fullscreen", state.fullscreen},
         {"split_screen_capability", coop::camera::isSplitScreenEnabled()},
@@ -1846,6 +1846,7 @@ json collectEventPresentation() {
             {"agitha_insect", state.agithaInsectDepth},
             {"midna_service", state.midnaServiceDepth},
             {"dialogue", state.dialogueDepth},
+            {"item_get", state.itemGetDepth},
             {"enemy_retained_interaction", state.enemyRetainedInteractionDepth},
         }},
         {"last_transition", coop::event_presentation::transitionName(state.lastTransition)},

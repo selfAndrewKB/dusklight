@@ -54,6 +54,7 @@ void refreshDebugState(Transition transition, Source source) {
     s_state.debug.agithaInsectDepth = s_state.depths[sourceIndex(Source::AgithaInsect)];
     s_state.debug.midnaServiceDepth = s_state.depths[sourceIndex(Source::MidnaService)];
     s_state.debug.dialogueDepth = s_state.depths[sourceIndex(Source::Dialogue)];
+    s_state.debug.itemGetDepth = s_state.depths[sourceIndex(Source::ItemGet)];
     s_state.debug.enemyRetainedInteractionDepth =
         s_state.depths[sourceIndex(Source::EnemyRetainedInteraction)];
     s_state.debug.lastTransition = transition;
@@ -140,6 +141,11 @@ bool shouldPresentSplitViewports() {
     return camera::isSplitScreenEnabled() && !isFullscreen();
 }
 
+bool shouldRefreshViewportOwnedWorldState() {
+    return camera::isSplitScreenEnabled() &&
+           (!isFullscreen() || presenterSlot() == PlayerSlot::Secondary);
+}
+
 bool shouldDrawWindow(int windowIndex) {
     return !isFullscreen() || windowIndex == presenterWindowIndex();
 }
@@ -179,6 +185,8 @@ const char* sourceName(Source source) {
         return "midna_service";
     case Source::Dialogue:
         return "dialogue";
+    case Source::ItemGet:
+        return "item_get";
     case Source::EnemyRetainedInteraction:
         return "enemy_retained_interaction";
     default:

@@ -1430,6 +1430,7 @@ set(DUSK_FILES
         include/dusk/coop/hud_diagnostics.h
         include/dusk/coop/horse_owner.h
         include/dusk/coop/interaction_owner.h
+        include/dusk/coop/item_get_owner.h
         include/dusk/coop/item_awareness.h
         include/dusk/coop/gibdo_state_probe.h
         include/dusk/coop/ghost_rat_state_probe.h
@@ -1471,6 +1472,7 @@ set(DUSK_FILES
         src/dusk/coop/hud_diagnostics.cpp
         src/dusk/coop/horse_owner.cpp
         src/dusk/coop/interaction_owner.cpp
+        src/dusk/coop/item_get_owner.cpp
         src/dusk/coop/item_awareness.cpp
         src/dusk/coop/line_render_diagnostics.cpp
         src/dusk/coop/gibdo_state_probe.cpp

@@ -26,13 +26,20 @@
 #include "dusk/imgui/ImGuiConsole.hpp"
 #if TARGET_PC
 #include "dusk/coop/event_owner.h"
+#include "dusk/coop/item_get_owner.h"
 #include "dusk/coop/midna_owner.h"
+#include "dusk/coop/player_camera_status.h"
 #endif
 #include "dusk/settings.h"
 #include "dusk/speedrun.h"
 
 #if TARGET_PC
 static bool alinkShouldSkipNonOwnedEventStaff(const daAlink_c* player) {
+    if (dusk::coop::item_get_owner::shouldSkipAlinkStaff(player)) {
+        // Co-op: DEFAULT_GETITEM has one Alink track; only the retained collector consumes it.
+        return true;
+    }
+
     fopAc_ac_c* partner = dComIfGp_event_getPt2();
     if (partner == NULL || !partner->eventInfo.checkCommandDoor()) {
         return false;
@@ -2378,6 +2385,10 @@ int daAlink_c::procCoGetItemInit() {
     }
 
     commonProcInit(PROC_GET_ITEM);
+#if TARGET_PC
+    // Co-op: promote the accepted item event owner before the demo item and camera consume it.
+    dusk::coop::item_get_owner::begin(this);
+#endif
     mNormalSpeed = 0.0f;
     mProcVar1.field_0x300a = 0;
     field_0x3478 = 0.0f;
@@ -2480,7 +2491,12 @@ int daAlink_c::procCoGetItemInit() {
     mProcVar5.field_0x3012 = var_r22;
     dKy_Itemgetcol_chg_on();
 
+#if TARGET_PC
+    // Co-op: item-get camera/action status belongs to the ALINK presenting the sequence.
+    dusk::coop::player_camera_status::setStatus1ForPlayer(this, 0x4000000);
+#else
     dComIfGp_setPlayerStatus1(0, 0x4000000);
+#endif
     if (mProcVar4.field_0x3010 != 0) {
         onEndResetFlg1(ERFLG1_UNK_8);
     }

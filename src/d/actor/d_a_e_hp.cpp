@@ -12,6 +12,7 @@
 #if TARGET_PC
 #include "dusk/coop/damage_owner.h"
 #include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/item_get_owner.h"
 #include "dusk/coop/retained_interaction_owner.h"
 #include "dusk/coop/selected_target_state.h"
 #endif
@@ -952,6 +953,10 @@ void daE_HP_c::executeDead() {
                 fopAc_ac_c* player = dComIfGp_getPlayer(0);
 #endif
                 if (player->eventInfo.chkCondition(8)) {
+#if TARGET_PC
+                    // Co-op: carry the exact soul collector across the generic item-event boundary.
+                    dusk::coop::item_get_owner::retainForEventSource(this, player);
+#endif
                     field_0x778 =
                         dComIfGp_getEventManager().getEventIdx(this, "DEFAULT_GETITEM", 0xff);
                     fopAcM_orderOtherEventId(this, field_0x778, 0xff, 0xffff, 6, 1);

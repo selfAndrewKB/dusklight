@@ -21,7 +21,7 @@ families, and which systems are intentionally deferred.
 | Which viewport owns real-shadow submission culling and baked shadow matrices? | `render_shadows` | Partially implemented through `dusk::coop::render_shadows` for shared-list culling bypass and per-viewport real-shadow refresh |
 | Which viewport should camera-facing 3D line/ribbon geometry use? | shared 3D-line material refresh | Implemented for `mDoExt_3DlineMat0_c` and `mDoExt_3DlineMat1_c` during the per-window painter pass |
 | Which player owns HUD, reticles, prompts, and message UI? | `hud_owner` / `ui_owner` / `message_owner` | `hud_owner` presents slot-local prompts and assigned items; `ui_owner` owns transient overlay viewport context and the singular item wheel; `message_owner` retains the active interactive dialogue slot/pad/listener/speaker. Full inventory/menu and passive message UI remain deferred |
-| Should an explicitly classified singular event, interactive dialogue, or captured menu surface temporarily present one fullscreen camera and hide non-presenting players? | `event_presentation` | Implemented opt-in override above the camera sidecar; howling stones, Midna service, interactive dialogue, and captured fullscreen menu surfaces are classified consumers |
+| Should an explicitly classified singular event, interactive dialogue, item-get sequence, or captured menu surface temporarily present one fullscreen camera and hide non-presenting players? | `event_presentation` | Implemented opt-in override above the camera sidecar; howling stones, Midna service, interactive dialogue, generic ItemGet, and captured fullscreen menu surfaces are classified consumers |
 | Which player activated an NPC/object/event trigger? | `interaction_owner` / `event_owner` | Initial knob/shutter prompt-side and accepted door-demo proofs implemented; generic ALINK talk/check/pickup actions already flow through slot-local attention/status, while remaining world-actor singleton prompts are audited case by case |
 | Which camera or player should audio listener state follow? | `audio_listener_owner` | Not implemented; audio listener stays camera 0/P1-owned |
 | Should this actor, world chunk, foliage/detail, or background part be draw-culled for local split-screen? | `render_visibility` | Initial PC split-screen bypass implemented for known P1-camera draw-culling paths |
@@ -182,12 +182,17 @@ Current behavior:
 - The painter installs the active view and refreshes registered kankyo/J3D model materials for each
   viewport before draw-list replay.
 - Camera-facing 3D line materials are refreshed per viewport alongside those registered models.
+- P2-owned fullscreen presentation still refreshes camera-1 culling, real shadows, kankyo/J3D
+  materials, particle-creation culling, and GX lights even though only one window is replayed.
 - After camera 1 draw, camera 0's global J3D view is restored so later global lighting/debug code
   does not accidentally inherit P2's camera.
 
 Audit decision:
 
 - Keep per-viewport refresh centralized in `render_materials` and the painter loop.
+- Keep `shouldPresentSplitViewports()` separate from
+  `shouldRefreshViewportOwnedWorldState()`. The former controls whether both windows and split-only
+  framebuffer work run; the latter remains true for camera-1 fullscreen presentation.
 - Add future material families to that registry rather than scattering actor-local refresh calls.
 - Continue restoring a known global baseline after the split viewport loop.
 - Treat the current lighting fix as a valid V1, but a future `viewport_render_state` pass should
@@ -253,8 +258,39 @@ Audit decision:
   `message_owner` after native message acceptance, with `talkStartInit()` as fallback insurance.
   Owned talk cameras must use the retained presenter/listener actor for fallback focus paths instead
   of camera `mpPlayerActor`.
+- Generic `DEFAULT_GETITEM` is now an explicit `ItemGet` presentation consumer through
+  `item_get_owner`. Poe soul collection is the validated producer handoff; other pickup, chest,
+  equipment, insect, and NPC reward producers still need individual collection-owner audits.
   Other message-camera scenes, Hidden Skill training, minigames, and cutscenes still need
   case-by-case classification and must not collapse split-screen automatically.
+
+### Singular presentation teardown and split rebuild
+
+The validated restore boundary is the entry to `mDoGph_Painter()`, after native camera actors have
+executed and before window count, viewport policy, shadow priming, lighting, or kankyo material
+replay is sampled.
+
+For ItemGet:
+
+1. `dEvent_manager_c::endProc()` identifies the closing event from `event->getName()` and requests
+   owner release. `getRunEventName()` cannot classify END state because it returns
+   `"NOT RUNNING"`.
+2. Native event teardown sets camera play to recovery state `2`.
+3. `dEvt_control_c::Step()` later clears camera play to `0`, but that step occurs before camera
+   actor execution in `dScnPly_Execute()`.
+4. Camera actors consume their recovery state.
+5. Painter entry calls `item_get_owner::finishPendingEnd()`. Ending
+   `event_presentation::Source::ItemGet` refreshes both window layouts before the renderer queries
+   them.
+
+Do not end presentation in `endProc()` or immediately after `setCameraPlay(0)`. Those points are
+both pre-camera-consumption. Reopening split presentation there can let native recovery overwrite
+the layout and can switch render policy while camera/view/light globals still describe the
+fullscreen event. The observed symptoms were failure to restore split-screen, missing or corrupted
+ground rendering, and camera-relative room lighting.
+
+The painter boundary is semantic rather than frame-count based and remains valid with or without
+frame interpolation.
 
 ## Render Visibility And Culling Decision
 

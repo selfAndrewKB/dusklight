@@ -16,6 +16,9 @@
 #include <cstring>
 
 #include "dusk/string.hpp"
+#if TARGET_PC
+#include "dusk/coop/item_get_owner.h"
+#endif
 
 #if DEBUG
 static dEvM_HIO_c l_HIO;
@@ -615,6 +618,12 @@ void dEvent_manager_c::endProc(s16 evId, BOOL isClose) {
 
     const char* param = "ALL";
     fopAcM_Search((fopAcIt_JudgeFunc)allOffObjectCallBack, (void*)param);
+#if TARGET_PC
+    if (dusk::coop::item_get_owner::isDefaultGetItemEvent(event->getName())) {
+        // Co-op: classify the closing event directly; run-event lookup rejects END state.
+        dusk::coop::item_get_owner::requestEnd();
+    }
+#endif
     mCameraPlay = 2;
     event->mEventState = 0;
     mCurrentEvType = 0;

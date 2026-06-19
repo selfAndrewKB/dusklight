@@ -44,6 +44,7 @@
 #include "dusk/coop/alink_form_resources.h"
 #include "dusk/coop/camera.h"
 #include "dusk/coop/event_presentation.h"
+#include "dusk/coop/item_get_owner.h"
 #include "dusk/coop/message_owner.h"
 #include "dusk/coop/midna_owner.h"
 #include "dusk/coop/player_attention.h"
@@ -924,6 +925,7 @@ static int dScnPly_Delete(dScnPly_c* i_this) {
     dusk::coop::alink_form_resources::resetRuntime();
     dusk::coop::midna_owner::reset();
     dusk::coop::message_owner::reset();
+    dusk::coop::item_get_owner::reset();
     dusk::coop::event_presentation::reset();
     dusk::coop::camera::resetSplitScreenCameraState();
 #endif
@@ -1486,6 +1488,7 @@ static int phase_4(dScnPly_c* i_this) {
     dusk::coop::alink_form_resources::resetRuntime();
     dusk::coop::midna_owner::reset();
     dusk::coop::message_owner::reset();
+    dusk::coop::item_get_owner::reset();
     dusk::coop::event_presentation::reset();
     dusk::coop::camera::resetSplitScreenCameraState();
 #endif

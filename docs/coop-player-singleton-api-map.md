@@ -193,15 +193,17 @@ Poe (`E_HP`) shows that ghost visibility and vulnerability can be selected/activ
 without becoming combat targeting. Wake, move, attack, and down-state steering use the Combat owner;
 wolf-form and wolf-sense reveal gates scan active players. Once a wolf's native proc actor points at
 the Poe and enters pull-out, retain that exact ALINK as a `Collect` owner for soul draw suppression
-and item-event conditions. Camera-facing soul billboards and fullscreen item presentation remain
-separate per-viewport/event-presentation questions.
+and item-event conditions. Bridge that retained collector into `item_get_owner` before
+`DEFAULT_GETITEM` is ordered so the owner-only ALINK staff, `Demo_Item` position/form, item-message
+pad, slot-local item-get status, and fullscreen presentation all agree. Camera-facing soul
+billboards remain a separate per-viewport presentation question.
 The larger Poe variant (`E_PO`) reinforces that split: ordinary action caches, wolf-sense wake and
 shared reveal palette, advanced rolling/circling formation, and down-position geometry can share the ghost targeting shape,
 while the exact wolf-down proc owner is retained through soul draw suppression, dead-state
-camera/player selection and hang angle, lock cleanup, and item flow. Opening/limbering/roll/holl/
-formation demos, billboard replay, and fullscreen presentation collapse remain authored
-presentation surfaces. Do not classify them as combat targeting just because the same file also has
-search and attack movement.
+camera/player selection and hang angle, lock cleanup, and the `item_get_owner` handoff.
+Opening/limbering/roll/holl/formation demos and billboard replay remain authored presentation
+surfaces. Do not classify them as combat targeting just because the same file also has search and
+attack movement.
 
 Shadow Insects (`E_YM`) use the same selected-target cache pattern for ordinary movement/attack
 distance and angle. Their surprise-lock, surprise-near, surprise recovery, and fly/orbit states also
@@ -404,18 +406,27 @@ player who owns the accepted catch event, so it routes through `event_owner`.
   proves it must be split.
 - **Training owner:** retained instructional/event combat sequences such as Hidden Skills. Once a
   trainer binds to a slot, required move checks and forced placement should follow that slot.
+- **Item-get owner:** retained collector for generic `DEFAULT_GETITEM`. A producer must hand off the
+  exact collecting slot before ordering the event; the pending record is keyed to source actor plus
+  process ID. Once `PROC_GET_ITEM` begins, it owns the singular ALINK staff, `Demo_Item`,
+  item-message pad, slot-local item-get status, and `event_presentation::ItemGet`. Event END requests
+  release, but actual release waits until painter entry after camera recovery has executed. Poe soul
+  collection is validated; other pickup/chest/NPC/insect/equipment producers remain unaudited.
 - **Singular event presentation:** opt-in fullscreen presentation for authored sequences and
   captured menu surfaces. It expands the retained presenter's existing render window and hides
   non-presenting player visuals without disabling co-op simulation. Howling stones remain P1/global;
   the item ring presents its retained `ui_owner` slot; Start menus, maps, and Agitha's insect screen
-  remain P1/global. Interactive dialogue opts in through `message_owner`, but passive overlays,
-  item-get surfaces, boss names, stage titles, and unaudited message-camera scenes must not silently
-  become singular consumers.
+  remain P1/global. Interactive dialogue opts in through `message_owner`, and generic
+  `DEFAULT_GETITEM` acquisition opts in through `item_get_owner`; passive overlays, unrelated item
+  cameras, boss names, stage titles, and unaudited message-camera scenes must not silently become
+  singular consumers.
 - **Viewport/render ownership:** split-screen render passes, post effects, lighting, fog, HUD
   projection, draw-time visibility culling, and shadows should be owned by viewport/render policy.
   Use `render_visibility` for shared draw-culling decisions, `render_materials` for viewport-owned
   kankyo/J3D material state, `render_effects` for late world/effect versus fullscreen framebuffer
-  ownership, and `render_shadows` for real-shadow culling or baked shadow matrix ownership. Do not
+  ownership, and `render_shadows` for real-shadow culling or baked shadow matrix ownership. A P2
+  fullscreen surface draws one window but still needs camera-1 viewport-owned world refresh; do not
+  equate “not presenting both split windows” with “camera-0 render state is sufficient.” Do not
   scatter actor-specific render fixes when a central PC split-screen policy can answer the question.
 - **Primary/global state:** story protagonist, demo/cutscene, save/restart, HUD, passive message, or
   single-camera state. Keep P1/global until a dedicated milestone proves otherwise.

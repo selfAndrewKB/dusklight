@@ -13,6 +13,10 @@
 #include "d/actor/d_a_player.h"
 #include "JSystem/J3DGraphBase/J3DMaterial.h"
 #include "Z2AudioLib/Z2Instances.h"
+#if TARGET_PC
+#include "d/actor/d_a_alink.h"
+#include "dusk/coop/item_get_owner.h"
+#endif
 #include <cstring>
 
 static cXyz l_player_offset = cXyz(0.0f, 115.0f, 54.0f);
@@ -114,7 +118,11 @@ void daDitem_c::actionStart() {
         }
 
         if (m_itemNo == dItemNo_DUNGEON_EXIT_e || m_itemNo == dItemNo_DUNGEON_EXIT_2_e) {
+#if TARGET_PC
+            current.angle.y = dusk::coop::item_get_owner::currentPlayer()->shape_angle.y;
+#else
             current.angle.y = dComIfGp_getPlayer(0)->shape_angle.y;
+#endif
         }
 
         if (m_itemNo == dItemNo_UTAWA_HEART_e || m_itemNo == dItemNo_KAKERA_HEART_e) {
@@ -342,7 +350,12 @@ void daDitem_c::onEventReg(int i_regNo, int i_value) {
 }
 
 void daDitem_c::set_pos() {
+#if TARGET_PC
+    // Co-op: the presented item follows the ALINK that owns the accepted item-get sequence.
+    daPy_py_c* player = dusk::coop::item_get_owner::currentPlayer();
+#else
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
 
     cXyz pos;
     cXyz offset;
@@ -367,7 +380,13 @@ void daDitem_c::set_pos() {
         offset = offset_tbl[0];
     }
 
-    if (daPy_py_c::checkNowWolf()) {
+    if (
+#if TARGET_PC
+        player->checkWolf()
+#else
+        daPy_py_c::checkNowWolf()
+#endif
+    ) {
         offset = l_wolf_offset;
         sp38.y = player->getLeftFootPosP()->y;
     } else if (player->checkHorseRide()) {
