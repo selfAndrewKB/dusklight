@@ -18,8 +18,11 @@
 
 #include "dusk/settings.h"
 #if TARGET_PC
+#include "d/actor/d_a_alink.h"
+#include "dusk/coop/damage_owner.h"
 #include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/player_attention.h"
+#include "dusk/coop/player_camera_status.h"
 #include "dusk/coop/selected_target_state.h"
 #endif
 
@@ -179,6 +182,66 @@ static void coOpYmCancelWolfLockForAll(daE_YM_c* i_this) {
             player->cancelWolfLock(i_this);
         }
     });
+}
+
+static daPy_py_c* coOpYmFindCrashPlayer(const cXyz& pos, f32 distance, bool xzOnly) {
+    daPy_py_c* result = NULL;
+    f32 nearest = distance;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+        daPy_py_c* player = static_cast<daPy_py_c*>(actor);
+        if (player == NULL ||
+            (!player->checkFrontRollCrash() && !player->checkWolfAttackReverse()))
+        {
+            return;
+        }
+
+        const cXyz delta = player->current.pos - pos;
+        const f32 playerDistance = xzOnly ? delta.absXZ() : delta.abs();
+        if (playerDistance < nearest) {
+            nearest = playerDistance;
+            result = player;
+        }
+    });
+    return result;
+}
+
+static daPy_py_c* coOpYmFindWolfDigPlayer(const cXyz& pos, f32 distance) {
+    daPy_py_c* result = NULL;
+    f32 nearest = distance;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+        daPy_py_c* player = static_cast<daPy_py_c*>(actor);
+        if (player == NULL || !player->checkWolfDig()) {
+            return;
+        }
+        const f32 playerDistance = (player->getLeftHandPos() - pos).abs();
+        if (playerDistance < nearest) {
+            nearest = playerDistance;
+            result = player;
+        }
+    });
+    return result;
+}
+
+static bool coOpYmAnyWolfDig() {
+    bool found = false;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+        daPy_py_c* player = static_cast<daPy_py_c*>(actor);
+        if (player != NULL && player->checkWolfDig()) {
+            found = true;
+        }
+    });
+    return found;
+}
+
+static bool coOpYmAnyWolfLockCut() {
+    bool found = false;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+        daPy_py_c* player = static_cast<daPy_py_c*>(actor);
+        if (player != NULL && player->getCutType() == daPy_py_c::CUT_TYPE_WOLF_LOCK) {
+            found = true;
+        }
+    });
+    return found;
 }
 #endif
 
@@ -416,11 +479,18 @@ void daE_YM_c::setFireEffect() {
 }
 
 bool daE_YM_c::checkWallCrash() {
+#if TARGET_PC
+    // Co-op: wall insects react to the active player performing the native crash action nearby.
+    if (mType == 1 && coOpYmFindCrashPlayer(mPrevPos, 600.0f, true) != NULL)
+#else
     if (mType == 1 && (daPy_getPlayerActorClass()->checkFrontRollCrash() ||
                        daPy_getPlayerActorClass()->checkWolfAttackReverse()))
+#endif
     {
+#if !TARGET_PC
         cXyz tmp = daPy_getPlayerActorClass()->current.pos - mPrevPos;
         if (tmp.absXZ() < 600.0f) {
+#endif
             if (mTagPosP != NULL) {
                 setActionMode(ACT_FLY);
             } else {
@@ -428,7 +498,9 @@ bool daE_YM_c::checkWallCrash() {
             }
 
             return true;
+#if !TARGET_PC
         }
+#endif
     }
 
     return false;
@@ -556,7 +628,17 @@ bool daE_YM_c::checkSurpriseLock() {
 }
 
 bool daE_YM_c::checkRailSurprise() {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectYmTargetState(this, "e_ym.rail_surprise", false,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL, NULL);
+    // Co-op: this camera-status producer is already slot-local on the selected ALINK.
+    if (targetState.player != NULL &&
+        dusk::coop::player_camera_status::checkStatus0ForPlayer(
+            static_cast<daAlink_c*>(targetState.player), 0x8000000)) {
+#else
     if (dComIfGp_checkPlayerStatus0(0, 0x8000000)) {
+#endif
         if (mDistToPlayer > 200.0f || (s16)cLib_distanceAngleS(mAngleToPlayer, shape_angle.y) > 0x2000) {
             field_0x70a = 0x1e;
         }
@@ -747,7 +829,9 @@ void daE_YM_c::setActionMode(int i_action) {
 }
 
 void daE_YM_c::executeWait() {
+#if !TARGET_PC
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
     cXyz my_vec_0;
     if (mType != 2) {
         mSound.startCreatureSoundLevel(Z2SE_EN_YM_WAIT, 0, -1);
@@ -852,6 +936,15 @@ void daE_YM_c::executeWait() {
                 case 2:
                     break;
                 default:
+#if TARGET_PC
+                    // Co-op: the native dig wake volume accepts either active wolf.
+                    if (coOpYmFindWolfDigPlayer(current.pos, 200.0f) != NULL) {
+                        field_0x6f0 = 0x14;
+                        mMode = 3;
+                        field_0x6a6 = 0;
+                        fopAcM_OnStatus(this, fopAcStts_UNK_0x4000_e);
+                    }
+#else
                     if (player->checkWolfDig()) {
                         my_vec_0 = player->getLeftHandPos() - current.pos;
                         if (my_vec_0.abs() < 200.0f) {
@@ -861,6 +954,7 @@ void daE_YM_c::executeWait() {
                             fopAcM_OnStatus(this, fopAcStts_UNK_0x4000_e);
                         }
                     }
+#endif
             }
 
             break;
@@ -897,7 +991,9 @@ void daE_YM_c::executeWait() {
 }
 
 void daE_YM_c::executeMove() {
+#if !TARGET_PC
     daPy_py_c* player = daPy_getPlayerActorClass(); // unused
+#endif
     cXyz my_vec_0;
     cXyz my_vec_1;
     f32 my_val = field_0x6e0 - 50.0f;
@@ -994,8 +1090,10 @@ void daE_YM_c::executeMove() {
 
 void daE_YM_c::executeEscape() {
     cLib_chaseF(&speed.y, -60.0f, 5.0f);
+#if !TARGET_PC
     daPy_py_c* player = daPy_getPlayerActorClass();
     (void) player; // acquired, but not used.
+#endif
     cXyz my_vec_0;
     if (field_0x6dc < 0.0f) {
         field_0x6dc += 8.0f;
@@ -1177,7 +1275,16 @@ void daE_YM_c::executeDown() {
             mAcch.ClrGroundHit();
             mAcchCir.SetWall(40.0f, 60.0f);
             if (mType == 1) {
+#if TARGET_PC
+                const dusk::coop::damage_owner::DamageOwnerResult owner =
+                    dusk::coop::damage_owner::resolveDamageOwner(this, mAtInfo.mpCollider);
+                // Co-op: the post-hit wall trace starts at the player who knocked this insect down.
+                cXyz my_vec_0 =
+                    owner.localPlayerActor != NULL ? owner.localPlayerActor->current.pos
+                                                   : dComIfGp_getPlayer(0)->current.pos;
+#else
                 cXyz my_vec_0 = daPy_getPlayerActorClass()->current.pos;
+#endif
                 my_vec_0.y += 50.0f;
                 cXyz my_vec_1(speedF * cM_ssin(shape_angle.y), speed.y, speedF * cM_scos(shape_angle.y));
                 my_vec_1 += current.pos;
@@ -1856,7 +1963,16 @@ void daE_YM_c::executeAttack() {
 }
 
 bool daE_YM_c::checkAttackEnd() {
-    if (daPy_getPlayerActorClass()->checkClimbMove() == 0) {
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectYmTargetState(this, "e_ym.attack_end", true,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL, NULL);
+    daPy_py_c* player =
+        targetState.player != NULL ? targetState.player : daPy_getPlayerActorClass();
+#else
+    daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
+    if (player->checkClimbMove() == 0) {
         setActionMode(ACT_MOVE);
         speedF = 0.0f;
         return 1;
@@ -1899,7 +2015,15 @@ bool daE_YM_c::setAttackMotion() {
 
 void daE_YM_c::executeAttackWall() {
     field_0x6fa = 0x1e;
+#if TARGET_PC
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    coOpSelectYmTargetState(this, "e_ym.attack_wall", true,
+                            dusk::coop::EnemyTargetMode::StickyCombat, &targetState, NULL, NULL);
+    daPy_py_c* player =
+        targetState.player != NULL ? targetState.player : daPy_getPlayerActorClass();
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
     cXyz my_vec_0;
     cXyz my_vec_1;
     cXyz my_vec_2;
@@ -2457,25 +2581,35 @@ void daE_YM_c::setNextPathPoint() {
 }
 
 bool daE_YM_c::checkRailDig() {
+#if TARGET_PC
+    // Co-op: rail dig extraction belongs to whichever active wolf enters the native hand radius.
+    daPy_py_c* player = coOpYmFindWolfDigPlayer(current.pos, 200.0f);
+    if (player != NULL) {
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
     cXyz my_vec_0;
     if (player->checkWolfDig()) {
         my_vec_0 = player->getLeftHandPos() - current.pos;
         if (my_vec_0.abs() < 200.0f) {
+#endif
             field_0x714 &= ~fopAc_AttnFlag_ETC_e;
             field_0x6f0 = 0x14;
             mMode = 3;
             mAcchCir.SetWall(40.0f, 60.0f);
             fopAcM_OnStatus(this, fopAcStts_UNK_0x4000_e);
             return true;
+#if !TARGET_PC
         }
+#endif
     }
 
     return false;
 }
 
 void daE_YM_c::executeRail() {
+#if !TARGET_PC
     daPy_py_c* player = daPy_getPlayerActorClass();;
+#endif
     cXyz my_vec_0;
     switch (mMode) {
         case 0: {
@@ -2495,7 +2629,14 @@ void daE_YM_c::executeRail() {
         case 1: {
             if (!checkRailDig()) {
                 mSound.startCreatureSoundLevel(Z2SE_EN_YM_WAIT, 0, -1);
-                if (player->checkWolfDig() == 0 && field_0x6f0 == 0) {
+                if (
+#if TARGET_PC
+                    !coOpYmAnyWolfDig()
+#else
+                    player->checkWolfDig() == 0
+#endif
+                    && field_0x6f0 == 0)
+                {
                     setNextPathPoint();
                 }
             }
@@ -2842,11 +2983,18 @@ void daE_YM_c::executeFire() {
             if (field_0x6f0) {
                 setElecEffect2();
                 mSound.startCreatureSoundLevel(Z2SE_EN_YM_ELECTRIC_LOOP, 0, -1);
-            } else if (daPy_getPlayerActorClass()->checkFrontRollCrash() || daPy_getPlayerActorClass()->checkWolfAttackReverse()) {
+#if TARGET_PC
+            } else if (coOpYmFindCrashPlayer(current.pos, 250.0f, false) != NULL) {
+                // Co-op: fire insects wake from the same nearby crash action for any active slot.
+                field_0x6f0 = 10;
+#else
+            } else if (daPy_getPlayerActorClass()->checkFrontRollCrash() ||
+                       daPy_getPlayerActorClass()->checkWolfAttackReverse()) {
                 cXyz pos_diff = daPy_getPlayerActorClass()->current.pos - current.pos;
                 if (pos_diff.abs() < 250.0f) {
                     field_0x6f0 = 10;
                 }
+#endif
             }
             if (field_0x6d4) {
                 field_0x714 = fopAc_AttnFlag_BATTLE_e;
@@ -2972,7 +3120,9 @@ void daE_YM_c::executeFire() {
 }
 
 void daE_YM_c::setRiverAttention() {
+#if !TARGET_PC
     cXyz player_pos = daPy_getPlayerActorClass()->current.pos;
+#endif
     attention_info.distances[fopAc_attn_BATTLE_e] = 60;
     field_0x714 = 0;
     if (current.pos.abs(mpKago->current.pos) > 2000.0f) {
@@ -2995,7 +3145,9 @@ void daE_YM_c::setLockByCargo() {
 }
 
 void daE_YM_c::executeRiver() {
+#if !TARGET_PC
     cXyz player_pos = daPy_getPlayerActorClass()->current.pos;
+#endif
     cXyz pnt_pos = (Vec)dPath_GetPnt(mpPath, mCurrentPntNo)->m_position;
     cXyz my_vec_0;
     f32 next_path;
@@ -3216,7 +3368,11 @@ void daE_YM_c::checkFrinedSamePos() {
 
 void daE_YM_c::action() {
     int reg_r27 = 0; // set but not used
+#if TARGET_PC
+    if (coOpYmAnyWolfLockCut()) {
+#else
     if (daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_WOLF_LOCK) {
+#endif
         reg_r27 = 1;
         field_0x700 = 0;
     }

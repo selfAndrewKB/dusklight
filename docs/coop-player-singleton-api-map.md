@@ -161,10 +161,12 @@ Twilit Carrier Kargarok (`E_YC`) and Rider (`E_RDY`) add the split-actor carry v
 rule. The carrier detects the caught selected target, but the rider owns the native carry demo and
 camera state machine. Key the retained `Carry` owner to the actor that consumes the demo/camera
 state, then let that actor choose the retained slot's player and player camera for `changeDemoMode`,
-throw damage, camera stop/reset, and `event_presentation::EnemyRetainedInteraction`. Ordinary Rider
-arrows can inherit the retained Combat target, while path, coach, bridge, King Bulblin, and other
-authored setpiece arrows/demos stay on their native target until a dedicated setpiece-owner policy
-classifies them.
+throw damage, camera stop/reset, and `event_presentation::EnemyRetainedInteraction`. Shadow Bulblin's
+ordinary wake/LOS, combat cache, guard, damage, mounted-hit, mobile/stationary bow steering and
+arrows, bark/wolf/down, and finishing-blow paths can use normal combat/damage/defender/horse
+ownership while carry demo modes 1-4 continue to use the retained caught slot. Bridge, field,
+Kargarok, `BOW_IKKI2`, and later demo modes stay authored
+until a dedicated setpiece-owner policy classifies them.
 
 Bulblin Rider (`E_RD`) is the mounted/setpiece boundary for regular-enemy batching. Ordinary Link
 combat can still use the usual dispatcher-cache pattern: fill native distance/angle fields from one
@@ -182,16 +184,24 @@ horn, death notification, and demo-camera paths. Preserve those authored targets
 mounted/setpiece or presentation API specifically owns the question; do not flatten them into
 nearest-player targeting.
 
+King Bulblin (`E_RDB`) applies the same boundary inside one actor. Ordinary on-foot combat can retain
+a sticky player target, resolve cut/facing/death reactions from `damage_owner`, and notice owner-local
+hookshot or Ball-and-Chain state. LV9/start/end progression, mount behavior, and demo camera/player
+placement remain encounter-authored P1/global state rather than nearest-player combat.
+
 Poe (`E_HP`) shows that ghost visibility and vulnerability can be selected/active-player state
 without becoming combat targeting. Wake, move, attack, and down-state steering use the Combat owner;
-wolf-form and wolf-sense reveal gates scan active players. Soul pull-out drawing, item-get, and
-death presentation are separate down/soul-owner or event/presentation surfaces and should stay
-documented until a specific owner API exists.
-The larger Poe variant (`E_PO`) reinforces that split: ordinary action caches, wolf-sense wake, and
-advanced rolling/circling formation can share the ghost targeting shape, while wolf-down pull,
-soul/item presentation, roll/holl demos, camera/player placement, and special death flow are
-authored retained/presentation surfaces. Do not classify them as combat targeting just because the
-same file also has search and attack movement.
+wolf-form and wolf-sense reveal gates scan active players. Once a wolf's native proc actor points at
+the Poe and enters pull-out, retain that exact ALINK as a `Collect` owner for soul draw suppression
+and item-event conditions. Camera-facing soul billboards and fullscreen item presentation remain
+separate per-viewport/event-presentation questions.
+The larger Poe variant (`E_PO`) reinforces that split: ordinary action caches, wolf-sense wake and
+shared reveal palette, advanced rolling/circling formation, and down-position geometry can share the ghost targeting shape,
+while the exact wolf-down proc owner is retained through soul draw suppression, dead-state
+camera/player selection and hang angle, lock cleanup, and item flow. Opening/limbering/roll/holl/
+formation demos, billboard replay, and fullscreen presentation collapse remain authored
+presentation surfaces. Do not classify them as combat targeting just because the same file also has
+search and attack movement.
 
 Shadow Insects (`E_YM`) use the same selected-target cache pattern for ordinary movement/attack
 distance and angle. Their surprise-lock, surprise-near, surprise recovery, and fly/orbit states also
@@ -200,9 +210,11 @@ still points at P1. They also prove that "is this actor locked?" and "which play
 are different questions. Surprise wake can observe slot-local `player_attention`, but branches that
 sample player position or distinguish ordinary lock-on from wolf lock must use the locking player
 and the owner-local wolf-lock state, not a stale Combat target and not a generic any-lock boolean.
-Wolf-sense reveal, wolf-bark reaction, dig/front-roll triggers, tear-collection, rail/river,
-Midna-sensitive, lock-cancel cleanup, and camera-visibility paths are separate player-state or
-presentation questions. Convert them by question, not by file-wide singleton replacement.
+Wolf-sense reveal, wolf-bark reaction, crash/front-roll triggers, rail-surprise status, down wall
+trace, attack-wall/end movement, wolf-lock-cut observation/cancellation, tear collection, river/rail
+scripting, Midna-sensitive paths, and camera visibility are separate player-state or presentation
+questions. The first group now uses active-player/owner APIs; authored river/rail movement, Midna,
+and camera presentation remain explicit deferred surfaces.
 
 Tears of Light (`Obj_Drop`) are the retained collection version of this split. Shadow Insect death
 plays disappear effects, but the actual pickup object owns the native collection radius, draw-in
@@ -290,7 +302,7 @@ player who owns the accepted catch event, so it routes through `event_owner`.
 | "Which active player can trip this authored trigger or room switch?" | future `world_trigger` helpers plus `world.switch` diagnostics | Diagnostics implemented; Ghost Rat ceiling-drop gates exposed switches `227-229` in `D_MN10` room `10`; Ghost Rat now opens the native authored room switch when an active player satisfies the same local wake predicate |
 | "Who did this enemy attack touch, and was that player guarding/blocking?" | `dusk::coop::defender_owner` | Initial direct-player implementation for Bokoblin guard collision |
 | "Which player collided, rode, pushed, stood on, or picked this up?" | broader collision-owner helpers | Not implemented yet |
-| "Which player is caught, stunned, grabbed, carried, swallowed, or retained by this actor?" | `dusk::coop::caught_stun_owner` / `dusk::coop::wolf_catch_owner` / `dusk::coop::retained_interaction_owner` / future caught-grab helpers | Gibdo scream stun uses `caught_stun_owner`; Keese and Skulltula wolf bites use `wolf_catch_owner`; Ghost Rat attach, Peahat hookshot carry, Deku Like swallow, and Twilit Carrier Rider-carry use `retained_interaction_owner` |
+| "Which player is caught, stunned, grabbed, carried, swallowed, or retained by this actor?" | `dusk::coop::caught_stun_owner` / `dusk::coop::wolf_catch_owner` / `dusk::coop::retained_interaction_owner` / future caught-grab helpers | Gibdo scream stun uses `caught_stun_owner`; Keese wolf bites use `wolf_catch_owner`; Skulltula `StCaught`, Ghost Rat attach, Peahat hookshot carry, Deku Like swallow, Twilit Carrier Rider-carry, and Poe soul pull use `retained_interaction_owner` |
 | "Which active player or owned item should this enemy notice immediately?" | `dusk::coop::item_awareness` / narrow active-player scans | Initial hookshot-awareness proof in White Wolfos; Keese boomerang wind uses `item_awareness` |
 | "Which player/camera owns this spawn intro, child facing, or presentation angle?" | future presentation/camera-owner helpers | White Wolfos uses a narrow helper; broader API deferred |
 | "Which target or owner should this enemy-spawned weapon/object inherit?" | parent/master `enemy_targeting` scope, `damage_owner`, or retained interaction owner depending on the source | Chilfos thrown spear launch math inherits the parent Combat target when the parent is live; Bomb Bug hookshot/boomerang-created bombs inherit the player/item damage owner before NBOMB create-time setup |
@@ -341,10 +353,10 @@ player who owns the accepted catch event, so it routes through `event_owner`.
   its own ownership model.
 - **Caught/grab-owner / caught-stun-owner / wolf-catch-owner / retained-interaction-owner:** a retained interaction with one specific player. It
   must not retarget to the nearest player while the grab/stun is active, and it must not borrow P1
-  camera/body/controller state for P2. Gibdo scream stun now uses `caught_stun_owner`; Keese
-  and Skulltula wolf-bite holds use `wolf_catch_owner`; Ghost Rat attach and Peahat hookshot carry
-  use `retained_interaction_owner`; remaining swallow/grab files need their own retained-owner proof
-  before conversion.
+  camera/body/controller state for P2. Gibdo scream stun uses `caught_stun_owner`; Keese wolf-bite
+  holds use `wolf_catch_owner`; Skulltula `StCaught`, Ghost Rat attach, Peahat hookshot carry, and
+  Poe soul pull use `retained_interaction_owner`; remaining swallow/grab files need their own
+  retained-owner proof before conversion.
 - **Item awareness:** immediate item/tool reactions should ask `item_awareness` or a similarly
   scoped owner scan. Do not route boomerang, hookshot, bomb, or bait reaction checks through sticky
   combat targeting just because an enemy also has a combat target.

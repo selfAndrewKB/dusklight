@@ -3864,6 +3864,8 @@ public:
     const cXyz& getIronBallChainHandRootPos() const { return mHookshotTopPos; }
 
     fopAc_ac_c* getAtnActor() { return mTargetedActor; }
+    // Co-op: retained enemy interactions need the native proc-owned actor, not a nearest-player guess.
+    fopAc_ac_c* getProcActor() { return field_0x280c.getActor(); }
 
     void itemHitSE(u32 i_soundID, u32 i_mapinfo, Z2SoundObjBase* i_other) {
         mZ2Link.startHitItemSE(i_soundID, i_mapinfo, i_other, -1.0f);

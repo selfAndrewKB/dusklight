@@ -6,6 +6,7 @@
 #include "d/dolzel_rel.h" // IWYU pragma: keep
 
 #include "d/actor/d_a_e_st.h"
+#include "d/actor/d_a_alink.h"
 #include "f_op/f_op_kankyo_mng.h"
 #include "f_op/f_op_actor_enemy.h"
 #include "Z2AudioLib/Z2Instances.h"
@@ -439,6 +440,28 @@ static void coOpStClearCaughtPlayer(e_st_class* i_this, const char* label) {
     dusk::coop::retained_interaction_owner::clearRetainedInteraction(
         label, &i_this->actor,
         dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach);
+}
+
+static bool coOpStAnyPlayerCaught() {
+    bool caught = false;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+        if (((daPy_py_c*)actor)->getStCaught()) {
+            caught = true;
+        }
+    });
+    return caught;
+}
+
+static daPy_py_c* coOpStFinishingPlayer(e_st_class* i_this) {
+    daPy_py_c* result = NULL;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+        daAlink_c* player = static_cast<daAlink_c*>(actor);
+        // Co-op: ALINK retains the exact downed enemy through the finishing-blow proc.
+        if (result == NULL && player != NULL && player->getProcActor() == &i_this->actor) {
+            result = player;
+        }
+    });
+    return result;
 }
 #endif
 
@@ -913,8 +936,7 @@ static s16 pl_angle_get(e_st_class* i_this) {
     // Co-op: chase/attack-facing uses the retained Skulltula combat target, transformed through
     // the same wall/ceiling-local angle math as vanilla.
     return coOpStLocalAngleToTarget(i_this, "e_st.pl_angle");
-#endif
-
+#else
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
     cXyz pos_delta, pos;
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
@@ -924,6 +946,7 @@ static s16 pl_angle_get(e_st_class* i_this) {
     cMtx_YrotM(*calc_mtx, -i_this->field_0x69c.y);
     MtxPosition(&pos_delta, &pos);
     return cM_atan2s(pos.x, pos.z);
+#endif
 }
 
 static void e_st_move(e_st_class* i_this) {
@@ -987,7 +1010,13 @@ static void e_st_pl_search(e_st_class* i_this) {
     switch (i_this->mActionPhase) {
         case PHASE_INIT:
             if (i_this->mTimers[0] == 0) {
-                if (!pl_check(i_this, AREG_F(0) + 350.0f) && daPy_getPlayerActorClass()->getStCaught()) {
+                if (!pl_check(i_this, AREG_F(0) + 350.0f) &&
+#if TARGET_PC
+                    coOpStAnyPlayerCaught()
+#else
+                    daPy_getPlayerActorClass()->getStCaught()
+#endif
+                ) {
                     anm_init(i_this, BCK_ST_WAIT02, 5.0f, J3DFrameCtrl::EMode_LOOP, 1.0f);
                     a_this->speedF = 0.0f;
                     i_this->mActionPhase = PL_SEARCH_WAIT02;
@@ -1039,7 +1068,13 @@ static void e_st_pl_search(e_st_class* i_this) {
             break;
 
         case PL_SEARCH_WAIT02:
-            if (pl_check(i_this, AREG_F(0) + 350.0f) || !daPy_getPlayerActorClass()->getStCaught()) {
+            if (pl_check(i_this, AREG_F(0) + 350.0f) ||
+#if TARGET_PC
+                !coOpStAnyPlayerCaught()
+#else
+                !daPy_getPlayerActorClass()->getStCaught()
+#endif
+            ) {
                 i_this->mActionPhase = PHASE_INIT;
             }
             break;
@@ -1442,7 +1477,7 @@ static void e_st_hang(e_st_class* i_this) {
     if (i_this->arg1 == 0 && i_this->mTimers[1] == 0) {
         int _;
 #if TARGET_PC
-        if (!daPy_getPlayerActorClass()->getStCaught() &&
+        if (!coOpStAnyPlayerCaught() &&
             coOpStPlayerAboveAndInXZ(i_this, "e_st.hang_drop_check", 300.0f, &targetState))
         {
             if (a_this->current.pos.y - targetState.pos.y > 1000.0f) {
@@ -1544,7 +1579,13 @@ static void e_st_hang_shoot(e_st_class* i_this) {
             }
 
             if (i_this->mpModelMorf->isStop()) {
-                if (daPy_getPlayerActorClass()->getStCaught() && fopAcM_GetParam(a_this) == 1) {
+#if TARGET_PC
+                if (coOpStCaughtPlayer(i_this, "e_st.hang_shoot_caught", true).found &&
+                    fopAcM_GetParam(a_this) == 1)
+#else
+                if (daPy_getPlayerActorClass()->getStCaught() && fopAcM_GetParam(a_this) == 1)
+#endif
+                {
                     i_this->mAction = ACTION_HANG_DROP;
                     i_this->mActionPhase = PHASE_INIT;
                     i_this->field_0x750 = i_this->field_0x710;
@@ -1720,7 +1761,14 @@ static s8 e_st_hang_2(e_st_class* i_this) {
 #endif
                 fabsf(a_this->current.pos.y - i_this->mBgPos.y) < 10.0f)
             {
-                if (!daPy_getPlayerActorClass()->getStCaught() && i_this->arg1 == 4) {
+                if (
+#if TARGET_PC
+                    !coOpStAnyPlayerCaught()
+#else
+                    !daPy_getPlayerActorClass()->getStCaught()
+#endif
+                    && i_this->arg1 == 4)
+                {
                     i_this->mAction = ACTION_HANG_2_SHOOT;
                     i_this->mActionPhase = PHASE_INIT;
                     return 0;
@@ -1772,7 +1820,14 @@ static s8 e_st_hang_2(e_st_class* i_this) {
 
     cLib_addCalcAngleS2(&a_this->current.angle.y, pl_angle_get(i_this), 0x10, 0x400);
 
-    if (unk_flag || (daPy_getPlayerActorClass()->getStCaught() && fopAcM_GetParam(a_this) == 1)) {
+    if (unk_flag ||
+#if TARGET_PC
+        (coOpStCaughtPlayer(i_this, "e_st.hang2_caught", true).found &&
+         fopAcM_GetParam(a_this) == 1)
+#else
+        (daPy_getPlayerActorClass()->getStCaught() && fopAcM_GetParam(a_this) == 1)
+#endif
+    ) {
         i_this->mSound.startCreatureSound(Z2SE_EN_ST_SILK_RELEASE, 0, -1);
         i_this->mAction = ACTION_HANG_DROP;
         i_this->mActionPhase = PHASE_INIT;
@@ -2435,7 +2490,16 @@ static void e_st_g_chance(e_st_class* i_this) {
         enemy_a_this->offCutDownHitFlg();
         enemy_a_this->offDownFlg();
         i_this->mDeathFlag = 1;
+#if TARGET_PC
+        daPy_py_c* player = coOpStFinishingPlayer(i_this);
+        if (player != NULL) {
+            player->onEnemyDead();
+        } else {
+            daPy_getPlayerActorClass()->onEnemyDead();
+        }
+#else
         daPy_getPlayerActorClass()->onEnemyDead();
+#endif
     }
 }
 
@@ -2638,7 +2702,9 @@ static void damage_check_g(e_st_class* i_this) {
 
 static void ground_angle_set(e_st_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
+#if !TARGET_PC
     fopAc_ac_c* player = dComIfGp_getPlayer(0); // unused
+#endif
     s16 sVar1 = 0;
     s16 sVar2 = 0;
     Vec spbc;
@@ -2765,7 +2831,9 @@ static void foot_control_main(e_st_class* i_this) {
 
 static void action(e_st_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->actor;
+#if !TARGET_PC
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+#endif
     cXyz sp9c, spa8;
 
     if (i_this->arg0 == 2) {

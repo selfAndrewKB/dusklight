@@ -13,6 +13,7 @@
 #include "f_op/f_op_kankyo_mng.h"
 
 #if TARGET_PC
+#include "dusk/coop/damage_owner.h"
 #include "dusk/coop/defender_owner.h"
 #include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/retained_interaction_owner.h"
@@ -160,6 +161,18 @@ static void coOpYhClearBite(e_yh_class* i_this, const char* label) {
         dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach);
 }
 
+static void coOpYhNotifyEnemyDead(e_yh_class* i_this) {
+    const dusk::coop::damage_owner::DamageOwnerResult owner =
+        dusk::coop::damage_owner::resolveDamageOwner((fopAc_ac_c*)i_this,
+                                                     i_this->mAtInfo.mpCollider);
+    // Co-op: delayed death feedback stays with the player whose hit entered this death path.
+    if (owner.localPlayer != NULL) {
+        owner.localPlayer->onEnemyDead();
+    } else {
+        daPy_getPlayerActorClass()->onEnemyDead();
+    }
+}
+
 static void daE_YH_interp_callback(bool isSimFrame, void* pUserWork) {
     e_yh_class* i_this = (e_yh_class*)pUserWork;
     if (!i_this->mLineInterpPrevValid || !i_this->mLineInterpCurrValid) {
@@ -247,13 +260,23 @@ static BOOL pl_check(e_yh_class* i_this, f32 param_2) {
 
 static void damage_check(e_yh_class* i_this) {
     fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
+#if !TARGET_PC
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+#else
+    // Co-op: every hit reaction below consumes the player that owns the actual collider.
+    dusk::coop::damage_owner::DamageOwnerResult damageOwner;
+#endif
     if (i_this->field_0x69e != 0) {
         return;
     }
 
     i_this->mStts.Move();
     if (i_this->mAtSph.ChkAtShieldHit()) {
+#if TARGET_PC
+        const dusk::coop::defender_owner::DefenderOwnerResult defender =
+            dusk::coop::defender_owner::resolveDefenderOwner(a_this, &i_this->mAtSph);
+        dusk::coop::defender_owner::recordDefenderOwnerContact("e_yh.shield", a_this, defender);
+#endif
         if (i_this->field_0x66e == 20) {
             a_this->speed.y = 10.0f;
             a_this->speedF = -15.0f;
@@ -264,7 +287,13 @@ static void damage_check(e_yh_class* i_this) {
             i_this->field_0x69e = 6;
             i_this->field_0x66e = 7;
             i_this->field_0x670 = 0;
+#if TARGET_PC
+            i_this->field_0x684 =
+                defender.localPlayerActor != NULL ? defender.localPlayerActor->shape_angle.y
+                                                   : dComIfGp_getPlayer(0)->shape_angle.y;
+#else
             i_this->field_0x684 = player->shape_angle.y;
+#endif
             i_this->field_0x123c = 10;
         }
         
@@ -276,6 +305,11 @@ static void damage_check(e_yh_class* i_this) {
                 if (i_this->mKukiSphs[i].ChkTgHit()) {
                     i_this->field_0x69e = 10;
                     i_this->mAtInfo.mpCollider = i_this->mKukiSphs[i].GetTgHitObj();
+#if TARGET_PC
+                    // Co-op: severing-item reactions belong to the item owner.
+                    damageOwner = dusk::coop::damage_owner::resolveDamageOwner(
+                        a_this, i_this->mAtInfo.mpCollider);
+#endif
                     if (i_this->mAtInfo.mpCollider->ChkAtType(AT_TYPE_BOOMERANG)) {
                         bVar5 = TRUE;
                     } else {
@@ -296,6 +330,10 @@ static void damage_check(e_yh_class* i_this) {
                         at_power_check(&i_this->mAtInfo);
                         bVar5 = TRUE;
                     }
+#if TARGET_PC
+                    dusk::coop::damage_owner::recordDamageOwnerHit(
+                        "e_yh.kuki", a_this, damageOwner, &i_this->mAtInfo);
+#endif
                     break;
                 }
             }
@@ -305,6 +343,13 @@ static void damage_check(e_yh_class* i_this) {
             i_this->field_0x123c = 10;
             i_this->mAtInfo.mpCollider = i_this->mCcSph.GetTgHitObj();
             cc_at_check(a_this, &i_this->mAtInfo);
+#if TARGET_PC
+            // Co-op: body-hit cut state and facing belong to the damage owner.
+            damageOwner = dusk::coop::damage_owner::resolveDamageOwner(
+                a_this, i_this->mAtInfo.mpCollider);
+            dusk::coop::damage_owner::recordDamageOwnerHit(
+                "e_yh.body", a_this, damageOwner, &i_this->mAtInfo);
+#endif
             if (i_this->mAtInfo.mpCollider->ChkAtType(AT_TYPE_BOMB | AT_TYPE_MIDNA_LOCK)) {
                 i_this->field_0x66e = 21;
                 i_this->mAtInfo.mpActor = dCc_GetAc(i_this->mAtInfo.mpCollider->GetAc());
@@ -324,7 +369,14 @@ static void damage_check(e_yh_class* i_this) {
                 } else {
                     i_this->field_0x66e = 7;
                     i_this->field_0x670 = 0;
+#if TARGET_PC
+                    i_this->field_0x684 =
+                        damageOwner.localPlayerActor != NULL
+                            ? damageOwner.localPlayerActor->shape_angle.y
+                            : dComIfGp_getPlayer(0)->shape_angle.y;
+#else
                     i_this->field_0x684 = player->shape_angle.y;
+#endif
                 }
             } else if (i_this->field_0x66e < 20) {
                 i_this->field_0x66e = 7;
@@ -353,7 +405,14 @@ static void damage_check(e_yh_class* i_this) {
         if (bVar5) {
             if (i_this->field_0x66e == 20) {
                 i_this->field_0x85c = 30.0f;
+#if TARGET_PC
+                i_this->field_0x860 =
+                    damageOwner.localPlayerActor != NULL
+                        ? -damageOwner.localPlayerActor->shape_angle.y
+                        : -dComIfGp_getPlayer(0)->shape_angle.y;
+#else
                 i_this->field_0x860 = -player->shape_angle.y;
+#endif
                 i_this->field_0x670 = 10;
                 a_this->speed.y = 5.0f;
             } else {
@@ -502,7 +561,9 @@ static void e_yh_appear(e_yh_class* i_this) {
 
 static void e_yh_appear_v(e_yh_class* i_this) {
     fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
+#if !TARGET_PC
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+#endif
     cXyz local_34;
     f32 dVar6 = 60.0f;
     switch (i_this->field_0x670) {
@@ -964,7 +1025,12 @@ static void e_yh_attack(e_yh_class* i_this) {
 
 static void e_yh_attack_s(e_yh_class* i_this) {
     fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
+#if TARGET_PC
+    // Co-op: detached-head lunges consume the same retained Combat target as the dispatcher.
+    fopAc_ac_c* player = coOpYhTargetPlayer(i_this, "e_yh.attack_s");
+#else
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+#endif
     cXyz local_28;
     
     local_28 = player->eyePos - a_this->current.pos;
@@ -1005,7 +1071,9 @@ static void e_yh_attack_s(e_yh_class* i_this) {
 
 static void e_yh_chance(e_yh_class* i_this) {
     fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
+#if !TARGET_PC
     fopAc_ac_c* player = (fopAc_ac_c*)dComIfGp_getPlayer(0);
+#endif
     cXyz local_2c;
     f32 dVar8 = 60.0f;
     
@@ -1776,8 +1844,12 @@ static s8 e_yh_escape(e_yh_class* i_this) {
         i_this->field_0x670 = 50;
         anm_init(i_this, 15, 20.0f, 0, 1.0f);
         i_this->mSound.startCreatureVoice(Z2SE_EN_DB_V_DEATH, -1);
+#if TARGET_PC
+        coOpYhNotifyEnemyDead(i_this);
+#else
         daPy_py_c* pyPlayer = (daPy_py_c*)daPy_getPlayerActorClass();
         pyPlayer->onEnemyDead();
+#endif
         i_this->field_0x69e = 200;
         i_this->field_0x698[0] = 80;
         if (cM_rndF(1.0f) < 0.5f) {
@@ -1823,7 +1895,11 @@ static void e_yh_e_dead(e_yh_class* i_this) {
         i_this->field_0x670 = 1;
         i_this->mSound.startCreatureVoice(Z2SE_EN_DB_V_DEATH, -1);
         
+#if TARGET_PC
+        coOpYhNotifyEnemyDead(i_this);
+#else
         daPy_getPlayerActorClass()->onEnemyDead();
+#endif
         break;
         
     case 1:
@@ -1891,7 +1967,11 @@ static void e_yh_e_dead(e_yh_class* i_this) {
         anm_init(i_this, 15, 20.0f, 0, 1.0f);
         i_this->mSound.startCreatureVoice(Z2SE_EN_DB_V_DEATH, -1);
         
+#if TARGET_PC
+        coOpYhNotifyEnemyDead(i_this);
+#else
         daPy_getPlayerActorClass()->onEnemyDead();
+#endif
         i_this->field_0x69e = 200;
         i_this->field_0x698[0] = 80;
         

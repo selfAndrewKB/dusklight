@@ -6,6 +6,7 @@
 #include "d/dolzel_rel.h" // IWYU pragma: keep
 
 #include "d/actor/d_a_e_po.h"
+#include "d/actor/d_a_alink.h"
 #include "d/actor/d_a_obj_poFire.h"
 #include "d/d_cc_d.h"
 #include "d/d_cc_uty.h"
@@ -16,6 +17,7 @@
 #include "dusk/coop/damage_owner.h"
 #include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/player_attention.h"
+#include "dusk/coop/retained_interaction_owner.h"
 #include "dusk/coop/selected_target_state.h"
 #include "dusk/coop/wolf_catch_owner.h"
 #endif
@@ -105,8 +107,8 @@ static int mArg0Check(e_po_class* i_this, s16 param_1) {
 }
 
 #if TARGET_PC
-// Co-op: ordinary Poe combat owns one retained target; special soul/demo presentation stays
-// authored until a dedicated ghost-down/soul owner can preserve those native sequences.
+// Co-op: ordinary Poe combat owns one retained target; wolf soul collection separately retains
+// the ALINK whose native down-attack proc owns this Poe.
 static bool coOpSelectPoTargetState(
     e_po_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
     dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance,
@@ -164,6 +166,60 @@ static bool coOpPoAnyWolfPlayer(e_po_class* i_this, const char* label) {
     return dusk::coop::selected_target_state::findNearestPlayerState(
                (fopAc_ac_c*)i_this, label, coOpPoWolfPredicate)
         .available;
+}
+
+static dusk::coop::selected_target_state::SelectedTargetState coOpPoReadCombatState(
+    e_po_class* i_this, const char* label) {
+    const dusk::coop::EnemyTargetResult target =
+        dusk::coop::getEnemyTarget((fopAc_ac_c*)i_this,
+                                   dusk::coop::EnemyTargetScope::Combat);
+    const dusk::coop::selected_target_state::SelectedTargetState state =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        (fopAc_ac_c*)i_this, label, state,
+        state.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    return state;
+}
+
+static dusk::coop::retained_interaction_owner::RetainedInteractionState
+coOpPoSoulOwner(e_po_class* i_this, const char* label, bool acquire) {
+    fopAc_ac_c* enemy = (fopAc_ac_c*)i_this;
+    dusk::coop::retained_interaction_owner::RetainedInteractionState retained =
+        dusk::coop::retained_interaction_owner::updateRetainedInteraction(
+            label, enemy,
+            dusk::coop::retained_interaction_owner::RetainedInteractionScope::Collect);
+    if (retained.found || !acquire) {
+        return retained;
+    }
+
+    fopAc_ac_c* owner = NULL;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+        daAlink_c* player = static_cast<daAlink_c*>(actor);
+        if (owner == NULL && player != NULL && player->getProcActor() == enemy &&
+            player->checkWolfDownAttackPullOut())
+        {
+            owner = actor;
+        }
+    });
+    if (owner == NULL) {
+        return retained;
+    }
+
+    // Co-op: the wolf-down ALINK keep is the durable owner for soul and item-presentation reads.
+    return dusk::coop::retained_interaction_owner::beginRetainedInteraction(
+        label, enemy, dusk::coop::retained_interaction_owner::RetainedInteractionScope::Collect,
+        owner, dusk::coop::retained_interaction_owner::RetainedInteractionReason::DirectPlayer);
+}
+
+static camera_process_class* coOpPoSoulCamera(
+    const dusk::coop::retained_interaction_owner::RetainedInteractionState& owner) {
+    const dusk::coop::PlayerSlot slot =
+        owner.found ? owner.slot : dusk::coop::PlayerSlot::Primary;
+    camera_process_class* camera =
+        dComIfGp_getCamera(dComIfGp_getPlayerCameraID(static_cast<int>(slot)));
+    return camera != NULL ? camera : dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
 }
 #endif
 
@@ -270,12 +326,26 @@ static int daE_PO_Draw(e_po_class* i_this) {
         i_this->field_0x5F4 = 0.0f;
     }
 
+#if TARGET_PC
+    if (i_this->mActionID == ACT_DEAD && coOpPoAnyWolfPlayer(i_this, "e_po.draw_wolf")) {
+#else
     if (i_this->mActionID == ACT_DEAD && daPy_py_c::checkNowWolf()) {
+#endif
         if (i_this->mType == 2) {
             cLib_addCalc2(&i_this->field_0x7D0, 45.0f, 0.7f, 4.0f);
         }
 
-        if (!((daPy_py_c*)dComIfGp_getPlayer(0))->checkWolfDownAttackPullOut() &&
+#if TARGET_PC
+        const dusk::coop::retained_interaction_owner::RetainedInteractionState soulOwner =
+            coOpPoSoulOwner(i_this, "e_po.draw_soul", a_this->checkWolfDownPullFlg());
+        const bool pullingSoul =
+            soulOwner.found && soulOwner.localPlayer != NULL &&
+            soulOwner.localPlayer->checkWolfDownAttackPullOut();
+#else
+        const bool pullingSoul =
+            ((daPy_py_c*)dComIfGp_getPlayer(0))->checkWolfDownAttackPullOut();
+#endif
+        if (!pullingSoul &&
             i_this->mAnmID != ANM_DOWN_DEAD && i_this->mType < 30)
         {
             i_this->enemy.drawBallModel(&a_this->tevStr);
@@ -987,17 +1057,34 @@ static void e_po_dead(e_po_class* i_this) {
 
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)i_this;
 
+#if TARGET_PC
+    const dusk::coop::retained_interaction_owner::RetainedInteractionState soulOwner =
+        coOpPoSoulOwner(i_this, "e_po.dead_soul", a_this->checkWolfDownPullFlg());
+    // Co-op: soul extraction and its item presentation follow the wolf that owns the native proc.
+    daPy_py_c* player_p =
+        soulOwner.found && soulOwner.localPlayer != NULL
+            ? soulOwner.localPlayer
+            : (daPy_py_c*)dComIfGp_getPlayer(0);
+    camera_process_class* camera_player = coOpPoSoulCamera(soulOwner);
+    camera_class* camera = (camera_class*)camera_player;
+#else
     daPy_py_c* player_p = (daPy_py_c*)dComIfGp_getPlayer(0);
     camera_process_class* camera_player =
         static_cast<camera_process_class*>(dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0)));
     camera_class* camera = static_cast<camera_class*>(dComIfGp_getCamera(0));
+#endif
     dBgS_LinChk lin_chk;
     cXyz scale(1.0f, 1.0f, 1.0f);
     csXyz local_1a4;  // Angle for particles
     dBgS_GndChk gnd_chk;
     i_this->field_0x754 = 10;
-    daPy_py_c* player_actor = daPy_getPlayerActorClass();
+    daPy_py_c* player_actor = player_p;
+#if TARGET_PC
+    player_actor->setWolfEnemyHangBiteAngle(
+        cLib_targetAngleY(&a_this->current.pos, &player_actor->current.pos) + 0x8000);
+#else
     player_actor->setWolfEnemyHangBiteAngle(fopAcM_searchPlayerAngleY(a_this) + 0x8000);
+#endif
 
     int i;
     switch (i_this->mType) {
@@ -1025,8 +1112,8 @@ static void e_po_dead(e_po_class* i_this) {
                 fopAcM_offSwitch(a_this, i_this->BitSW3);
             }
         }
-        if (daPy_getPlayerActorClass()->checkWolfLock(a_this)) {
-            daPy_getPlayerActorClass()->cancelWolfLock(a_this);
+        if (player_p->checkWolfLock(a_this)) {
+            player_p->cancelWolfLock(a_this);
         }
         a_this->onWolfNoLock();
         i_this->field_0x759 = 1;
@@ -1083,7 +1170,12 @@ static void e_po_dead(e_po_class* i_this) {
             a_this->onDownFlg();
         }
         if (i_this->field_0x74A[2] == 0 &&
+#if TARGET_PC
+            (i_this->field_0x74A[0] == 0 ||
+             !coOpPoAnyWolfPlayer(i_this, "e_po.dead_wait_wolf")))
+#else
             (i_this->field_0x74A[0] == 0 || !daPy_py_c::checkNowWolf()))
+#endif
         {
             i_this->mType = 20;
             i_this->field_0x759 = 0;
@@ -1288,7 +1380,7 @@ static void e_po_dead(e_po_class* i_this) {
                 dComIfGs_onEventBit(dSv_event_flag_c::saveBitLabels[457]);
             }
 #endif
-            daPy_getPlayerActorClass()->cancelOriginalDemo();
+            player_p->cancelOriginalDemo();
         } else if (mArg0Check(i_this, 0) != 0) {
             if (!fopAcM_isSwitch(a_this, 0x22)) {
                 if (fopAcM_SearchByID(i_this->field_0x5B8, &local_1b0_actor) != 0 &&
@@ -2986,7 +3078,12 @@ static int daE_PO_Execute(e_po_class* i_this) {
     }
 
     if (fopAcM_isSwitch(a_this, 0x43) && i_this->mArg0 <= 3) {
+#if TARGET_PC
+        // Co-op: the shared Poe reveal palette follows any active wolf-sense participant.
+        if (coOpPoAnyWolfSensePlayer(i_this, "e_po.color_wolf_sense")) {
+#else
         if (daPy_py_c::checkNowWolfPowerUp() != 0) {
+#endif
             dKy_change_colpat(2);
         } else if (mArg0Check(i_this, 0) != 0) {
             dKy_change_colpat(1);
@@ -2995,7 +3092,20 @@ static int daE_PO_Execute(e_po_class* i_this) {
         }
     }
 
+#if TARGET_PC
+    // Co-op: ordinary down-position geometry consumes the action-produced Combat owner read-only.
+    const bool authoredTarget =
+        i_this->mActionID == ACT_OPENING || i_this->mActionID == ACT_LIMBERING ||
+        i_this->mActionID == ACT_HOLL_DEMO;
+    const dusk::coop::selected_target_state::SelectedTargetState downTargetState =
+        authoredTarget
+            ? dusk::coop::selected_target_state::SelectedTargetState()
+            : coOpPoReadCombatState(i_this, "e_po.down_pos");
+    fopAc_ac_c* player_p =
+        downTargetState.available ? downTargetState.actor : dComIfGp_getPlayer(0);
+#else
     fopAc_ac_c* player_p = dComIfGp_getPlayer(0);
+#endif
     MTXCopy(i_this->mpMorf->getModel()->getAnmMtx(2), mDoMtx_stack_c::get());
     mDoMtx_stack_c::multVecZero(&cStack_58);
     s16 var_r4_2;
@@ -3042,6 +3152,7 @@ static int daE_PO_Delete(e_po_class* i_this) {
 #if TARGET_PC
     // Co-op: purge retained Combat and wolf-bite state before the Poe actor memory can be reused.
     dusk::coop::clearAllEnemyTargets(a_this);
+    dusk::coop::retained_interaction_owner::clearAllRetainedInteractions(a_this);
     dusk::coop::wolf_catch_owner::clearWolfCatch("e_po.delete", a_this);
 #endif
     dComIfG_resDelete(&i_this->mPhase, "E_PO");

@@ -7,6 +7,7 @@
 
 #include "d/actor/d_a_e_rdy.h"
 #include "Z2AudioLib/Z2Instances.h"
+#include "d/actor/d_a_alink.h"
 #include "d/actor/d_a_e_arrow.h"
 #include "d/actor/d_a_e_yc.h"
 #include "d/actor/d_a_horse.h"
@@ -21,8 +22,11 @@
 #include "m_Do/m_Do_graphic.h"
 #include <cstring>
 #if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/defender_owner.h"
 #include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/event_presentation.h"
+#include "dusk/coop/horse_owner.h"
 #include "dusk/coop/retained_interaction_owner.h"
 #include "dusk/coop/selected_target_state.h"
 #endif
@@ -217,13 +221,17 @@ static e_rdy_class* s_coOpRdyCarryPresentationOwner;
 
 static bool coOpSelectRdyTargetState(
     e_rdy_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
-    dusk::coop::selected_target_state::SelectedTargetState* state) {
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance = NULL,
+    s16* angleY = NULL, dusk::coop::PlayerQueryPredicate predicate = NULL,
+    void* predicateData = NULL) {
     dusk::coop::EnemyTargetContext context;
     context.observer = &i_this->actor;
     context.scope = dusk::coop::EnemyTargetScope::Combat;
     context.mode = mode;
     context.label = label;
     context.committed = committed;
+    context.candidatePredicate = predicate;
+    context.candidatePredicateData = predicateData;
 
     const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
     const dusk::coop::selected_target_state::SelectedTargetState targetState =
@@ -240,7 +248,49 @@ static bool coOpSelectRdyTargetState(
     if (state != NULL) {
         *state = targetState;
     }
+    if (distance != NULL) {
+        *distance = target.distance;
+    }
+    if (angleY != NULL) {
+        *angleY = target.angleY;
+    }
     return true;
+}
+
+// Co-op: finishing-blow feedback belongs to the ALINK whose native proc retains this Rider.
+static daPy_py_c* coOpRdyFinishingPlayer(e_rdy_class* i_this) {
+    daPy_py_c* result = NULL;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+        daAlink_c* player = static_cast<daAlink_c*>(actor);
+        if (result == NULL && player->getProcActor() == &i_this->actor) {
+            result = player;
+        }
+    });
+    return result;
+}
+
+static dusk::coop::selected_target_state::SelectedTargetState coOpRdyReadCombatState(
+    e_rdy_class* i_this, const char* label) {
+    const dusk::coop::EnemyTargetResult target =
+        dusk::coop::getEnemyTarget(&i_this->actor, dusk::coop::EnemyTargetScope::Combat);
+    const dusk::coop::selected_target_state::SelectedTargetState state =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        &i_this->actor, label, state,
+        state.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    return state;
+}
+
+static bool coOpRdyWolfBarkPredicate(
+    const dusk::coop::selected_target_state::SelectedTargetState& state) {
+    return state.wolfBark;
+}
+
+static bool coOpRdyWolfPredicate(
+    const dusk::coop::selected_target_state::SelectedTargetState& state) {
+    return state.wolf;
 }
 
 static dusk::coop::retained_interaction_owner::RetainedInteractionState
@@ -728,18 +778,74 @@ static void ride_off(e_rdy_class* i_this) {
     a_this->home.pos = a_this->current.pos;
 }
 
+#if TARGET_PC
+struct CoOpRdyPlayerCheck {
+    e_rdy_class* rider;
+    f32 distance;
+    s16 angle;
+};
+
+// Co-op: wake acquisition filters each player through RDY's native range, cone, and LOS first.
+static dusk::coop::PlayerQueryEligibility coOpRdyPlayerCheckPredicate(
+    dusk::coop::PlayerSlot, fopAc_ac_c* actor, void* userData) {
+    CoOpRdyPlayerCheck* check = static_cast<CoOpRdyPlayerCheck*>(userData);
+    dusk::coop::PlayerQueryEligibility eligibility;
+    fopAc_ac_c* rider = &check->rider->actor;
+    if ((actor->current.pos - rider->current.pos).abs() >= check->distance) {
+        eligibility.eligible = false;
+        eligibility.failureFlags |= dusk::coop::PlayerQueryEligibilityFailure_Range;
+    }
+    s16 angle = rider->shape_angle.y -
+                cLib_targetAngleY(&rider->current.pos, &actor->current.pos);
+    if (angle >= check->angle || angle <= (s16)-check->angle) {
+        eligibility.eligible = false;
+        eligibility.failureFlags |= dusk::coop::PlayerQueryEligibilityFailure_Facing;
+    }
+    if (other_bg_check(check->rider, actor)) {
+        eligibility.eligible = false;
+        eligibility.failureFlags |= dusk::coop::PlayerQueryEligibilityFailure_LineOfSight;
+    }
+    return eligibility;
+}
+#endif
+
 static BOOL pl_check(e_rdy_class* i_this, f32 i_dist, s16 i_angle) {
     if (dComIfGp_event_runCheck()) {
         return FALSE;
     }
 
+#if !TARGET_PC
     fopAc_ac_c* a_this = &i_this->actor;
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
 
     if (S_find != 0) {
         i_dist = 10000.0f;
     }
 
+#if TARGET_PC
+    CoOpRdyPlayerCheck check = {i_this, i_dist, i_angle};
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    f32 distance;
+    s16 angle;
+    if (coOpSelectRdyTargetState(i_this, "e_rdy.pl_check", false,
+                                 dusk::coop::EnemyTargetMode::ImmediateAcquire, &targetState,
+                                 &distance, &angle, coOpRdyPlayerCheckPredicate, &check))
+    {
+        i_this->mPlayerDist = distance;
+        i_this->mPlayerAngle = angle;
+        return TRUE;
+    }
+    for (int i = 0; i <= 2; i++) {
+        if (i_this->mCcSph[i].ChkCoHit()) {
+            cCcD_Obj* ccdobj = i_this->mCcSph[i].GetCoHitObj();
+            fopAc_ac_c* hitActor = dCc_GetAc(ccdobj->GetAc());
+            if (hitActor != NULL && fopAcM_GetName(hitActor) == fpcNm_ALINK_e) {
+                return TRUE;
+            }
+        }
+    }
+#else
     if (i_this->mPlayerDist < i_dist) {
         s16 angle = a_this->shape_angle.y - i_this->mPlayerAngle;
         if (angle < i_angle && angle > (s16)-i_angle && !other_bg_check(i_this, player)) {
@@ -754,6 +860,7 @@ static BOOL pl_check(e_rdy_class* i_this, f32 i_dist, s16 i_angle) {
             }
         }
     }
+#endif
 
     return FALSE;
 }
@@ -1133,7 +1240,9 @@ static void e_rdy_fight_run(e_rdy_class* i_this) {
 
 static fopAc_ac_c* at_hit_check(e_rdy_class* i_this) {
     e_rdy_class* unused1 = i_this;
+#if !TARGET_PC
     fopAc_ac_c* unused = dComIfGp_getPlayer(0);
+#endif
     if (i_this->mMode >= 10) {
         return NULL;
     }
@@ -1225,8 +1334,18 @@ static void e_rdy_fight(e_rdy_class* i_this) {
 
     if (i_this->field_0xa7b != 0) {
         fopAc_ac_c* hit_actor = at_hit_check(i_this);
+#if TARGET_PC
+        // Co-op: club rebound consumes the guard state of the player actually struck.
+        const dusk::coop::defender_owner::DefenderOwnerResult defender =
+            dusk::coop::defender_owner::resolveDefenderOwner(a_this, &i_this->mAtSph);
+        dusk::coop::defender_owner::recordDefenderOwnerContact(
+            "e_rdy.club_guard", a_this, defender);
+        if (hit_actor != NULL && fopAcM_GetName(hit_actor) == fpcNm_ALINK_e &&
+            defender.found && defender.guarded)
+#else
         if (hit_actor != NULL && fopAcM_GetName(hit_actor) == fpcNm_ALINK_e
             && daPy_getPlayerActorClass()->checkPlayerGuard())
+#endif
         {
             i_this->mpMorf->setPlaySpeed(-1.0f);
             dComIfGp_getVibration().StartShock(4, 0x1f, cXyz(0.0f, 1.0f, 0.0f));
@@ -1242,7 +1361,12 @@ static void e_rdy_bow_run(e_rdy_class* i_this) {
     cXyz unused1, unused2;
     f32 target_speed = 0.0f;
     f32 run_speed = l_HIO.mRunSpeed;
+#if TARGET_PC
+    // Co-op: mobile bow spacing consumes the dispatcher cache's retained Combat heading.
+    s16 target_angle = i_this->mPlayerAngle;
+#else
     s16 target_angle = fopAcM_searchPlayerAngleY(a_this);
+#endif
     s8 bVar2 = false;
 
     switch (i_this->mMode) {
@@ -1424,7 +1548,15 @@ static void* s_command3_sub(void* i_proc, void* i_this) {
 
 static s8 e_rdy_bow2(e_rdy_class* i_this) {
     fopAc_ac_c* a_this = &i_this->actor;
+#if TARGET_PC
+    // Co-op: stationary bow LOS and disengage checks consume RDY's retained Combat target.
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        coOpRdyReadCombatState(i_this, "e_rdy.bow2");
+    fopAc_ac_c* player =
+        targetState.available ? targetState.actor : dComIfGp_getPlayer(0);
+#else
     fopAc_ac_c* player = (fopAc_ac_c*) dComIfGp_getPlayer(0);
+#endif
     cXyz vec1, vec2;
     int frame = (int)i_this->mpMorf->getFrame();
 
@@ -2233,6 +2365,16 @@ static BOOL body_gake(e_rdy_class* i_this) {
 static void e_rdy_damage(e_rdy_class* i_this) {
     fopAc_ac_c* a_this = &i_this->actor;
     fopEn_enemy_c* e_this = (fopEn_enemy_c*)a_this;
+#if TARGET_PC
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        coOpRdyReadCombatState(i_this, "e_rdy.damage_state");
+    daPy_py_c* combatPlayer =
+        targetState.player != NULL ? targetState.player : daPy_getPlayerActorClass();
+    daPy_py_c* finishingPlayer = coOpRdyFinishingPlayer(i_this);
+    const bool targetWolf =
+        finishingPlayer != NULL ? finishingPlayer->checkWolf() :
+        (targetState.available ? targetState.wolf : daPy_py_c::checkNowWolf());
+#endif
     cXyz vec1, vec2;
     s16 angle_y;
     int check;
@@ -2244,7 +2386,11 @@ static void e_rdy_damage(e_rdy_class* i_this) {
 
     i_this->mTargetEyeScale = 0.0f;
 
+#if TARGET_PC
+    if (!targetWolf && e_this->checkCutDownHitFlg()) {
+#else
     if (!daPy_py_c::checkNowWolf() && e_this->checkCutDownHitFlg()) {
+#endif
         e_this->offCutDownHitFlg();
         i_this->mMode = 3;
         i_this->mTimer[0] = 100;
@@ -2252,7 +2398,12 @@ static void e_rdy_damage(e_rdy_class* i_this) {
         a_this->health = 0;
         i_this->mSound.startCreatureVoice(Z2SE_EN_RD_V_DEATH, -1);
         i_this->mIsDying = true;
+#if TARGET_PC
+        // Co-op: the native finishing proc identifies the exact player receiving death feedback.
+        (finishingPlayer != NULL ? finishingPlayer : combatPlayer)->onEnemyDead();
+#else
         daPy_getPlayerActorClass()->onEnemyDead();
+#endif
         i_this->field_0xbac = 15 + TREG_S(7);
         e_this->offDownFlg();
     }
@@ -2267,7 +2418,15 @@ static void e_rdy_damage(e_rdy_class* i_this) {
         if (a_this->health <= 0) {
             i_this->mSound.startCreatureVoice(Z2SE_EN_RD_V_DEATH, -1);
             i_this->mIsDying = true;
+#if TARGET_PC
+            const dusk::coop::damage_owner::DamageOwnerResult owner =
+                dusk::coop::damage_owner::resolveDamageOwner(a_this, i_this->mAtInfo.mpCollider);
+            daPy_py_c* deathPlayer =
+                owner.localPlayer != NULL ? owner.localPlayer : combatPlayer;
+            deathPlayer->onEnemyDead();
+#else
             daPy_getPlayerActorClass()->onEnemyDead();
+#endif
         } else {
             i_this->mSound.startCreatureVoice(Z2SE_EN_RD_V_DAMAGE, -1);
         }
@@ -2346,7 +2505,13 @@ static void e_rdy_damage(e_rdy_class* i_this) {
         a_this->shape_angle.y = a_this->current.angle.y;
         cLib_addCalcAngleS2(&i_this->field_0xadc.x, -0x4000, 1, BREG_S(4) + 0x300);
         if (i_this->mAcch.ChkGroundHit()) {
-            if (a_this->health > 0 && !daPy_py_c::checkNowWolf()) {
+            if (a_this->health > 0 &&
+#if TARGET_PC
+                !targetWolf
+#else
+                !daPy_py_c::checkNowWolf()
+#endif
+            ) {
                 e_this->onDownFlg();
             }
             dKy_Sound_set(a_this->current.pos, 100, fopAcM_GetID(i_this), 5);
@@ -2367,7 +2532,13 @@ static void e_rdy_damage(e_rdy_class* i_this) {
                 angle_y = i_this->field_0xadc.y + 0x8000;
             }
             a_this->current.angle.y = angle_y;
-            if (daPy_py_c::checkNowWolf()) {
+            if (
+#if TARGET_PC
+                targetWolf
+#else
+                daPy_py_c::checkNowWolf()
+#endif
+            ) {
                 i_this->mTimer[0] = 80;
                 i_this->mTimer[1] = 55;
             } else {
@@ -2389,7 +2560,12 @@ static void e_rdy_damage(e_rdy_class* i_this) {
             rd_disappear(i_this);
             return;
         }
-        if (daPy_getPlayerActorClass()->getCutType() != daPy_py_c::CUT_TYPE_DOWN
+        if (
+#if TARGET_PC
+            combatPlayer->getCutType() != daPy_py_c::CUT_TYPE_DOWN
+#else
+            daPy_getPlayerActorClass()->getCutType() != daPy_py_c::CUT_TYPE_DOWN
+#endif
             && i_this->mTimer[0] == 0)
         {
             i_this->field_0xabc = 0.0f;
@@ -3127,9 +3303,8 @@ static void e_rdy_jyunkai(e_rdy_class* i_this) {
     }
 }
 
-static void wolfkick_damage(e_rdy_class* i_this) {
+static void wolfkick_damage(e_rdy_class* i_this, fopAc_ac_c* player) {
     fopAc_ac_c* a_this = &i_this->actor;
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
     i_this->mAction = ACT_DAMAGE;
     i_this->mMode = 0;
     i_this->field_0xadc.y = player->shape_angle.y + 0x8000;
@@ -3180,7 +3355,7 @@ static void big_damage(e_rdy_class* i_this) {
     i_this->field_0xac8 = false;
 }
 
-static void small_damage(e_rdy_class* i_this, int i_collider) {
+static void small_damage(e_rdy_class* i_this, int i_collider, s16 damageAngle) {
     fopAc_ac_c* a_this = &i_this->actor;
     OS_REPORT(" RD AC 1 %d\n", i_this->mAction);
     if (i_this->mAction != ACT_S_DAMAGE) {
@@ -3191,7 +3366,7 @@ static void small_damage(e_rdy_class* i_this, int i_collider) {
     i_this->mSound.startCreatureVoice(Z2SE_EN_RD_V_DAMAGE, -1);
 
     if (i_collider == 0) {
-        s16 angle_diff = a_this->shape_angle.y - i_this->mPlayerAngle;
+        s16 angle_diff = a_this->shape_angle.y - damageAngle;
         if (angle_diff < -0x4000 || angle_diff > 0x4000) {
             anm_init(i_this, ANM_DAMAGE_W, 2.0f, J3DFrameCtrl::EMode_NONE, 1.0f);
         } else if (angle_diff < 0) {
@@ -3209,7 +3384,9 @@ static void small_damage(e_rdy_class* i_this, int i_collider) {
 
 static void damage_check(e_rdy_class* i_this) {
     fopAc_ac_c* _this = (fopAc_ac_c*)i_this;
+#if !TARGET_PC
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
     if (i_this->field_0xa8f != 0) {
         i_this->field_0xa8f = 0;
         big_damage(i_this);
@@ -3232,9 +3409,30 @@ static void damage_check(e_rdy_class* i_this) {
                     i_this->mIFrameTimer = 6;
                     i_this->mParticleTimer = 3;
                     i_this->mAtInfo.mpCollider = i_this->mCcSph[i].GetTgHitObj();
+#if TARGET_PC
+                    // Co-op: Rider hit reactions consume the player/item that owns this collider.
+                    const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+                        dusk::coop::damage_owner::resolveDamageOwner(
+                            _this, i_this->mAtInfo.mpCollider);
+                    daPy_py_c* player =
+                        damageOwner.localPlayer != NULL
+                            ? damageOwner.localPlayer
+                            : daPy_getPlayerActorClass();
+                    const s16 damageAngle =
+                        damageOwner.localPlayerActor != NULL
+                            ? cLib_targetAngleY(&_this->current.pos,
+                                               &damageOwner.localPlayerActor->current.pos)
+                            : i_this->mPlayerAngle;
+#else
+                    const s16 damageAngle = i_this->mPlayerAngle;
+#endif
 
                     if (i_this->mAtInfo.mpCollider->ChkAtType(AT_TYPE_10000000)) {
-                        wolfkick_damage(i_this);
+#if TARGET_PC
+                        dusk::coop::damage_owner::recordDamageOwnerHit(
+                            "e_rdy.wolfkick", _this, damageOwner, &i_this->mAtInfo);
+#endif
+                        wolfkick_damage(i_this, player);
                         i_this->mIFrameTimer = 1000;
                         break;
 
@@ -3271,9 +3469,12 @@ static void damage_check(e_rdy_class* i_this) {
                         }
 
                         cc_at_check(_this, &i_this->mAtInfo);
+#if TARGET_PC
+                        dusk::coop::damage_owner::recordDamageOwnerHit(
+                            "e_rdy.damage", _this, damageOwner, &i_this->mAtInfo);
+#endif
 
-                        if (daPy_getPlayerActorClass()->getCutType()
-                                                        == daPy_py_c::CUT_TYPE_HEAD_JUMP) {
+                        if (player->getCutType() == daPy_py_c::CUT_TYPE_HEAD_JUMP) {
                             _this->health = 0;
                         }
 
@@ -3288,8 +3489,15 @@ static void damage_check(e_rdy_class* i_this) {
 
                         i_this->field_0xaf0 |= i_this->mAtInfo.mHitBit;
 
+#if TARGET_PC
+                        daHorse_c* damageHorse =
+                            dusk::coop::horse_owner::getHorse(damageOwner.slot);
+                        if (player->checkHorseRide() && damageHorse != NULL &&
+                            damageHorse->speedF >= 20.0f
+#else
                         if (daPy_getPlayerActorClass()->checkHorseRide()
                             && dComIfGp_getHorseActor()->speedF >= 20.0f
+#endif
                             && i_this->mAtInfo.mHitType == HIT_TYPE_LINK_NORMAL_ATTACK)
                         {
                             i_this->mAtInfo.mAttackPower = 20;
@@ -3301,7 +3509,7 @@ static void damage_check(e_rdy_class* i_this) {
                             if (player->getCutType() == daPy_py_c::CUT_TYPE_JUMP
                                 && player->checkCutJumpCancelTurn())
                             {
-                                small_damage(i_this, i);
+                                small_damage(i_this, i, damageAngle);
                                 i_this->mIFrameTimer = 3 + NREG_S(7);
                             } else {
                                 big_damage(i_this);
@@ -3312,7 +3520,7 @@ static void damage_check(e_rdy_class* i_this) {
                             if (i_this->mAtInfo.mHitType == HIT_TYPE_STUN) {
                                 collider = 0;
                             }
-                            small_damage(i_this, collider);
+                            small_damage(i_this, collider, damageAngle);
                         }
 
                         _this->speedF = 0.0f;
@@ -3345,11 +3553,42 @@ static void action(e_rdy_class* i_this) {
     cXyz vec1, vec2;
 
     i_this->field_0xa98 = 0;
+#if TARGET_PC
+    const bool authoredTarget =
+        i_this->mAction == ACT_BOW_IKKI2 ||
+        (i_this->mDemoMode >= 5 && !coOpRdyUseCarryOwner(i_this));
+    if (!authoredTarget) {
+        // Co-op: produce RDY's native distance/angle cache once from its retained Combat owner.
+        dusk::coop::selected_target_state::SelectedTargetState targetState;
+        if (coOpSelectRdyTargetState(i_this, "e_rdy.action", false,
+                                     dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
+                                     &i_this->mPlayerDist, &i_this->mPlayerAngle))
+        {
+            if (targetState.player != NULL) {
+                player = targetState.player;
+            }
+            if (targetState.horseRide) {
+                i_this->mPlayerDist -= 100.0f + BREG_F(17);
+            }
+        } else {
+            i_this->mPlayerDist = fopAcM_searchPlayerDistance(a_this);
+            i_this->mPlayerAngle = fopAcM_searchPlayerAngleY(a_this);
+        }
+    } else {
+        // Co-op: bridge/field choreography and non-carry demos retain their authored P1 target.
+        i_this->mPlayerDist = fopAcM_searchPlayerDistance(a_this);
+        if (player->checkHorseRide()) {
+            i_this->mPlayerDist -= 100.0f + BREG_F(17);
+        }
+        i_this->mPlayerAngle = fopAcM_searchPlayerAngleY(a_this);
+    }
+#else
     i_this->mPlayerDist = fopAcM_searchPlayerDistance(a_this);
     if (daPy_getPlayerActorClass()->checkHorseRide()) {
         i_this->mPlayerDist -= 100.0f + BREG_F(17);
     }
     i_this->mPlayerAngle = fopAcM_searchPlayerAngleY(a_this);
+#endif
 
     if (i_this->mRideState == 0) {
         fopAcM_OnStatus(a_this, 0);
@@ -4532,7 +4771,15 @@ static int daE_RDY_Execute(e_rdy_class* i_this) {
         i_this->field_0xa6e--;
     }
 
-    if (fopAcM_otoCheck(a_this, 1000.0f) || daPy_getPlayerActorClass()->checkWolfBark()) {
+    if (fopAcM_otoCheck(a_this, 1000.0f) ||
+#if TARGET_PC
+        // Co-op: any active wolf bark can satisfy the native global bark gate.
+        dusk::coop::selected_target_state::findNearestPlayerState(
+            a_this, "e_rdy.wolf_bark", coOpRdyWolfBarkPredicate).available
+#else
+        daPy_getPlayerActorClass()->checkWolfBark()
+#endif
+    ) {
         i_this->field_0xa71 = cM_rndF(10.0f) + 10.0f;
     }
     if (i_this->field_0xa71 != 0) {
@@ -4685,7 +4932,15 @@ static int daE_RDY_Execute(e_rdy_class* i_this) {
     vec1.set(20.0f, 0.0f, 0.0f);
     MtxPosition(&vec1, &a_this->eyePos);
 
-    if (daPy_py_c::checkNowWolf()) {
+    if (
+#if TARGET_PC
+        // Co-op: the shared head hurtbox must accommodate whichever active slot is a wolf.
+        dusk::coop::selected_target_state::findNearestPlayerState(
+            a_this, "e_rdy.wolf_hurtbox", coOpRdyWolfPredicate).available
+#else
+        daPy_py_c::checkNowWolf()
+#endif
+    ) {
         cc_offset.y += 30.0f;
         i_this->mCcSph[0].SetC(a_this->eyePos + cc_offset);
         i_this->mCcSph[0].SetR(50.0f);
@@ -4876,7 +5131,15 @@ static int daE_RDY_Execute(e_rdy_class* i_this) {
     }
 
     if (i_this->mRideState == 0) {
+#if TARGET_PC
+        // Co-op: finishing approach geometry faces the retained Combat target, not P1.
+        const dusk::coop::selected_target_state::SelectedTargetState targetState =
+            coOpRdyReadCombatState(i_this, "e_rdy.down_pos");
+        fopAc_ac_c* player =
+            targetState.available ? targetState.actor : dComIfGp_getPlayer(0);
+#else
         fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
         MTXCopy(i_this->mpMorf->getModel()->getAnmMtx(JNT_MUNE2), mDoMtx_stack_c::get());
         mDoMtx_stack_c::multVecZero(&vec2);
         vec1 = player->current.pos - vec2;

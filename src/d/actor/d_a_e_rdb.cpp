@@ -8,12 +8,18 @@
 #include "d/actor/d_a_e_rdb.h"
 #include "Z2AudioLib/Z2Instances.h"
 #include "c/c_damagereaction.h"
+#include "d/actor/d_a_alink.h"
 #include "d/actor/d_a_e_rd.h"
 #include "d/actor/d_a_e_wb.h"
 #include "d/d_msg_object.h"
 #include "m_Do/m_Do_graphic.h"
 #include "f_op/f_op_actor_enemy.h"
 #include "f_op/f_op_camera_mng.h"
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/player_camera_status.h"
+#endif
 #include <cstring>
 
 class daE_RDB_HIO_c : public JORReflexible {
@@ -143,6 +149,7 @@ static void mtx_to_posAngle(Mtx param_1, cXyz* param_2, csXyz* param_3) {
     mDoMtx_MtxToRot(param_1, param_3);
 }
 
+#if !TARGET_PC
 static int player_way_check(e_rdb_class* i_this) {
     s16 sVar1 = i_this->enemy.shape_angle.y - dComIfGp_getPlayer(0)->shape_angle.y;
     if (sVar1 < 0x4000 && sVar1 > -0x4000) {
@@ -151,6 +158,64 @@ static int player_way_check(e_rdb_class* i_this) {
 
     return 1;
 }
+#endif
+
+#if TARGET_PC
+// Co-op: ordinary King Bulblin combat owns one sticky target; authored encounter demos stay P1.
+static dusk::coop::EnemyTargetResult coOpSelectRdbTarget(e_rdb_class* i_this,
+                                                         const char* label) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = &i_this->enemy;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = dusk::coop::EnemyTargetMode::StickyCombat;
+    context.label = label;
+    return dusk::coop::selectEnemyTarget(context);
+}
+
+static int coOpRdbPlayerWayCheck(e_rdb_class* i_this, const daPy_py_c* player) {
+    if (player == NULL) {
+        return 0;
+    }
+    s16 angle = i_this->enemy.shape_angle.y - player->shape_angle.y;
+    return angle < 0x4000 && angle > -0x4000 ? 0 : 1;
+}
+
+struct CoOpRdbDefenceAwareness {
+    daAlink_c* player;
+    int tool;
+};
+
+// Co-op: hookshot and Ball and Chain defence reacts to the active tool owner immediately.
+static CoOpRdbDefenceAwareness coOpRdbFindDefenceTool(e_rdb_class* i_this) {
+    CoOpRdbDefenceAwareness awareness = {};
+    fopAc_ac_c* enemy = &i_this->enemy;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+        if (awareness.player != NULL) {
+            return;
+        }
+        daAlink_c* player = static_cast<daAlink_c*>(actor);
+        if (player->checkHookshotShootReturnMode() && !player->checkHookshotReturnMode()) {
+            awareness.player = player;
+            awareness.tool = 1;
+            return;
+        }
+        if (strcmp(dComIfGp_getStartStageName(), "D_MN09") != 0) {
+            return;
+        }
+        cXyz* ironBallCenterPos = player->getIronBallCenterPos();
+        if (ironBallCenterPos != NULL &&
+            (player->current.pos - *ironBallCenterPos).abs() > 200.0f &&
+            (enemy->current.pos - *ironBallCenterPos).abs() < 500.0f &&
+            dusk::coop::player_camera_status::checkStatus0ForPlayer(player, 0x400) == 0 &&
+            !player->checkIronBallReturn() && !player->checkIronBallGroundStop())
+        {
+            awareness.player = player;
+            awareness.tool = 2;
+        }
+    });
+    return awareness;
+}
+#endif
 
 static void e_rdb_wait(e_rdb_class* i_this) {
     s16 sVar1 = i_this->enemy.shape_angle.y - i_this->mAngleToPlayer;
@@ -713,7 +778,9 @@ static void e_rdb_start(e_rdb_class* i_this) {
 
 static void damage_check(e_rdb_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->enemy;
+#if !TARGET_PC
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
     if (i_this->field_0x6c2 == 0 && i_this->field_0xe64.ChkTgHit() != 0 &&
         i_this->field_0xe64.ChkTgShield() != 0)
     {
@@ -734,6 +801,25 @@ static void damage_check(e_rdb_class* i_this) {
             if (i_this->field_0x944[i].ChkTgHit() != 0) {
                 i_this->mAtInfo.mpCollider = i_this->field_0x944[i].GetTgHitObj();
                 cc_at_check(a_this, &i_this->mAtInfo);
+#if TARGET_PC
+                // Co-op: cut state and hit-facing belong to the player whose collider hit RDB.
+                const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+                    dusk::coop::damage_owner::resolveDamageOwner(
+                        a_this, i_this->mAtInfo.mpCollider);
+                dusk::coop::damage_owner::recordDamageOwnerHit(
+                    "e_rdb.damage", a_this, damageOwner, &i_this->mAtInfo);
+                daPy_py_c* player =
+                    damageOwner.localPlayer != NULL
+                        ? damageOwner.localPlayer
+                        : (daPy_py_c*)dComIfGp_getPlayer(0);
+                const s16 damageAngle =
+                    damageOwner.localPlayerActor != NULL
+                        ? cLib_targetAngleY(&a_this->current.pos,
+                                           &damageOwner.localPlayerActor->current.pos)
+                        : i_this->mAngleToPlayer;
+#else
+                const s16 damageAngle = i_this->mAngleToPlayer;
+#endif
                 OS_REPORT("E_rdb HP %d\n", a_this->health);
                 if (i_this->mAtInfo.mAttackPower != 0) {
                     u16 uVar1;
@@ -745,15 +831,14 @@ static void damage_check(e_rdb_class* i_this) {
                     }
 
                     cXyz sp38, sp44;
-                    cMtx_YrotS(*calc_mtx, i_this->mAngleToPlayer);
+                    cMtx_YrotS(*calc_mtx, damageAngle);
                     if (i_this->mAnm == e_rdb_class::BCK_RB_DOWN || i_this->mAnm == e_rdb_class::BCK_RB_DOWN_WAIT) {
                         sp44.x = 0.0f + YREG_F(7);
                         sp44.y = 120.0f + YREG_F(8);
                         sp44.z = 190.0f + YREG_F(9);
                         MtxPosition(&sp44, &sp38);
                         sp38 += a_this->current.pos;
-                    } else if (daPy_getPlayerActorClass()->getCutType() ==
-                               daPy_py_c::CUT_TYPE_HEAD_JUMP)
+                    } else if (player->getCutType() == daPy_py_c::CUT_TYPE_HEAD_JUMP)
                     {
                         sp38 = a_this->eyePos;
                         sp38.y += 100.0f;
@@ -788,7 +873,7 @@ static void damage_check(e_rdb_class* i_this) {
                 }
 
                 if ((i_this->mAction != 6 || i_this->mMode < 10) &&
-                    (daPy_getPlayerActorClass()->getCutCount() >= 4 || bVar1))
+                    (player->getCutCount() >= 4 || bVar1))
                 {
                     int iVar1;
                     if (strcmp(dComIfGp_getStartStageName(), "D_MN09") == 0) {
@@ -809,7 +894,7 @@ static void damage_check(e_rdb_class* i_this) {
                     }
                 } else if (i_this->mAction == 6 && i_this->mMode >= 10) {
                     i_this->field_0x6ce = 15;
-                    s16 angle_diff = a_this->shape_angle.y - i_this->mAngleToPlayer;
+                    s16 angle_diff = a_this->shape_angle.y - damageAngle;
                     if (angle_diff > 0) {
                         i_this->field_0x6d4 = 1.0f;
                     } else {
@@ -886,8 +971,28 @@ static void action(e_rdb_class* i_this) {
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
     cXyz sp44, sp50;
     i_this->field_0x6c8 = 0;
+#if TARGET_PC
+    if (i_this->mAction != ACTION_START && i_this->mAction != ACTION_END) {
+        // Co-op: produce the native distance/angle cache once from the retained Combat owner.
+        const dusk::coop::EnemyTargetResult target =
+            coOpSelectRdbTarget(i_this, "e_rdb.action");
+        if (target.found && target.localActor != NULL) {
+            player = static_cast<daPy_py_c*>(target.localActor);
+            i_this->mDistToPlayer = target.distance;
+            i_this->mAngleToPlayer = target.angleY;
+        } else {
+            i_this->mDistToPlayer = fopAcM_searchPlayerDistance(a_this);
+            i_this->mAngleToPlayer = fopAcM_searchPlayerAngleY(a_this);
+        }
+    } else {
+        // Co-op: opening and ending encounter sequences remain authored around P1.
+        i_this->mDistToPlayer = fopAcM_searchPlayerDistance(a_this);
+        i_this->mAngleToPlayer = fopAcM_searchPlayerAngleY(a_this);
+    }
+#else
     i_this->mDistToPlayer = fopAcM_searchPlayerDistance(a_this);
     i_this->mAngleToPlayer = fopAcM_searchPlayerAngleY(a_this);
+#endif
 
     damage_check(i_this);
     s8 sVar1 = 0;
@@ -954,6 +1059,18 @@ static void action(e_rdb_class* i_this) {
 
     if ((s8)sVar3) {
         int iVar1 = 0;
+#if TARGET_PC
+        // Co-op: defensive item reads use the active tool owner, while melee uses Combat owner.
+        CoOpRdbDefenceAwareness toolAwareness = coOpRdbFindDefenceTool(i_this);
+        daPy_py_c* defencePlayer =
+            toolAwareness.player != NULL ? toolAwareness.player : player;
+        iVar1 = toolAwareness.tool;
+        if (iVar1 == 0 && strcmp(dComIfGp_getStartStageName(), "D_MN09") == 0 &&
+            fpcM_Search(shot_s_sub, i_this) != NULL)
+        {
+            iVar1 = 1;
+        }
+#else
         if (daPy_getPlayerActorClass()->checkHookshotShootReturnMode() &&
             !daPy_getPlayerActorClass()->checkHookshotReturnMode())
         {
@@ -975,20 +1092,37 @@ static void action(e_rdb_class* i_this) {
                 iVar1 = 2;
             }
         }
+#endif
 
         int bVar1 = 0;
+#if TARGET_PC
+        if ((strcmp(dComIfGp_getStartStageName(), "D_MN09") == 0 &&
+             defencePlayer->getCutType() == daPy_py_c::CUT_TYPE_GUARD_ATTACK) ||
+            (defencePlayer->getCutAtFlg() != 0 &&
+             defencePlayer->getCutType() != daPy_py_c::CUT_TYPE_HEAD_JUMP))
+#else
         if ((strcmp(dComIfGp_getStartStageName(), "D_MN09") == 0 &&
              player->getCutType() == daPy_py_c::CUT_TYPE_GUARD_ATTACK) ||
             (daPy_getPlayerActorClass()->getCutAtFlg() != 0 &&
              player->getCutType() != daPy_py_c::CUT_TYPE_HEAD_JUMP))
+#endif
         {
             bVar1 = 1;
         }
 
+#if TARGET_PC
+        if ((iVar1 != 0 && coOpRdbPlayerWayCheck(i_this, defencePlayer) != 0) ||
+            ((i_this->mDistToPlayer < 500.0f &&
+              coOpRdbPlayerWayCheck(i_this, defencePlayer) != 0 && bVar1) &&
+             (defencePlayer->checkNowWolf() ||
+              strcmp(dComIfGp_getStartStageName(), "D_MN09") == 0 ||
+              (i_this->field_0x6ec & cc_pl_cut_bit_get()) != 0)))
+#else
         if ((iVar1 != 0 && player_way_check(i_this) != 0) ||
             ((i_this->mDistToPlayer < 500.0f && player_way_check(i_this) != 0 && bVar1) &&
              (player->checkNowWolf() || (strcmp(dComIfGp_getStartStageName(), "D_MN09") == 0) ||
-              (i_this->field_0x6ec & cc_pl_cut_bit_get()) != 0)))
+               (i_this->field_0x6ec & cc_pl_cut_bit_get()) != 0)))
+#endif
         {
             i_this->mAction = ACTION_DEFENCE;
             i_this->mMode = 0;
@@ -1736,6 +1870,10 @@ static int daE_RDB_IsDelete(e_rdb_class* i_this) {
 
 static int daE_RDB_Delete(e_rdb_class* i_this) {
     fopAc_ac_c* a_this = (fopAc_ac_c*)i_this;
+#if TARGET_PC
+    // Co-op: actor-local Combat ownership must not survive King Bulblin deletion.
+    dusk::coop::clearAllEnemyTargets(a_this);
+#endif
     fopAcM_GetID(i_this);
     dComIfG_resDelete(&i_this->mPhase, "E_rdb");
     if (i_this->field_0xfce != 0) {

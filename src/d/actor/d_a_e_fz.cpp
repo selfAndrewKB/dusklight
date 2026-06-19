@@ -15,6 +15,7 @@
 #include "f_op/f_op_actor_enemy.h"
 
 #if TARGET_PC
+#include "dusk/coop/damage_owner.h"
 #include "dusk/coop/defender_owner.h"
 #include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/selected_target_state.h"
@@ -211,8 +212,6 @@ static bool coOpSelectCombatTargetState(
     return true;
 }
 
-// Co-op: rebound angles are selected-target state, not P1 globals. True item-owner bias is a
-// separate item-awareness family and is documented in the audit when left out.
 static s16 coOpReboundAngleY(daE_FZ_c* i_this, const char* label) {
     s16 targetAngle = 0;
     if (coOpSelectCombatTargetState(i_this, label, false,
@@ -224,6 +223,15 @@ static s16 coOpReboundAngleY(daE_FZ_c* i_this, const char* label) {
 
     return fopAcM_searchPlayerAngleY(i_this) + 32768;
 }
+
+static s16 coOpReboundAngleY(daE_FZ_c* i_this, fopAc_ac_c* owner, const char* label) {
+    // Co-op: direct item/contact reactions face away from their concrete player owner.
+    if (owner != NULL) {
+        return cLib_targetAngleY(&i_this->current.pos, &owner->current.pos) + 32768;
+    }
+    return coOpReboundAngleY(i_this, label);
+}
+
 #endif
 
 void daE_FZ_c::damage_check() {
@@ -237,7 +245,6 @@ void daE_FZ_c::damage_check() {
         setMidnaBindEffect(this, &mCreature, &current.pos, &scale);
 
         if (field_0x712 == 0) {
-            pos.set(dComIfGp_getPlayer(0)->current.pos);
             mStts.Move();
 
             if (field_0x714 == 3) {
@@ -256,7 +263,14 @@ void daE_FZ_c::damage_check() {
                         mTgCoSph.GetTgHitObj()->ChkAtType(AT_TYPE_BOOMERANG))
                     {
 #if TARGET_PC
-                        current.angle.y = coOpReboundAngleY(this, "e_fz.damage_rebound");
+                        // Co-op: damage rebound follows the concrete local attacker.
+                        const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+                            dusk::coop::damage_owner::resolveDamageOwner(
+                                this, mTgCoSph.GetTgHitObj());
+                        dusk::coop::damage_owner::recordDamageOwnerHit(
+                            "e_fz.damage_rebound", this, damageOwner, &mAtInfo);
+                        current.angle.y = coOpReboundAngleY(
+                            this, damageOwner.localPlayerActor, "e_fz.damage_rebound");
 #else
                         current.angle.y = fopAcM_searchPlayerAngleY(this) + 32768;
 #endif
@@ -279,7 +293,14 @@ void daE_FZ_c::damage_check() {
                         mTgCoSph.GetTgHitObj()->ChkAtType(AT_TYPE_ARROW))
                     {
 #if TARGET_PC
-                        current.angle.y = coOpReboundAngleY(this, "e_fz.item_rebound");
+                        // Co-op: item rebound follows the concrete local attacker.
+                        const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+                            dusk::coop::damage_owner::resolveDamageOwner(
+                                this, mTgCoSph.GetTgHitObj());
+                        dusk::coop::damage_owner::recordDamageOwnerHit(
+                            "e_fz.item_rebound", this, damageOwner, &mAtInfo);
+                        current.angle.y = coOpReboundAngleY(
+                            this, damageOwner.localPlayerActor, "e_fz.item_rebound");
 #else
                         current.angle.y = fopAcM_searchPlayerAngleY(this) + 32768;
 #endif
@@ -300,7 +321,14 @@ void daE_FZ_c::damage_check() {
 
                         if (1 < health) {
 #if TARGET_PC
-                            current.angle.y = coOpReboundAngleY(this, "e_fz.hookshot_rebound");
+                            // Co-op: hookshot rebound follows the concrete local attacker.
+                            const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+                                dusk::coop::damage_owner::resolveDamageOwner(
+                                    this, mTgCoSph.GetTgHitObj());
+                            dusk::coop::damage_owner::recordDamageOwnerHit(
+                                "e_fz.hookshot_rebound", this, damageOwner, &mAtInfo);
+                            current.angle.y = coOpReboundAngleY(
+                                this, damageOwner.localPlayerActor, "e_fz.hookshot_rebound");
 #else
                             current.angle.y = fopAcM_searchPlayerAngleY(this) + 32768;
 #endif
@@ -392,13 +420,18 @@ void daE_FZ_c::damage_check() {
 
                     if (mAtSph.ChkAtHit()) {
 #if TARGET_PC
-                        // Co-op: attack contact is defender ownership; the hit player may be any
-                        // local slot, and the rebound should face away from the combat target.
+                        // Co-op: attack contact and recoil belong to the player actually touched.
                         const dusk::coop::defender_owner::DefenderOwnerResult defender =
                             dusk::coop::defender_owner::resolveDefenderOwner(this, &mAtSph);
                         dusk::coop::defender_owner::recordDefenderOwnerContact("e_fz.attack_contact",
                                                                                 this, defender);
-                        current.angle.y = coOpReboundAngleY(this, "e_fz.attack_contact");
+                        current.angle.y = coOpReboundAngleY(
+                            this, defender.localPlayerActor, "e_fz.attack_contact");
+                        mAngleFromPlayer =
+                            defender.localPlayerActor != NULL
+                                ? cLib_targetAngleY(&current.pos,
+                                                   &defender.localPlayerActor->current.pos)
+                                : current.angle.y + 32768;
 
                         if (!defender.found) {
                             mAtSph.ClrAtHit();
@@ -736,7 +769,9 @@ void daE_FZ_c::executeDamage() {
         }
         break;
     case 3:
+#if !TARGET_PC
         mAngleFromPlayer = fopAcM_searchPlayerAngleY(this);
+#endif
         if (current.angle.y < 0) {
             field_0x704 = 0;
         } else {

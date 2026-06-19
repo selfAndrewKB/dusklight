@@ -12,6 +12,7 @@
 #if TARGET_PC
 #include "dusk/coop/damage_owner.h"
 #include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/retained_interaction_owner.h"
 #include "dusk/coop/selected_target_state.h"
 #endif
 #include <cstring>
@@ -89,6 +90,35 @@ static dusk::coop::selected_target_state::SelectedTargetState coOpFindHpWolfSens
     daE_HP_c* i_this, const char* label) {
     return dusk::coop::selected_target_state::findNearestPlayerState(
         i_this, label, coOpHpWolfSensePredicate, i_this->mDisHani);
+}
+
+static dusk::coop::retained_interaction_owner::RetainedInteractionState
+coOpHpSoulOwner(daE_HP_c* i_this, const char* label, bool acquire) {
+    dusk::coop::retained_interaction_owner::RetainedInteractionState retained =
+        dusk::coop::retained_interaction_owner::updateRetainedInteraction(
+            label, i_this,
+            dusk::coop::retained_interaction_owner::RetainedInteractionScope::Collect);
+    if (retained.found || !acquire) {
+        return retained;
+    }
+
+    fopAc_ac_c* owner = NULL;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+        daAlink_c* player = static_cast<daAlink_c*>(actor);
+        if (owner == NULL && player != NULL && player->getProcActor() == i_this &&
+            player->checkWolfDownAttackPullOut())
+        {
+            owner = actor;
+        }
+    });
+    if (owner == NULL) {
+        return retained;
+    }
+
+    // Co-op: ALINK's native down-attack keep identifies the exact wolf extracting this soul.
+    return dusk::coop::retained_interaction_owner::beginRetainedInteraction(
+        label, i_this, dusk::coop::retained_interaction_owner::RetainedInteractionScope::Collect,
+        owner, dusk::coop::retained_interaction_owner::RetainedInteractionReason::DirectPlayer);
 }
 #endif
 
@@ -322,8 +352,17 @@ int daE_HP_c::draw() {
         cLib_addCalc2(&field_0x7a0, 40.0f + JREG_F(2), 0.7, JREG_F(7) + 4.0f);
     }
 
+#if TARGET_PC
+    const dusk::coop::retained_interaction_owner::RetainedInteractionState soulOwner =
+        coOpHpSoulOwner(this, "e_hp.draw_soul", checkWolfDownPullFlg());
+    if ((!soulOwner.found || soulOwner.localPlayer == NULL ||
+         !soulOwner.localPlayer->checkWolfDownAttackPullOut()) &&
+        mAction != 6)
+#else
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
-    if (!player->checkWolfDownAttackPullOut() && mAction != 6) {
+    if (!player->checkWolfDownAttackPullOut() && mAction != 6)
+#endif
+    {
         drawBallModel(&tevStr);
     }
 
@@ -771,6 +810,10 @@ void daE_HP_c::executeDown() {
     case 10: {
         onDownFlg();
         if (checkWolfDownPullFlg()) {
+#if TARGET_PC
+            // Co-op: retain the native wolf-down actor before the player proc clears its keep.
+            coOpHpSoulOwner(this, "e_hp.soul_pull", true);
+#endif
             setBck(7, 0, 3.0f, 1.0f);
             mSound1.startCreatureVoice(Z2SE_EN_HP_V_DEAD, -1);
             field_0x71c = 0x1f;
@@ -899,7 +942,15 @@ void daE_HP_c::executeDead() {
             }
 
             if (fopAcM_IsExecuting(field_0x784) != FALSE) {
+#if TARGET_PC
+                dusk::coop::retained_interaction_owner::RetainedInteractionState soulOwner =
+                    coOpHpSoulOwner(this, "e_hp.item_event", false);
+                fopAc_ac_c* player =
+                    soulOwner.localPlayerActor != NULL ? soulOwner.localPlayerActor
+                                                       : dComIfGp_getPlayer(0);
+#else
                 fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
                 if (player->eventInfo.chkCondition(8)) {
                     field_0x778 =
                         dComIfGp_getEventManager().getEventIdx(this, "DEFAULT_GETITEM", 0xff);
@@ -1297,6 +1348,7 @@ int daE_HP_c::_delete() {
 #if TARGET_PC
     // Co-op: clear retained combat/debug state before this Poe actor can be reused.
     dusk::coop::clearAllEnemyTargets(this);
+    dusk::coop::retained_interaction_owner::clearAllRetainedInteractions(this);
 #endif
     dComIfG_resDelete(&mPhaseReq, "E_HP");
 

@@ -141,6 +141,17 @@ static void coOpDbClearBite(e_db_class* i_this, const char* label) {
         label, &i_this->enemy,
         dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach);
 }
+
+static void coOpDbNotifyEnemyDead(e_db_class* i_this) {
+    const dusk::coop::damage_owner::DamageOwnerResult owner =
+        dusk::coop::damage_owner::resolveDamageOwner(&i_this->enemy, i_this->atInfo.mpCollider);
+    // Co-op: delayed death feedback stays with the player whose hit entered this death path.
+    if (owner.localPlayer != NULL) {
+        owner.localPlayer->onEnemyDead();
+    } else {
+        daPy_getPlayerActorClass()->onEnemyDead();
+    }
+}
 #endif
 
 #if TARGET_PC
@@ -544,7 +555,9 @@ static void e_db_appear(e_db_class* i_this) {
 
 static void e_db_appear_v(e_db_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
+#if !TARGET_PC
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     
     cXyz spC;
     f32 temp_f31 = 60.0f + TREG_F(17);
@@ -987,7 +1000,12 @@ static void e_db_attack(e_db_class* i_this) {
 
 static void e_db_attack_s(e_db_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
+#if TARGET_PC
+    // Co-op: detached-head lunges consume the same retained Combat target as the dispatcher.
+    fopAc_ac_c* temp_r28 = coOpDbTargetPlayer(i_this, "e_db.attack_s");
+#else
     fopAc_ac_c* temp_r28 = dComIfGp_getPlayer(0);
+#endif
     cXyz sp28;
 
     sp28 = temp_r28->eyePos - actor->current.pos;
@@ -1028,7 +1046,9 @@ static void e_db_attack_s(e_db_class* i_this) {
 
 static void e_db_chance(e_db_class* i_this) {
     fopAc_ac_c* actor = &i_this->enemy;
+#if !TARGET_PC
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
 
     cXyz sp14;
     f32 temp_f31 = 60.0f + TREG_F(17);
@@ -1779,7 +1799,11 @@ static s8 e_db_escape(e_db_class* i_this) {
         anm_init(i_this, 0xE, 20.0f, 0, 1.0f);
         i_this->sound.startCreatureVoice(Z2SE_EN_DB_V_DEATH, -1);
         i_this->field_0x852 = 1;
+#if TARGET_PC
+        coOpDbNotifyEnemyDead(i_this);
+#else
         daPy_getPlayerActorClass()->onEnemyDead();
+#endif
 
         i_this->invulnerabilityTimer = 200;
         i_this->timers[0] = 80;
@@ -1838,7 +1862,11 @@ static void e_db_e_dead(e_db_class* i_this) {
         i_this->mode = 1;
         i_this->sound.startCreatureVoice(Z2SE_EN_DB_V_DEATH, -1);
         i_this->field_0x852 = 1;
+#if TARGET_PC
+        coOpDbNotifyEnemyDead(i_this);
+#else
         daPy_getPlayerActorClass()->onEnemyDead();
+#endif
         break;
     case 1:
         if (i_this->acch.ChkWallHit()) {
@@ -1925,7 +1953,11 @@ static void e_db_e_dead(e_db_class* i_this) {
         anm_init(i_this, 0xE, 20.0f, 0, 1.0f);
         i_this->sound.startCreatureVoice(Z2SE_EN_DB_V_DEATH, -1);
         i_this->field_0x852 = 1;
+#if TARGET_PC
+        coOpDbNotifyEnemyDead(i_this);
+#else
         daPy_getPlayerActorClass()->onEnemyDead();
+#endif
 
         i_this->invulnerabilityTimer = 200;
         i_this->timers[0] = 80;
