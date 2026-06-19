@@ -61,8 +61,10 @@ The follow-up duplication audit is documented in `docs/coop-alink-duplication-au
 
 The first item/action ownership pass is documented in `docs/coop-secondary-alink-item-ownership-plan.md`. Boomerang, fishing rod, Dominion Rod, bow/arrow, Spinner, bombs, slingshot, and Iron Boots all confirmed the same broad lesson: item actors often know their concrete owning ALINK, but still reach through P1/global helpers for matrices, counters, camera/status, sound, or lifecycle cleanup. Narrow owner-routing fixes made those item families usable for P2 without regressing P1.
 
-The current active work surface is the remaining enemy review queue in
-`docs/coop-enemy-audit.md`, beginning with `E_FK`, `E_GOB`, `E_HZ`, and `E_BUG`.
+The latest enemy batch in `docs/coop-enemy-audit.md` is field-validated: eligible `E_FK`, `E_HZ`,
+and `E_BUG` ownership was implemented and accepted in user testing, while `E_GOB` was confirmed as
+the authored Dangoro miniboss and deferred intact. The next active enemy surface is selecting
+another untouched regular-enemy batch from the audit.
 `docs/coop-p2-independent-control-plan.md` remains the control-ownership root plan rather than the
 immediate queue. Split-screen is usable for co-op testing, with known V1 render/HUD limitations in
 `docs/coop-native-split-screen-camera-plan.md` and validated singular-presentation/ItemGet teardown

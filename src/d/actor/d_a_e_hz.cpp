@@ -12,6 +12,15 @@
 #include "f_op/f_op_actor_enemy.h"
 #include "d/d_debug_viewer.h"
 
+#if TARGET_PC
+#include "d/actor/d_a_alink.h"
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/player_query.h"
+#include "dusk/coop/retained_interaction_owner.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 enum daE_HZ_Action {
     /*  0 */ ACTION_WAIT,
     /*  1 */ ACTION_HIDE,
@@ -102,6 +111,218 @@ bool daE_HZ_c::checkBck(int i_index) {
 static u8 hio_set;
 
 static daE_HZ_HIO_c l_HIO;
+
+#if TARGET_PC
+namespace {
+
+struct CoOpHzTargetState {
+    dusk::coop::selected_target_state::SelectedTargetState state;
+    f32 distance = 0.0f;
+    f32 distanceXZ = 0.0f;
+    s16 angleY = 0;
+};
+
+struct CoOpHzAttackCandidateData {
+    daE_HZ_c* enemy = NULL;
+};
+
+struct CoOpHzExactPlayerData {
+    fopAc_ac_c* player = NULL;
+};
+
+static dusk::coop::PlayerQueryEligibility coOpHzAttackCandidate(
+    dusk::coop::PlayerSlot slot, fopAc_ac_c* actor, void* userData) {
+    dusk::coop::PlayerQueryEligibility eligibility;
+    CoOpHzAttackCandidateData* data = static_cast<CoOpHzAttackCandidateData*>(userData);
+    if (actor == NULL || data == NULL || data->enemy == NULL) {
+        eligibility.eligible = false;
+        eligibility.failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Status;
+        return eligibility;
+    }
+
+    const dusk::coop::selected_target_state::SelectedTargetState state =
+        dusk::coop::selected_target_state::stateForSlot(slot, actor);
+    if (actor->current.pos.absXZ(data->enemy->current.pos) >= 100.0f) {
+        eligibility.eligible = false;
+        eligibility.failureFlags |= dusk::coop::PlayerQueryEligibilityFailure_Range;
+    }
+    if (std::abs(actor->current.pos.y - data->enemy->current.pos.y) >= 110.0f) {
+        eligibility.eligible = false;
+        eligibility.failureFlags |= dusk::coop::PlayerQueryEligibilityFailure_Vertical;
+    }
+    if (!state.available || state.player == NULL || state.player->checkBootsOrArmorHeavy()) {
+        eligibility.eligible = false;
+        eligibility.failureFlags |= dusk::coop::PlayerQueryEligibilityFailure_Status;
+    }
+    return eligibility;
+}
+
+static dusk::coop::PlayerQueryEligibility coOpHzExactPlayer(
+    dusk::coop::PlayerSlot, fopAc_ac_c* actor, void* userData) {
+    dusk::coop::PlayerQueryEligibility eligibility;
+    CoOpHzExactPlayerData* data = static_cast<CoOpHzExactPlayerData*>(userData);
+    if (data == NULL || actor != data->player) {
+        eligibility.eligible = false;
+        eligibility.failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Status;
+    }
+    return eligibility;
+}
+
+// Co-op: Tile Worm awareness, launch setup, and active movement share one Combat target. Item
+// reactions and the retained launch victim remain separate ownership questions.
+static bool coOpSelectHzTargetState(
+    daE_HZ_c* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    CoOpHzTargetState* out, dusk::coop::PlayerQueryPredicate predicate = NULL,
+    void* predicateData = NULL) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.candidatePredicate = predicate;
+    context.candidatePredicateData = predicateData;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (out != NULL) {
+        out->state = targetState;
+        out->distance = target.distance;
+        out->distanceXZ = target.distanceXZ;
+        out->angleY = target.angleY;
+    }
+    return true;
+}
+
+static void coOpHzSelectExactPlayer(daE_HZ_c* i_this, fopAc_ac_c* player,
+                                    const char* label) {
+    if (player == NULL) {
+        return;
+    }
+    CoOpHzExactPlayerData data;
+    data.player = player;
+    // Co-op: an exact hit/interaction owner must replace stale combat retention before commit.
+    coOpSelectHzTargetState(i_this, label, false, dusk::coop::EnemyTargetMode::ImmediateAcquire,
+                            NULL, coOpHzExactPlayer, &data);
+}
+
+static bool coOpHzAnyHookshotActive() {
+    bool active = false;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot slot, fopAc_ac_c* actor) {
+        if (active) {
+            return;
+        }
+        const dusk::coop::selected_target_state::SelectedTargetState state =
+            dusk::coop::selected_target_state::stateForSlot(slot, actor);
+        active = state.available && state.status0_0x4000;
+    });
+    return active;
+}
+
+static bool coOpHzAnyToolKeepsHidden(daE_HZ_c* i_this) {
+    bool active = false;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot slot, fopAc_ac_c* actor) {
+        if (active) {
+            return;
+        }
+        const dusk::coop::selected_target_state::SelectedTargetState state =
+            dusk::coop::selected_target_state::stateForSlot(slot, actor);
+        if (!state.available || state.player == NULL) {
+            return;
+        }
+
+        cXyz* hookTop = state.player->getHookshotTopPos();
+        if (state.status0_0x4000 && hookTop != NULL && hookTop->abs(i_this->current.pos) < 500.0f) {
+            active = true;
+            return;
+        }
+
+        cXyz* ironBall = state.player->getIronBallCenterPos();
+        if (ironBall != NULL && ironBall->absXZ(i_this->current.pos) < 400.0f) {
+            active = true;
+        }
+    });
+    return active;
+}
+
+static dusk::coop::retained_interaction_owner::RetainedInteractionState coOpHzThrowOwner(
+    daE_HZ_c* i_this, const char* label) {
+    return dusk::coop::retained_interaction_owner::updateRetainedInteraction(
+        label, i_this, dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach);
+}
+
+static daPy_py_c* coOpHzThrowPlayer(daE_HZ_c* i_this, const char* label) {
+    const dusk::coop::retained_interaction_owner::RetainedInteractionState owner =
+        coOpHzThrowOwner(i_this, label);
+    return owner.found && owner.localPlayer != NULL ? owner.localPlayer
+                                                    : daPy_getPlayerActorClass();
+}
+
+static dCamera_c* coOpHzThrowCamera(daE_HZ_c* i_this, const char* label) {
+    const dusk::coop::retained_interaction_owner::RetainedInteractionState owner =
+        coOpHzThrowOwner(i_this, label);
+    const int slot = owner.found ? static_cast<int>(owner.slot) : 0;
+    camera_process_class* camera =
+        dComIfGp_getCamera(dComIfGp_getPlayerCameraID(slot));
+    if (camera != NULL) {
+        return &camera->mCamera;
+    }
+    return owner.found ? NULL : dCam_getBody();
+}
+
+static void coOpClearHzThrow(daE_HZ_c* i_this, const char* label) {
+    dCamera_c* camera = coOpHzThrowCamera(i_this, label);
+    if (camera != NULL && camera->GetForceLockOnActor() == i_this) {
+        camera->ForceLockOff(i_this);
+    }
+    dusk::coop::retained_interaction_owner::clearRetainedInteraction(
+        label, i_this, dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach);
+}
+
+static daBoomerang_c* coOpHzBoomerangActor(daE_HZ_c* i_this) {
+    const dusk::coop::EnemyTargetResult target =
+        dusk::coop::getEnemyTarget(i_this, dusk::coop::EnemyTargetScope::Combat);
+    const dusk::coop::selected_target_state::SelectedTargetState state =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    if (state.available && state.actor != NULL &&
+        fopAcM_GetName(state.actor) == fpcNm_ALINK_e && !state.player->checkWolf())
+    {
+        fopAc_ac_c* boomerang = static_cast<daAlink_c*>(state.actor)->getBoomerangActor();
+        if (boomerang != NULL && fopAcM_GetName(boomerang) == fpcNm_BOOMERANG_e) {
+            return static_cast<daBoomerang_c*>(boomerang);
+        }
+    }
+    return NULL;
+}
+
+static f32 coOpHzDistanceToTarget(daE_HZ_c* i_this, fopAc_ac_c* observer) {
+    const dusk::coop::EnemyTargetResult target =
+        dusk::coop::getEnemyTarget(i_this, dusk::coop::EnemyTargetScope::Combat);
+    if (target.found && target.localActor != NULL) {
+        return fopAcM_searchActorDistance(observer, target.localActor);
+    }
+    return fopAcM_searchPlayerDistance(observer);
+}
+
+static bool coOpHzRightTurnCut(int cutType) {
+    return cutType == daPy_py_c::CUT_TYPE_TURN_RIGHT ||
+           cutType == daPy_py_c::CUT_TYPE_UNK_9 ||
+           cutType == daPy_py_c::CUT_TYPE_HORSE_TURN ||
+           cutType == daPy_py_c::CUT_TYPE_LARGE_TURN_RIGHT;
+}
+
+}  // namespace
+#endif
 
 int daE_HZ_c::draw() {
     g_env_light.settingTevStruct(0, &current.pos, &tevStr);
@@ -219,7 +440,9 @@ void daE_HZ_c::setActionMode(int i_action) {
 }
 
 bool daE_HZ_c::checkHideStart() {
+#if !TARGET_PC
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
 
     if (mAttackCooldownTimer != 0) {
         return 1;
@@ -231,11 +454,17 @@ bool daE_HZ_c::checkHideStart() {
         return 1;
     }
 
+#if TARGET_PC
+    if (coOpHzAnyToolKeepsHidden(this)) {
+        return 1;
+    }
+#else
     if (dComIfGp_checkPlayerStatus0(0, 0x4000) && player->getHookshotTopPos() != NULL) {
         if (player->getHookshotTopPos()->abs(current.pos) < 500.0f) {
             return 1;
         }
     }
+#endif
 
     m_near_bomb = m_near_carry = m_near_weapon = NULL;
 
@@ -245,11 +474,13 @@ bool daE_HZ_c::checkHideStart() {
         return 1;
     }
 
+#if !TARGET_PC
     if (player->getIronBallCenterPos() != NULL) {
         if (player->getIronBallCenterPos()->absXZ(current.pos) < 400.0f) {
             return 1;
         }
     }
+#endif
 
     return 0;
 }
@@ -257,6 +488,47 @@ bool daE_HZ_c::checkHideStart() {
 bool daE_HZ_c::checkAttackStart() {
     field_0x6e9 = 0;
 
+#if TARGET_PC
+    CoOpHzAttackCandidateData candidateData;
+    candidateData.enemy = this;
+    CoOpHzTargetState target;
+    // Co-op: filter the launch candidate before committing so a heavy P1 cannot mask P2.
+    if (coOpSelectHzTargetState(this, "e_hz.attack_start", false,
+                                dusk::coop::EnemyTargetMode::ImmediateAcquire, &target,
+                                coOpHzAttackCandidate, &candidateData))
+    {
+        // Co-op: retain the exact player standing on the tile before the native event request.
+        dusk::coop::retained_interaction_owner::beginRetainedInteraction(
+            "e_hz.throw_begin", this,
+            dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach,
+            target.state.actor,
+            dusk::coop::retained_interaction_owner::RetainedInteractionReason::EnemyTarget);
+        field_0x6e9 |= (u8)1;
+        mPlayerDist = target.distance;
+        mPlayerAngleY = target.angleY;
+    } else {
+        bool heavyPlayerNearby = false;
+        dusk::coop::forEachActivePlayer(
+            [&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+                if (heavyPlayerNearby || actor == NULL) {
+                    return;
+                }
+                daPy_py_c* player = static_cast<daPy_py_c*>(actor);
+                heavyPlayerNearby =
+                    actor->current.pos.absXZ(current.pos) < 100.0f &&
+                    std::abs(actor->current.pos.y - current.pos.y) < 110.0f &&
+                    player->checkBootsOrArmorHeavy();
+            });
+        if (heavyPlayerNearby) {
+            if (mAttackStartTimer == 0) {
+                mMode = 2;
+                current.pos.y += 2.0f;
+                mAttackStartTimer = cM_rndF(10.0f) + 20.0f;
+            }
+            return false;
+        }
+    }
+#else
     if (fopAcM_searchPlayerDistanceXZ(this) < 100.0f &&
         std::abs(fopAcM_searchPlayerDistanceY(this)) < 110.0f)
     {
@@ -271,6 +543,7 @@ bool daE_HZ_c::checkAttackStart() {
             return false;
         }
     }
+#endif
 
     m_near_bomb = m_near_carry = m_near_weapon = NULL;
 
@@ -295,10 +568,20 @@ bool daE_HZ_c::checkAttackStart() {
 }
 
 bool daE_HZ_c::checkArrowCharge() {
+#if TARGET_PC
+    bool charged = false;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+        if (!charged && actor != NULL) {
+            charged = static_cast<daPy_py_c*>(actor)->checkArrowChargeEnd();
+        }
+    });
+    return charged;
+#else
     if (daPy_getPlayerActorClass()->checkArrowChargeEnd()) {
         return true;
     }
     return false;
+#endif
 }
 
 void daE_HZ_c::setTgSetBit(int i_setBit) {
@@ -570,7 +853,13 @@ void daE_HZ_c::executeHide() {
             shape_angle.y = (s16)(mPlayerAngleY + 0x2000) & 0xC000;
             break;
         }
-        if (!checkHideStart() && !dComIfGp_checkPlayerStatus0(0, 0x4000)) {
+        if (!checkHideStart() &&
+#if TARGET_PC
+            !coOpHzAnyHookshotActive()
+#else
+            !dComIfGp_checkPlayerStatus0(0, 0x4000)
+#endif
+        ) {
             setActionMode(ACTION_WAIT);
         }
         break;
@@ -591,11 +880,14 @@ void daE_HZ_c::executeHide() {
 
         if (mRetentionBeforeStretchTimer == 2) {
             if (mReadyNewAction) {
-                cXyz position(current.pos.x, daPy_getPlayerActorClass()->current.pos.y,
-                              current.pos.z);
+#if TARGET_PC
+                daPy_py_c* throwPlayer = coOpHzThrowPlayer(this, "e_hz.throw_position");
+#else
+                daPy_py_c* throwPlayer = daPy_getPlayerActorClass();
+#endif
+                cXyz position(current.pos.x, throwPlayer->current.pos.y, current.pos.z);
 
-                daPy_getPlayerActorClass()->setPlayerPosAndAngle(
-                    &position, daPy_getPlayerActorClass()->shape_angle.y, 0);
+                throwPlayer->setPlayerPosAndAngle(&position, throwPlayer->shape_angle.y, 0);
                 dComIfGp_event_reset();
                 mReadyNewAction = false;
             }
@@ -603,7 +895,13 @@ void daE_HZ_c::executeHide() {
             mSetModelAnmMtx = false;
 
             if (field_0x6e9 & 1) {
-                daPy_getPlayerActorClass()->setThrowDamage(shape_angle.y, 35.0f, 73.0f, 1, 0, 0);
+#if TARGET_PC
+                coOpHzThrowPlayer(this, "e_hz.throw_damage")
+                    ->setThrowDamage(shape_angle.y, 35.0f, 73.0f, 1, 0, 0);
+#else
+                daPy_getPlayerActorClass()->setThrowDamage(shape_angle.y, 35.0f, 73.0f, 1, 0,
+                                                           0);
+#endif
                 mCameraOnTimer = l_HIO.camera_on_timer + 1.0f;
             } else if (field_0x6e9 & 2) {
                 if (mpCarryActor != NULL) {
@@ -667,7 +965,11 @@ void daE_HZ_c::executeAttack() {
             mSound.startCreatureVoice(Z2SE_EN_HZ_V_LAUGH, -1);
         }
 
+#if TARGET_PC
+        if (!coOpHzThrowPlayer(this, "e_hz.attack_throw")->checkThrowDamage()) {
+#else
         if (!daPy_getPlayerActorClass()->checkThrowDamage()) {
+#endif
             if (mpMorfSO->getFrame() > 60.0f && mpMorfSO->getFrame() < 100.0f && checkHideStart()) {
                 mpMorfSO->setFrame(100.0f);
             }
@@ -682,8 +984,15 @@ void daE_HZ_c::executeAttack() {
         break;
     }
 
+#if TARGET_PC
+    dCamera_c* throwCamera = coOpHzThrowCamera(this, "e_hz.attack_camera");
+    if (!coOpHzThrowPlayer(this, "e_hz.attack_camera")->checkThrowDamage() &&
+        throwCamera != NULL && throwCamera->GetForceLockOnActor() == this &&
+        mCameraOffTimer == 0)
+#else
     if (!daPy_getPlayerActorClass()->checkThrowDamage() &&
         dCam_getBody()->GetForceLockOnActor() == this && mCameraOffTimer == 0)
+#endif
     {
         mCameraOffTimer = l_HIO.camera_off_timer + 1.0f;
     }
@@ -855,7 +1164,18 @@ void daE_HZ_c::setWindEnd() {
     speed.y = 20.0f;
     field_0x6b2 = 0x1000;
 
-    if (std::abs(fopAcM_searchPlayerDistanceY(this)) >= 300.0f) {
+#if TARGET_PC
+    const dusk::coop::EnemyTargetResult target =
+        dusk::coop::getEnemyTarget(this, dusk::coop::EnemyTargetScope::Combat);
+    const f32 targetDistanceY =
+        target.found && target.localActor != NULL
+            ? target.localActor->current.pos.y - current.pos.y
+            : fopAcM_searchPlayerDistanceY(this);
+    if (std::abs(targetDistanceY) >= 300.0f)
+#else
+    if (std::abs(fopAcM_searchPlayerDistanceY(this)) >= 300.0f)
+#endif
+    {
         mWaitTimer = 5;
     } else {
         mWaitTimer = 10;
@@ -875,7 +1195,11 @@ void daE_HZ_c::executeWind() {
     f32 frame = mpMorfSO->getFrame();
     f32 playerDist;
     f32 groundCross;
+#if TARGET_PC
+    mpBoomerangActor = coOpHzBoomerangActor(this);
+#else
     mpBoomerangActor = daPy_py_c::getThrowBoomerangActor();
+#endif
 
     switch (mMode) {
     case 0:
@@ -888,7 +1212,11 @@ void daE_HZ_c::executeWind() {
         mMode = 1;
         field_0x6e4 = 0;
 
+#if TARGET_PC
+        playerDist = coOpHzDistanceToTarget(this, this);
+#else
         playerDist = fopAcM_searchPlayerDistance(this);
+#endif
         if (playerDist >= 1000.0f) {
             playerDist = 1000.0f;
         }
@@ -938,7 +1266,11 @@ void daE_HZ_c::executeWind() {
                     }
 
                     if (mpBoomerangActor->getReturnFlg() &&
+#if TARGET_PC
+                        coOpHzDistanceToTarget(this, mpBoomerangActor) < 500.0f)
+#else
                         fopAcM_searchPlayerDistance(mpBoomerangActor) < 500.0f)
+#endif
                     {
                         bVar = true;
                     }
@@ -966,7 +1298,12 @@ void daE_HZ_c::executeWind() {
         }
 
         position = mpBoomerangActor->current.pos;
+#if TARGET_PC
+        if (coOpHzDistanceToTarget(this, this) < 500.0f &&
+            mpBoomerangActor->getReturnFlg()) {
+#else
         if (mPlayerDist < 500.0f && mpBoomerangActor->getReturnFlg()) {
+#endif
             setWindEnd();
             return;
         }
@@ -1266,7 +1603,11 @@ void daE_HZ_c::executeWindChance() {
     cXyz start;
     dBgS_LinChk linChk;
 
+#if TARGET_PC
+    mpBoomerangActor = coOpHzBoomerangActor(this);
+#else
     mpBoomerangActor = daPy_py_c::getThrowBoomerangActor();
+#endif
 
     switch (mMode) {
     case 0:
@@ -1465,6 +1806,20 @@ void daE_HZ_c::damage_check() {
     
     if (mAction != 1 || mMode < 4) {
         if (mSpheres[0].ChkTgHit() && mSpheres[0].GetTgHitObj()->ChkAtType(AT_TYPE_BOOMERANG)) {
+#if TARGET_PC
+            const dusk::coop::damage_owner::DamageOwnerResult boomerangOwner =
+                dusk::coop::damage_owner::resolveDamageOwner(this, mSpheres[0].GetTgHitObj());
+            dusk::coop::damage_owner::recordDamageOwnerHit(
+                "e_hz.boomerang", this, boomerangOwner, NULL);
+            // Co-op: wind/reel continuation follows the player whose boomerang caused this hit.
+            coOpHzSelectExactPlayer(this, boomerangOwner.localPlayerActor,
+                                    "e_hz.boomerang_owner");
+            if (boomerangOwner.hitActor != NULL &&
+                fopAcM_GetName(boomerangOwner.hitActor) == fpcNm_BOOMERANG_e)
+            {
+                mpBoomerangActor = static_cast<daBoomerang_c*>(boomerangOwner.hitActor);
+            }
+#endif
             mSpheres[0].ClrTgHit();
             if (mAction == ACTION_CHANCE) {
                 setActionMode(ACTION_WIND_CHANCE);
@@ -1477,7 +1832,9 @@ void daE_HZ_c::damage_check() {
             mDamageDeathTimer = 10;
         } else if (mDamageDeathTimer == 0) {
             mStts.Move();
+#if !TARGET_PC
             cXyz player_pos(daPy_getPlayerActorClass()->current.pos);
+#endif
 
             s32 bVar = 0;
 
@@ -1502,10 +1859,25 @@ void daE_HZ_c::damage_check() {
                         health = 0;
                     }
 
+#if TARGET_PC
+                    const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+                        dusk::coop::damage_owner::resolveDamageOwner(this, mAtInfo.mpCollider);
+                    daPy_py_c* damagePlayer =
+                        dusk::coop::damage_owner::resolveDamageOwnerPlayer(damageOwner);
+                    cXyz player_pos =
+                        damagePlayer != NULL ? damagePlayer->current.pos
+                                             : daPy_getPlayerActorClass()->current.pos;
+#endif
                     cc_at_check(this, &mAtInfo);
                     if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_UNK)) {
                         mDamageDeathTimer = 0x14;
-                    } else if (cc_pl_cut_bit_get() == 0x80) {
+                    } else if (
+#if TARGET_PC
+                        coOpHzRightTurnCut(damageOwner.cutType)
+#else
+                        cc_pl_cut_bit_get() == 0x80
+#endif
+                    ) {
                         mDamageDeathTimer = 0x14;
                     } else {
                         mDamageDeathTimer = 10;
@@ -1520,11 +1892,20 @@ void daE_HZ_c::damage_check() {
                     mSpheres[3].ClrTgHit();
 
                     if (mAction == ACTION_ATTACK) {
+#if TARGET_PC
+                        dusk::coop::damage_owner::recordDamageOwnerHit(
+                            "e_hz.attack_hit", this, damageOwner, &mAtInfo);
+#endif
                         setActionMode(ACTION_HIDE);
                         return;
                     }
 
-                    if (daPy_getPlayerActorClass()->getCutCount() >= 4 ||
+                    if (
+#if TARGET_PC
+                        damageOwner.cutCount >= 4 ||
+#else
+                        daPy_getPlayerActorClass()->getCutCount() >= 4 ||
+#endif
                         ((dCcD_GObjInf*)mAtInfo.mpCollider)->GetAtSpl() == 1)
                     {
                         bVar = true;
@@ -1603,6 +1984,10 @@ void daE_HZ_c::damage_check() {
 
                         setActionMode(ACTION_DAMAGE);
                     }
+#if TARGET_PC
+                    dusk::coop::damage_owner::recordDamageOwnerHit(
+                        "e_hz.damage", this, damageOwner, &mAtInfo, mAction);
+#endif
                     return;
                 }
             }
@@ -1629,8 +2014,27 @@ void daE_HZ_c::action() {
     cXyz unused;
     cXyz unused2;
 
+#if TARGET_PC
+    CoOpHzTargetState target;
+    const bool committed =
+        mAction == ACTION_ATTACK || mAction == ACTION_WIND || mAction == ACTION_WIND_CHANCE ||
+        mAction == ACTION_WIND_WALK ||
+        coOpHzThrowOwner(this, "e_hz.action_throw").active;
+    const dusk::coop::EnemyTargetMode mode =
+        mAction == ACTION_WAIT || mAction == ACTION_HIDE
+            ? dusk::coop::EnemyTargetMode::ImmediateAcquire
+            : dusk::coop::EnemyTargetMode::StickyCombat;
+    if (coOpSelectHzTargetState(this, "e_hz.action", committed, mode, &target)) {
+        mPlayerDist = target.distance;
+        mPlayerAngleY = target.angleY;
+    } else {
+        mPlayerDist = fopAcM_searchPlayerDistance(this);
+        mPlayerAngleY = fopAcM_searchPlayerAngleY(this);
+    }
+#else
     mPlayerDist = fopAcM_searchPlayerDistance(this);
     mPlayerAngleY = fopAcM_searchPlayerAngleY(this);
+#endif
     damage_check();
 
     if (mAction != 10 && checkWaterSurface()) {
@@ -1815,24 +2219,49 @@ int daE_HZ_c::execute() {
     if (mCameraOffTimer != 0) {
         mCameraOffTimer--;
         if (mCameraOffTimer == 0) {
+#if TARGET_PC
+            dCamera_c* throwCamera = coOpHzThrowCamera(this, "e_hz.camera_off");
+            if (throwCamera != NULL && throwCamera->GetForceLockOnActor() == this) {
+                throwCamera->ForceLockOff(this);
+            }
+#else
             if (dCam_getBody()->GetForceLockOnActor() == this) {
                 dCam_getBody()->ForceLockOff(this);
             }
+#endif
         }
     }
 
+#if TARGET_PC
+    dCamera_c* throwCamera = coOpHzThrowCamera(this, "e_hz.camera_height");
+    daPy_py_c* throwPlayer = coOpHzThrowPlayer(this, "e_hz.camera_height");
+    if (throwCamera != NULL && throwCamera->GetForceLockOnActor() == this &&
+        throwPlayer->current.pos.y < current.pos.y - 100.0f)
+#else
     if (dCam_getBody()->GetForceLockOnActor() == this &&
         daPy_getPlayerActorClass()->current.pos.y < current.pos.y - 100.0f)
+#endif
     {
+#if TARGET_PC
+        throwCamera->ForceLockOff(this);
+#else
         dCam_getBody()->ForceLockOff(this);
+#endif
     }
 
     if (mCameraOnTimer != 0) {
         mCameraOnTimer--;
         if (mCameraOnTimer == 0) {
+#if TARGET_PC
+            dCamera_c* throwCamera = coOpHzThrowCamera(this, "e_hz.camera_on");
+            if (throwCamera != NULL && throwCamera->GetForceLockOnActor() != this) {
+                throwCamera->ForceLockOn(this);
+            }
+#else
             if (dCam_getBody()->GetForceLockOnActor() != this) {
                 dCam_getBody()->ForceLockOn(this);
             }
+#endif
         }
     }
 
@@ -1846,6 +2275,24 @@ int daE_HZ_c::execute() {
     mtx_set();
     cc_set();
 
+#if TARGET_PC
+    const dusk::coop::retained_interaction_owner::RetainedInteractionState throwOwner =
+        coOpHzThrowOwner(this, "e_hz.throw_release");
+    dCamera_c* throwCameraEnd = coOpHzThrowCamera(this, "e_hz.throw_release");
+    // Co-op: event acceptance may span frames before throw damage starts; do not release early.
+    const bool waitingForThrow =
+        mAction == ACTION_HIDE && (mMode == 4 || mMode == 5);
+    if (throwOwner.active && !waitingForThrow && !mReadyNewAction &&
+        mRetentionBeforeStretchTimer == 0 &&
+        mCameraOnTimer == 0 && mCameraOffTimer == 0 &&
+        (throwCameraEnd == NULL || throwCameraEnd->GetForceLockOnActor() != this) &&
+        (throwOwner.localPlayer == NULL || !throwOwner.localPlayer->checkThrowDamage()))
+    {
+        // Co-op: release only after native throw damage and the owner camera's force lock end.
+        coOpClearHzThrow(this, "e_hz.throw_release");
+    }
+#endif
+
     return 1;
 }
 
@@ -1858,6 +2305,12 @@ static int daE_HZ_IsDelete(daE_HZ_c* i_this) {
 }
 
 int daE_HZ_c::_delete() {
+#if TARGET_PC
+    // Co-op: release combat, retained victim, and owner-camera force-lock state before reuse.
+    coOpClearHzThrow(this, "e_hz.delete");
+    dusk::coop::clearAllEnemyTargets(this);
+    dusk::coop::retained_interaction_owner::clearAllRetainedInteractions(this);
+#endif
     dComIfG_resDelete(&mPhaseReq, "E_HZ");
     dComIfG_resDelete(&mPhaseReq2, mpName);
 

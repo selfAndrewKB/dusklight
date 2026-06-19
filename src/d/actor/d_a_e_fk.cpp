@@ -12,6 +12,14 @@
 #include "Z2AudioLib/Z2Instances.h"
 #include "f_op/f_op_actor_enemy.h"
 
+#if TARGET_PC
+#include "d/actor/d_a_alink.h"
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/horse_owner.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 class daE_FK_HIO_c : public JORReflexible {
 public:
     daE_FK_HIO_c();
@@ -109,6 +117,61 @@ void daE_FK_c::initSwordSph() {
 static u8 hio_set;
 
 static daE_FK_HIO_c l_HIO;
+
+#if TARGET_PC
+namespace {
+
+struct CoOpFkTargetState {
+    dusk::coop::selected_target_state::SelectedTargetState state;
+    f32 distance = 0.0f;
+    s16 angleY = 0;
+};
+
+// Co-op: a Phantom Rider's run, approach, attack, and neck tracking use one retained Combat owner.
+// The parent Ganondorf encounter still owns when and where these boss children are spawned.
+static bool coOpSelectFkTargetState(daE_FK_c* i_this, const char* label, bool committed,
+                                    CoOpFkTargetState* out) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = dusk::coop::EnemyTargetMode::StickyCombat;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (out != NULL) {
+        out->state = targetState;
+        out->distance = target.distance;
+        out->angleY = target.angleY;
+    }
+    return true;
+}
+
+static s16 coOpFkHorseAngle(const CoOpFkTargetState& target, s16 fallback) {
+    if (!target.state.available || target.state.actor == NULL ||
+        fopAcM_GetName(target.state.actor) != fpcNm_ALINK_e)
+    {
+        return fallback;
+    }
+
+    daHorse_c* horse = dusk::coop::horse_owner::getHorseForPlayer(
+        static_cast<daAlink_c*>(target.state.actor));
+    return horse != NULL ? horse->current.angle.y : fallback;
+}
+
+}  // namespace
+#endif
 
 void daE_FK_c::SetBodySph() {
     cXyz pos(0.0f, 0.0f, 0.0f);
@@ -233,7 +296,16 @@ void daE_FK_c::TgChk() {
 
             mAtInfo.field_0x18 = 30;
             mAtInfo.mpCollider = mCcBodySph[i].GetTgHitObj();
+#if TARGET_PC
+            const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+                dusk::coop::damage_owner::resolveDamageOwner(this, mAtInfo.mpCollider);
+#endif
             At_Check(i);
+#if TARGET_PC
+            // Co-op: Phantom Rider hit diagnostics retain the concrete attacker.
+            dusk::coop::damage_owner::recordDamageOwnerHit(
+                "e_fk.damage", this, damageOwner, &mAtInfo, mAction);
+#endif
 
             mCcTimer[0] = 15;
             mCcBodySph[i].ClrTgHit();
@@ -288,7 +360,9 @@ static f32 s_TargetDis;
 }
 
 void daE_FK_c::R_MoveAction() {
+#if !TARGET_PC
     daPy_py_c* actor = daPy_getPlayerActorClass();
+#endif
     cXyz pos(current.pos);
 
     field_0x5d0 = s_PointAngle;
@@ -301,7 +375,11 @@ void daE_FK_c::R_MoveAction() {
     SpeedSet();
     SetAnmSpeed();
     HsAngleSet();
+#if TARGET_PC
+    TnNeckSet(s_TargetAngle - shape_angle.y);
+#else
     TnNeckSet(fopAcM_searchPlayerAngleY(this) - shape_angle.y);
+#endif
     TgChk();
 }
 
@@ -314,7 +392,9 @@ void daE_FK_c::StartAction() {
         mAction = 1;
     }
 
+#if !TARGET_PC
     f32 speedf = fopAcM_GetSpeedF(daPy_getPlayerActorClass());
+#endif
     cXyz sp8;
 
     field_0x5dc = 1.0f;
@@ -323,7 +403,11 @@ void daE_FK_c::StartAction() {
     SpeedSet();
     SetAnmSpeed();
     HsAngleSet();
+#if TARGET_PC
+    TnNeckSet(s_TargetAngle - shape_angle.y);
+#else
     TnNeckSet(fopAcM_searchPlayerAngleY(this) - shape_angle.y);
+#endif
     TgChk();
 }
 
@@ -388,7 +472,9 @@ void daE_FK_c::DeathAction() {
 }
 
 void daE_FK_c::DamageChk() {
+#if !TARGET_PC
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
     if (health <= 0) {
         SetAnm(8, 0, 5.0f, 1.0f);
         mAction = 4;
@@ -398,7 +484,21 @@ void daE_FK_c::DamageChk() {
         mCcBodySph[0].OffCoSetBit();
         mCcBodySph[1].OffCoSetBit();
 
+#if TARGET_PC
+        const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+            dusk::coop::damage_owner::resolveDamageOwner(this, mAtInfo.mpCollider);
+        daPy_py_c* damagePlayer =
+            dusk::coop::damage_owner::resolveDamageOwnerPlayer(damageOwner);
+        const s16 hitAngle =
+            damagePlayer != NULL
+                ? cLib_targetAngleY(&current.pos, &damagePlayer->current.pos)
+                : s_TargetAngle;
+        const s16 damageShapeAngle =
+            damagePlayer != NULL ? damagePlayer->shape_angle.y : s_TargetAngle;
+        if ((damageShapeAngle - hitAngle) >= 0) {
+#else
         if ((fopAcM_GetShapeAngle_p(player)->y - s_TargetAngle) >= 0) {
+#endif
             current.angle.y += 0x2000;
         } else {
             current.angle.y -= 0x2000;
@@ -423,7 +523,11 @@ void daE_FK_c::DamageAction() {
     SpeedSet();
     SetAnmSpeed();
     HsAngleSet();
+#if TARGET_PC
+    TnNeckSet(s_TargetAngle - shape_angle.y);
+#else
     TnNeckSet(fopAcM_searchPlayerAngleY(this) - shape_angle.y);
+#endif
     TgChk();
 }
 
@@ -447,7 +551,11 @@ void daE_FK_c::AttackAction() {
         }
 
         mMode++;
+#if TARGET_PC
+        TnNeckSet(s_TargetAngle - shape_angle.y);
+#else
         TnNeckSet(fopAcM_searchPlayerAngleY(this) - shape_angle.y);
+#endif
         field_0x5d0 = s_PointAngle;
 
         if (s_TargetDis < 1000.0f + aREG_F(0)) {
@@ -460,7 +568,11 @@ void daE_FK_c::AttackAction() {
             mMode++;
         }
 
+#if TARGET_PC
+        TnNeckSet(s_TargetAngle - shape_angle.y);
+#else
         TnNeckSet(fopAcM_searchPlayerAngleY(this) - shape_angle.y);
+#endif
 
         if (checkViewArea()) {
             field_0x5d0 = s_PointAngle;
@@ -532,15 +644,27 @@ int daE_FK_c::Execute() {
 
     mSound.startCreatureSoundLevel(Z2SE_EN_FK_MOVE, 0, -1);
     
+#if TARGET_PC
+    CoOpFkTargetState target;
+    // Co-op: cache one rider target before every downstream run/attack consumer executes.
+    const bool hasTarget = coOpSelectFkTargetState(this, "e_fk.execute", mAction == 2, &target);
+    daPy_py_c* player =
+        hasTarget && target.state.player != NULL ? target.state.player : daPy_getPlayerActorClass();
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
     s_LinkPos = &fopAcM_GetPosition(player);
     s_TargetAngle = cLib_targetAngleY(&current.pos, s_LinkPos);
     s_dis = current.pos.abs(*s_LinkPos);
 
+#if TARGET_PC
+    s_HorseAngle = coOpFkHorseAngle(target, s_TargetAngle);
+#else
     daHorse_c* horse = dComIfGp_getHorseActor();
     if (horse != NULL) {
         s_HorseAngle = horse->current.angle.y;
     }
+#endif
 
     cXyz targetPos(field_0x60c, 0.0f, 0.0f);
     cLib_offsetPos(&targetPos, s_LinkPos, s_TargetAngle, &targetPos);
@@ -666,6 +790,10 @@ int daE_FK_c::Draw() {
 }
 
 int daE_FK_c::Delete() {
+#if TARGET_PC
+    // Co-op: target sidecars must not outlive this short-lived boss child actor.
+    dusk::coop::clearAllEnemyTargets(this);
+#endif
     dComIfG_resDelete(&mPhase, "E_fk");
 
     if (mHIOInit) {

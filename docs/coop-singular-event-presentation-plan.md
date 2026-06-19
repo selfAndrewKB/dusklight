@@ -300,6 +300,8 @@ movement locking remains in place.
 Retained enemy interactions use `event_presentation::Source::EnemyRetainedInteraction` only for the
 authored fullscreen camera/presentation surface. The gameplay effect owner remains in the matching
 retained owner API, such as `retained_interaction_owner` for Deku Like Link swallow/eat/spit.
+Localized gameplay cameras do not collapse presentation merely because their player is retained:
+the Tile Worm toss keeps split-screen active and force-locks only the retained victim's camera.
 
 ## Captured Fullscreen Menus
 
@@ -362,8 +364,9 @@ or demo; those still require explicit classification.
 
 ## Follow-Up Order
 
-1. Continue enemy ownership review from `docs/coop-enemy-audit.md`, beginning with the remaining
-   untouched regular/special candidates such as `E_FK`, `E_GOB`, `E_HZ`, and `E_BUG`.
+1. Select the next untouched regular enemies from `docs/coop-enemy-audit.md`. The
+   `E_FK` / `E_HZ` / `E_BUG` batch is field-validated; `E_GOB` is Dangoro and remains deferred to
+   the miniboss/setpiece pass.
 2. Return to the producer-family ItemGet audit when a non-Poe P2 acquisition is selected for field
    testing.
 3. Classify later singular sequences individually as they are encountered.

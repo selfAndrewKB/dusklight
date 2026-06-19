@@ -12,6 +12,15 @@
 #include "Z2AudioLib/Z2Instances.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "d/actor/d_a_alink.h"
+#include "d/actor/d_a_e_nest.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/item_awareness.h"
+#include "dusk/coop/player_query.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 enum E_bug_RES_File_ID {
     /* BMDG */
     /* 0x3 */ BMDG_MU04 = 0x3,
@@ -31,6 +40,248 @@ static daE_Bug_HIO_c l_HIO;
 static s8 l_roomNo;
 
 static s8 data_80697E8D;
+
+#if TARGET_PC
+namespace {
+
+struct CoOpBugTargetState {
+    dusk::coop::selected_target_state::SelectedTargetState state;
+    f32 distance = 0.0f;
+    f32 distanceXZ = 0.0f;
+    s16 angleY = 0;
+};
+
+struct CoOpBugExactPlayerData {
+    fopAc_ac_c* player = NULL;
+};
+
+struct CoOpBugWakeCandidateData {
+    e_bug_class* swarm = NULL;
+};
+
+static dusk::coop::PlayerQueryEligibility coOpBugExactPlayer(
+    dusk::coop::PlayerSlot, fopAc_ac_c* actor, void* userData) {
+    dusk::coop::PlayerQueryEligibility eligibility;
+    CoOpBugExactPlayerData* data = static_cast<CoOpBugExactPlayerData*>(userData);
+    if (data == NULL || actor != data->player) {
+        eligibility.eligible = false;
+        eligibility.failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Status;
+    }
+    return eligibility;
+}
+
+static dusk::coop::PlayerQueryEligibility coOpBugWakeCandidate(
+    dusk::coop::PlayerSlot, fopAc_ac_c* actor, void* userData) {
+    dusk::coop::PlayerQueryEligibility eligibility;
+    CoOpBugWakeCandidateData* data = static_cast<CoOpBugWakeCandidateData*>(userData);
+    if (actor == NULL || data == NULL || data->swarm == NULL) {
+        eligibility.eligible = false;
+        eligibility.failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Status;
+        return eligibility;
+    }
+
+    bool inRange = false;
+    for (int i = 0; i < data->swarm->bug_num; i++) {
+        const bug_s& mite = data->swarm->Bug_s[i];
+        if (mite.field_0x50 == -1 &&
+            mite.field_0x18.abs(actor->current.pos) < data->swarm->field_0x57c)
+        {
+            inRange = true;
+            break;
+        }
+    }
+    if (!inRange) {
+        eligibility.eligible = false;
+        eligibility.failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Range;
+    }
+    return eligibility;
+}
+
+// Co-op: one Poison Mite actor represents one swarm, so every internal mite shares one Combat
+// owner. Attachment commits that owner so body-bound mites cannot jump to another player.
+static bool coOpSelectBugTargetState(
+    e_bug_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    CoOpBugTargetState* out, dusk::coop::PlayerQueryPredicate predicate = NULL,
+    void* predicateData = NULL) {
+    fopAc_ac_c* actor = &i_this->actor;
+    dusk::coop::EnemyTargetContext context;
+    context.observer = actor;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.candidatePredicate = predicate;
+    context.candidatePredicateData = predicateData;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        actor, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (out != NULL) {
+        out->state = targetState;
+        out->distance = target.distance;
+        out->distanceXZ = target.distanceXZ;
+        out->angleY = target.angleY;
+    }
+    return true;
+}
+
+static bool coOpBugSelectExactPlayer(e_bug_class* i_this, fopAc_ac_c* player,
+                                     const char* label, CoOpBugTargetState* out) {
+    if (player == NULL) {
+        return false;
+    }
+    CoOpBugExactPlayerData data;
+    data.player = player;
+    // Co-op: producer ownership from a nest hit or local wake must replace stale swarm retention.
+    return coOpSelectBugTargetState(i_this, label, false,
+                                    dusk::coop::EnemyTargetMode::ImmediateAcquire, out,
+                                    coOpBugExactPlayer, &data);
+}
+
+static daPy_py_c* coOpBugTargetPlayer(const CoOpBugTargetState& target) {
+    return target.state.available && target.state.player != NULL
+               ? target.state.player
+               : daPy_getPlayerActorClass();
+}
+
+static daPy_py_c* coOpBugRetainedTargetPlayer(e_bug_class* i_this) {
+    const dusk::coop::EnemyTargetResult target =
+        dusk::coop::getEnemyTarget(&i_this->actor, dusk::coop::EnemyTargetScope::Combat);
+    const dusk::coop::selected_target_state::SelectedTargetState state =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    return state.available && state.player != NULL ? state.player : daPy_getPlayerActorClass();
+}
+
+static fopAc_ac_c* coOpBugNestHitOwner(e_bug_class* i_this) {
+    fopAc_ac_c* parent = fopAcM_SearchByID(i_this->actor.parentActorID);
+    if (parent == NULL || fopAcM_GetName(parent) != fpcNm_E_NEST_e) {
+        return NULL;
+    }
+    e_nest_class* nest = static_cast<e_nest_class*>(parent);
+    if (nest->mHitActorID == fpcM_ERROR_PROCESS_ID_e) {
+        return NULL;
+    }
+    fopAc_ac_c* hitOwner = fopAcM_SearchByID(nest->mHitActorID);
+    return dusk::coop::getSlotForActor(hitOwner) != dusk::coop::PlayerSlot::Invalid ? hitOwner
+                                                                                    : NULL;
+}
+
+static int coOpBugAttachedCount(e_bug_class* i_this) {
+    int count = 0;
+    for (int i = 0; i < i_this->bug_num; i++) {
+        if (i_this->Bug_s[i].field_0x50 == 2) {
+            count++;
+        }
+    }
+    return count;
+}
+
+static bool coOpBugAllWaiting(e_bug_class* i_this) {
+    for (int i = 0; i < i_this->bug_num; i++) {
+        if (i_this->Bug_s[i].field_0x50 > 0 ||
+            (i_this->Bug_s[i].field_0x50 == -1 && i_this->Bug_s[i].field_0x51 != 0))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void coOpPrepareBugTarget(e_bug_class* i_this, CoOpBugTargetState* target) {
+    if (target == NULL) {
+        return;
+    }
+    *target = {};
+
+    const int attachedCount = coOpBugAttachedCount(i_this);
+    const bool allWaiting = coOpBugAllWaiting(i_this);
+    fopAc_ac_c* nestOwner = allWaiting ? coOpBugNestHitOwner(i_this) : NULL;
+    if (nestOwner != NULL &&
+        coOpBugSelectExactPlayer(i_this, nestOwner, "e_bug.nest_owner", target))
+    {
+        return;
+    }
+
+    if (allWaiting) {
+        if (i_this->bitSw != 0xFF) {
+            if (dComIfGs_isSwitch(i_this->bitSw, l_roomNo)) {
+                coOpSelectBugTargetState(
+                    i_this, "e_bug.switch_wake", false,
+                    dusk::coop::EnemyTargetMode::ImmediateAcquire, target);
+            }
+            return;
+        }
+
+        CoOpBugWakeCandidateData wakeData;
+        wakeData.swarm = i_this;
+        // Co-op: choose one eligible swarm owner before individual sleeping mites update.
+        coOpSelectBugTargetState(
+            i_this, "e_bug.proximity_wake", false,
+            dusk::coop::EnemyTargetMode::ImmediateAcquire, target,
+            coOpBugWakeCandidate, &wakeData);
+        return;
+    }
+
+    coOpSelectBugTargetState(i_this, "e_bug.swarm", attachedCount != 0,
+                             dusk::coop::EnemyTargetMode::StickyCombat, target);
+}
+
+static bool coOpBugRightOrLeftTurnCut(int cutType) {
+    return cutType == daPy_py_c::CUT_TYPE_TURN_RIGHT ||
+           cutType == daPy_py_c::CUT_TYPE_LARGE_TURN_RIGHT ||
+           cutType == daPy_py_c::CUT_TYPE_TURN_LEFT ||
+           cutType == daPy_py_c::CUT_TYPE_LARGE_TURN_LEFT;
+}
+
+static s8 coOpBugCheckPlayerDamage(bug_s* i_this, cXyz* hitDelta) {
+    s8 hit = 0;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+        if (hit != 0 || actor == NULL || fopAcM_GetName(actor) != fpcNm_ALINK_e) {
+            return;
+        }
+
+        daPy_py_c* player = static_cast<daPy_py_c*>(actor);
+        cXyz attackPos;
+        f32 radius = 70.0f;
+        if (player->checkWolf()) {
+            attackPos = player->current.pos;
+        } else if (coOpBugRightOrLeftTurnCut(player->getCutType())) {
+            attackPos = player->current.pos;
+            radius = 200.0f;
+        } else {
+            MTXCopy(player->getLeftItemMatrix(), mDoMtx_stack_c::get());
+            mDoMtx_stack_c::multVecZero(&attackPos);
+            attackPos.y -= 50.0f;
+        }
+
+        cXyz delta = i_this->field_0x18 - attackPos;
+        if (player->getCutAtFlg() == 0 || delta.abs() >= radius) {
+            return;
+        }
+
+        if (player->checkWolf()) {
+            hit = i_this->field_0x50 == 2 ? 2 : 1;
+        } else if (i_this->field_0x50 == 1 || radius > 100.0f) {
+            hit = 1;
+        }
+        if (hit != 0 && hitDelta != NULL) {
+            *hitDelta = delta;
+        }
+    });
+    return hit;
+}
+
+}  // namespace
+#endif
 
 static int daE_Bug_Draw(e_bug_class* i_this) {
     bug_s* bugs = i_this->Bug_s;
@@ -123,8 +374,12 @@ static void bug_mtxset_stick(bug_s* i_this) {
     }
 }
 
+#if TARGET_PC
+static void bug_mtxset_stickW(bug_s* i_this, daPy_py_c* player) {
+#else
 static void bug_mtxset_stickW(bug_s* i_this) {
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     cXyz sp38, sp44, sp50;
 
     sp38 = i_this->field_0x18 - i_this->field_0xc;
@@ -133,7 +388,11 @@ static void bug_mtxset_stickW(bug_s* i_this) {
         sVar1 *= -1;
     }
 
+#if TARGET_PC
+    MTXCopy(static_cast<daAlink_c*>(player)->getModelJointMtx(1), *calc_mtx);
+#else
     MTXCopy(daPy_getLinkPlayerActorClass()->getModelJointMtx(1), *calc_mtx);
+#endif
     sp38.set(0.0f, 0.0f, 0.0f);
     MtxPosition(&sp38, &sp44);
     sp50 = i_this->field_0x18 - sp44;
@@ -260,9 +519,13 @@ static f32 at_size;
 
 static s8 data_80697EAC;
 
+#if TARGET_PC
+static void bug_stick(bug_s* i_this, daPy_py_c* player) {
+#else
 static void bug_stick(bug_s* i_this) {
-    cXyz sp30, sp3c, sp48;
     daPy_py_c* player = daPy_getLinkPlayerActorClass();
+#endif
+    cXyz sp30, sp3c, sp48;
     
     MTXCopy(player->getModelJointMtx(1), *calc_mtx);
     sp30.set(0.0f, 0.0f, 0.0f);
@@ -296,8 +559,10 @@ static void bug_stick(bug_s* i_this) {
     i_this->field_0x18 = sp48 + sp3c;
     i_this->field_0x3c.y = i_this->field_0x48 + 0x8000;
 
-    if ((i_this->field_0x52 & 15) == 0 && (daPy_getLinkPlayerActorClass()->checkFrontRoll() || daPy_getLinkPlayerActorClass()->checkMetamorphose() || 
-        daPy_getPlayerActorClass()->eventInfo.checkCommandDoor() || data_80697EAC != 0)) {
+    if ((i_this->field_0x52 & 15) == 0 &&
+        (player->checkFrontRoll() || player->checkMetamorphose() ||
+         player->eventInfo.checkCommandDoor() || data_80697EAC != 0))
+    {
         i_this->field_0x50 = 1;
         i_this->field_0x3c.y = i_this->field_0x48;
         i_this->field_0x30.y = cM_rndF(5.0f) + 30.0f;
@@ -308,10 +573,18 @@ static void bug_stick(bug_s* i_this) {
     }
 }
 
+#if TARGET_PC
+static void bug_stickW(bug_s* i_this, daPy_py_c* player) {
+#else
 static void bug_stickW(bug_s* i_this) {
+#endif
     cXyz sp34, sp40, sp4c;
 
+#if TARGET_PC
+    MTXCopy(static_cast<daAlink_c*>(player)->getModelJointMtx(1), *calc_mtx);
+#else
     MTXCopy(daPy_getLinkPlayerActorClass()->getModelJointMtx(1), *calc_mtx);
+#endif
     sp34.set(0.0f, 0.0f, 0.0f);
     MtxPosition(&sp34, &sp4c);
 
@@ -383,10 +656,16 @@ static void bug_fail(e_bug_class* a_this, bug_s* i_this) {
 
 static void damage_check(e_bug_class* a_this, bug_s* i_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)&a_this->actor;
+#if !TARGET_PC
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
     cXyz sp4c, sp58;
     f32 fVar1 = 70.0f;
 
+#if TARGET_PC
+    // Co-op: every active player's live cut/body matrix may damage an internal swarm mite.
+    s8 sVar1 = coOpBugCheckPlayerDamage(i_this, &sp4c);
+#else
     if (daPy_py_c::checkNowWolf()) {
         sp58 = player->current.pos;
     } else {
@@ -415,6 +694,7 @@ static void damage_check(e_bug_class* a_this, bug_s* i_this) {
             sVar1 = 1;
         }
     }
+#endif
 
     if (data_80697E8D != 0) {
         sp4c = i_this->field_0x18 - at_pos;
@@ -461,8 +741,13 @@ static void damage_check(e_bug_class* a_this, bug_s* i_this) {
     }
 }
 
+#if TARGET_PC
+static void set_wait(e_bug_class* a_this, bug_s* i_this, CoOpBugTargetState* target) {
+    daPy_py_c* player = coOpBugTargetPlayer(*target);
+#else
 static void set_wait(e_bug_class* a_this, bug_s* i_this) {
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     cXyz sp40;
     s8 sVar1 = 0;
 
@@ -473,10 +758,17 @@ static void set_wait(e_bug_class* a_this, bug_s* i_this) {
                     sVar1 = 1;
                 }
             } else {
+#if TARGET_PC
+                sp40 = i_this->field_0x18 - player->current.pos;
+                if (target->state.available && sp40.abs() < a_this->field_0x57c) {
+                    sVar1 = 1;
+                }
+#else
                 sp40 = i_this->field_0x18 - player->current.pos;
                 if (sp40.abs() < a_this->field_0x57c) {
                     sVar1 = 1;
                 }
+#endif
             }
             break;
 
@@ -496,8 +788,13 @@ static void set_wait(e_bug_class* a_this, bug_s* i_this) {
     }
 }
 
+#if TARGET_PC
+static void normal_move(e_bug_class* a_this, bug_s* i_this, daPy_py_c* player,
+                        const CoOpBugTargetState& target) {
+#else
 static void normal_move(e_bug_class* a_this, bug_s* i_this) {
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     cXyz sp68, sp74;
 
     if (i_this->field_0x53 != 0) {
@@ -577,7 +874,14 @@ static void normal_move(e_bug_class* a_this, bug_s* i_this) {
         }
     }
 
-    if (i_this->field_0x30.y <= 0.0f && data_80697EAC == 0 && !dComIfGp_checkPlayerStatus0(0, 0x100) && fVar1 < 40.0f && fVar2 <= 0.0f && fVar2 >= -150.0f) {
+    if (i_this->field_0x30.y <= 0.0f && data_80697EAC == 0 &&
+#if TARGET_PC
+        !target.state.status0_0x100 &&
+#else
+        !dComIfGp_checkPlayerStatus0(0, 0x100) &&
+#endif
+        fVar1 < 40.0f && fVar2 <= 0.0f && fVar2 >= -150.0f)
+    {
         i_this->field_0x50 = 2;
 
         if (cM_rndF(1.0f) < 0.5f) {
@@ -604,7 +908,16 @@ static void normal_move(e_bug_class* a_this, bug_s* i_this) {
 
 static void bug_control(e_bug_class* a_this) {
     fopAc_ac_c* actor = (fopAc_ac_c*)&a_this->actor;
+#if TARGET_PC
+    CoOpBugTargetState target;
+    coOpPrepareBugTarget(a_this, &target);
+    daPy_py_c* player = coOpBugTargetPlayer(target);
+    // Co-op: lantern/door repulsion belongs to the retained player the swarm is approaching.
+    data_80697EAC =
+        player->getKandelaarFlamePos() != NULL || player->eventInfo.checkCommandDoor();
+#else
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
     cXyz sp1c, sp28;
     bug_s* i_this = a_this->Bug_s;
     u8 sVar1 = 0;
@@ -630,10 +943,19 @@ static void bug_control(e_bug_class* a_this) {
             i_this->field_0x52++;
 
             if (i_this->field_0x50 == -1) {
+#if TARGET_PC
+                set_wait(a_this, i_this, &target);
+                player = coOpBugTargetPlayer(target);
+#else
                 set_wait(a_this, i_this);
+#endif
                 bug_mtxset(i_this);
             } else if (i_this->field_0x50 == 1) {
+#if TARGET_PC
+                normal_move(a_this, i_this, player, target);
+#else
                 normal_move(a_this, i_this);
+#endif
 
                 if (i_this->field_0x53 != 0) {
                     sVar2++;
@@ -642,11 +964,24 @@ static void bug_control(e_bug_class* a_this) {
                 bug_mtxset(i_this);
                 damage_check(a_this, i_this);
             } else if (i_this->field_0x50 == 2) {
+#if TARGET_PC
+                if (target.state.wolf) {
+#else
                 if (daPy_py_c::checkNowWolf()) {
+#endif
+#if TARGET_PC
+                    bug_stickW(i_this, player);
+                    bug_mtxset_stickW(i_this, player);
+#else
                     bug_stickW(i_this);
                     bug_mtxset_stickW(i_this);
+#endif
                 } else {
+#if TARGET_PC
+                    bug_stick(i_this, player);
+#else
                     bug_stick(i_this);
+#endif
                     bug_mtxset_stick(i_this);
                 }
 
@@ -707,19 +1042,53 @@ static void* s_bomb_sub(void* i_actor, void* i_data) {
 }
 
 static int daE_Bug_Execute(e_bug_class* i_this) {
+#if TARGET_PC
+    // Co-op: attached-swarm door/metamorphose release must keep executing for its retained owner.
+    daPy_py_c* player = coOpBugRetainedTargetPlayer(i_this);
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
 
     if (!player->checkMetamorphose()) {
-        if (!daPy_getPlayerActorClass()->eventInfo.checkCommandDoor() && dComIfGp_event_runCheck()) {
+        if (!player->eventInfo.checkCommandDoor() && dComIfGp_event_runCheck()) {
             return 1;
         }
     }
 
     i_this->field_0x580++;
     data_80697E8D = 0;
+#if TARGET_PC
+    const dusk::coop::item_awareness::ItemAwarenessResult boomerang =
+        dusk::coop::item_awareness::findActiveBoomerang(&i_this->actor, "e_bug.boomerang");
+    if (boomerang.found && boomerang.itemActor != NULL) {
+        // Co-op: Gale Boomerang wind samples the active owner-local item actor.
+        data_80697E8D = 1;
+        at_pos = boomerang.itemActor->current.pos;
+    }
+#else
     fpcM_Search(s_boom_sub, i_this);
+#endif
     fpcM_Search(s_bomb_sub, i_this);
 
+#if TARGET_PC
+    bool foundSpinnerAttack = false;
+    dusk::coop::forEachActivePlayer(
+        [&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+            if (foundSpinnerAttack || actor == NULL) {
+                return;
+            }
+            daPy_py_c* activePlayer = static_cast<daPy_py_c*>(actor);
+            if (activePlayer->checkSpinnerRide() &&
+                activePlayer->checkSpinnerTriggerAttack())
+            {
+                // Co-op: any active player's Spinner attack can strike this shared swarm.
+                data_80697E8D = 2;
+                at_pos = activePlayer->current.pos;
+                at_size = 120.0f;
+                foundSpinnerAttack = true;
+            }
+        });
+#else
     if (daPy_getPlayerActorClass()->checkSpinnerRide()) {
         if (daPy_getPlayerActorClass()->checkSpinnerTriggerAttack()) {
             data_80697E8D = 2;
@@ -727,21 +1096,46 @@ static int daE_Bug_Execute(e_bug_class* i_this) {
             at_size = 120.0f;
         }
     }
+#endif
 
     if ((i_this->field_0x580 & 1) != 0) {
+#if TARGET_PC
+        bool foundIronBall = false;
+        dusk::coop::forEachActivePlayer(
+            [&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+                if (foundIronBall || actor == NULL) {
+                    return;
+                }
+                daPy_py_c* activePlayer = static_cast<daPy_py_c*>(actor);
+                cXyz* pos = activePlayer->getIronBallCenterPos();
+                if (pos != NULL && (activePlayer->current.pos - *pos).abs() > 200.0f &&
+                    !activePlayer->checkIronBallReturn() &&
+                    !activePlayer->checkIronBallGroundStop())
+                {
+                    // Co-op: Ball and Chain proximity comes from its concrete owning player.
+                    data_80697E8D = 2;
+                    at_pos = *pos;
+                    at_size = 130.0f;
+                    foundIronBall = true;
+                }
+            });
+#else
         cXyz* pos = player->getIronBallCenterPos();
         if (pos != NULL && (player->current.pos - *pos).abs() > 200.0f && !daPy_getPlayerActorClass()->checkIronBallReturn() && !daPy_getPlayerActorClass()->checkIronBallGroundStop()) {
             data_80697E8D = 2;
             at_pos = *pos;
             at_size = 130.0f;
         }
+#endif
     }
 
+#if !TARGET_PC
     if (daPy_getPlayerActorClass()->getKandelaarFlamePos() != NULL || daPy_getPlayerActorClass()->eventInfo.checkCommandDoor()) {
         data_80697EAC = 1;
     } else {
         data_80697EAC = 0;
     }
+#endif
 
     bug_control(i_this);
     return 1;
@@ -754,6 +1148,10 @@ static int daE_Bug_IsDelete(e_bug_class* i_this) {
 static int daE_Bug_Delete(e_bug_class* i_this) {
     fopAc_ac_c* a_this = &i_this->actor;
 
+#if TARGET_PC
+    // Co-op: the swarm's retained target must not survive actor deletion or pointer reuse.
+    dusk::coop::clearAllEnemyTargets(a_this);
+#endif
     static u32 const l_bmdidx[2] = {BMDG_MU04, BMDG_MU05};
     if (i_this->field_0x7dad != 0) {
         for (u32 i = 0; i < 2; i++) {
