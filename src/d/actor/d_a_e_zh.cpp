@@ -15,6 +15,10 @@
 #include "f_op/f_op_camera_mng.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#endif
+
 enum E_ZH_RES_File_ID {
     /* BCK */
     /* 0x05 */ BCK_ZH_ACT01 = 0x5,
@@ -656,7 +660,14 @@ void daE_ZH_c::mStartParticleSet() {
 }
 
 bool daE_ZH_c::mCutTypeCheck() {
+#if TARGET_PC
+    // Co-op: the Sol hand's stagger/drop threshold follows the player who actually damaged it.
+    const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+        dusk::coop::damage_owner::resolveDamageOwner(this, mAtInfo.mpCollider);
+    daPy_py_c* player = dusk::coop::damage_owner::resolveDamageOwnerPlayer(damageOwner);
+#else
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
 
     if (player->getCutType() == daPy_py_c::CUT_TYPE_LARGE_JUMP || player->getCutType() == daPy_py_c::CUT_TYPE_LARGE_JUMP_FINISH ||
         player->getCutType() == daPy_py_c::CUT_TYPE_LARGE_TURN_LEFT || player->getCutType() == daPy_py_c::CUT_TYPE_LARGE_TURN_RIGHT ||
@@ -695,6 +706,13 @@ void daE_ZH_c::damage_check() {
             sp20.set(*field_0xb40.GetTgHitPosP());
         }
 
+#if TARGET_PC
+        // Co-op: Ball Master is Sol-object-driven, but its player hit reactions still belong to
+        // the actual damaging player rather than P1 or a synthetic Combat target.
+        const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+            dusk::coop::damage_owner::resolveDamageOwner(this, mAtInfo.mpCollider);
+#endif
+
         local_28.x = 0;
         local_28.y = sp20.atan2sX_Z();
         local_28.z = 0;
@@ -703,6 +721,10 @@ void daE_ZH_c::damage_check() {
             !mAtInfo.mpCollider->ChkAtType(AT_TYPE_SLINGSHOT) && mAnm != BCK_ZH_OPEN && mAnm != BCK_ZH_START) {
             dComIfGp_setHitMark(1, this, &sp20, &local_28, NULL, 0);
             cc_at_check(this, &mAtInfo);
+#if TARGET_PC
+            dusk::coop::damage_owner::recordDamageOwnerHit("e_zh.damage", this, damageOwner,
+                                                           &mAtInfo);
+#endif
             health = 1000;
             field_0x560 = 1000;
             field_0xa08.ClrTgHit();

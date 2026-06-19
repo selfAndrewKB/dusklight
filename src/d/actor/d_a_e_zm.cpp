@@ -6,7 +6,15 @@
 #include "d/dolzel_rel.h" // IWYU pragma: keep
 
 #include "d/actor/d_a_e_zm.h"
+#include "d/actor/d_a_player.h"
 #include "f_op/f_op_actor_enemy.h"
+
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/defender_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
 
 enum E_zm_RES_File_ID {
     /* BCK */
@@ -68,6 +76,85 @@ public:
 static u8 hio_set;
 
 static daE_ZM_HIO_c l_HIO;
+
+#if TARGET_PC
+struct CoOpZmRangeData {
+    cXyz origin;
+    f32 range;
+};
+
+static dusk::coop::PlayerQueryEligibility coOpZmRangeCandidate(
+    dusk::coop::PlayerSlot, fopAc_ac_c* actor, void* userData) {
+    dusk::coop::PlayerQueryEligibility eligibility;
+    CoOpZmRangeData* data = static_cast<CoOpZmRangeData*>(userData);
+    if (actor == NULL || data == NULL || data->origin.abs(actor->current.pos) > data->range) {
+        eligibility.eligible = false;
+        eligibility.failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Range;
+    }
+    return eligibility;
+}
+
+// Co-op: each visible Zant Mask owns one Combat target; helper markers remain non-enemy actors,
+// and fired balls consume the parent's committed launch target instead of acquiring independently.
+static bool coOpSelectZmTargetState(
+    daE_ZM_c* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
+    dusk::coop::selected_target_state::SelectedTargetState* state, s16* angle_y,
+    dusk::coop::PlayerQueryPredicate predicate = NULL, void* predicateData = NULL) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.candidatePredicate = predicate;
+    context.candidatePredicateData = predicateData;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    return true;
+}
+
+static bool coOpReadZmTargetState(
+    daE_ZM_c* i_this, const char* label,
+    dusk::coop::selected_target_state::SelectedTargetState* state, s16* angle_y) {
+    const dusk::coop::EnemyTargetResult target =
+        dusk::coop::getEnemyTarget(i_this, dusk::coop::EnemyTargetScope::Combat);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    return true;
+}
+#endif
 
 namespace {
     static DUSK_CONSTEXPR dCcD_SrcCyl cc_zm_src = {
@@ -210,6 +297,11 @@ void daE_ZM_c::damage_check() {
 
     if (mCyl.ChkTgHit()) {
         mAtInfo.mpCollider = mCyl.GetTgHitObj();
+#if TARGET_PC
+        // Co-op: cut-count and special-cut reactions belong to the actual damaging player.
+        const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+            dusk::coop::damage_owner::resolveDamageOwner(this, mAtInfo.mpCollider);
+#endif
         field_0x723 = 10;
         sp2c = current.pos - *mCyl.GetTgHitPosP();
         sp38.set(*mCyl.GetTgHitPosP());
@@ -242,6 +334,10 @@ void daE_ZM_c::damage_check() {
             }
         }
 
+#if TARGET_PC
+        dusk::coop::damage_owner::recordDamageOwnerHit("e_zm.damage", this, damageOwner, &mAtInfo);
+#endif
+
         if (health > 1) {
             field_0x72d++;
 
@@ -269,7 +365,14 @@ void daE_ZM_c::damage_check() {
 }
 
 bool daE_ZM_c::mCutTypeCheck() {
+#if TARGET_PC
+    // Co-op: this is called only while mAtInfo names the current target hit.
+    const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+        dusk::coop::damage_owner::resolveDamageOwner(this, mAtInfo.mpCollider);
+    daPy_py_c* player = dusk::coop::damage_owner::resolveDamageOwnerPlayer(damageOwner);
+#else
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
 
     if (player->getCutCount() >= 4) {
         return true;
@@ -316,7 +419,6 @@ void daE_ZM_c::executeSearchPoint() {
 }
 
 void daE_ZM_c::executeWait() {
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
     cXyz i_scale(l_HIO.model_size, l_HIO.model_size, l_HIO.model_size);
     cXyz sp44;
 
@@ -326,6 +428,25 @@ void daE_ZM_c::executeWait() {
 
     switch (mMode) {
         case MODE_0: {
+#if TARGET_PC
+            // Co-op: hidden masks acquire among players already inside the native appearance
+            // radius, so an out-of-range P1 cannot mask an eligible P2.
+            dusk::coop::selected_target_state::SelectedTargetState targetState;
+            CoOpZmRangeData rangeData;
+            rangeData.origin = home.pos;
+            rangeData.range = l_HIO.occurance_range;
+            const bool targetAvailable =
+                coOpSelectZmTargetState(this, "e_zm.wait", false,
+                                        dusk::coop::EnemyTargetMode::ImmediateAcquire,
+                                        &targetState, NULL,
+                                        arg0 == 0 ? coOpZmRangeCandidate : NULL,
+                                        arg0 == 0 ? &rangeData : NULL);
+            if (!targetAvailable) {
+                return;
+            }
+#else
+            fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
             if (arg0 == 1) {
                 if (field_0x6e4 >= field_0x6e5) {
                     field_0x6e4 = 0;
@@ -342,7 +463,11 @@ void daE_ZM_c::executeWait() {
 
                 current.pos.set(field_0x66c[field_0x6e4]);
             } else {
+#if TARGET_PC
+                sp44 = home.pos - targetState.pos;
+#else
                 sp44 = home.pos - player->current.pos;
+#endif
 
                 if (sp44.abs() > l_HIO.occurance_range) {
                     return;
@@ -363,7 +488,11 @@ void daE_ZM_c::executeWait() {
             mSound.startCreatureSound(Z2SE_EN_ZM_EMERGE, 0, -1);
             dComIfGp_particle_set(dPa_RM(ID_ZI_S_ZM_APP_A), &sp44, &shape_angle, &i_scale);
             
+#if TARGET_PC
+            s16 sVar1 = fopAcM_searchActorAngleY(this, targetState.actor);
+#else
             s16 sVar1 = fopAcM_searchPlayerAngleY(this);
+#endif
             current.angle.y = sVar1;
             shape_angle.y = sVar1;
             home.pos.set(current.pos);
@@ -427,6 +556,16 @@ void daE_ZM_c::executeWait() {
 }
 
 void daE_ZM_c::executeMove() {
+#if TARGET_PC
+    // Co-op: active movement updates the Mask's existing Combat owner.
+    s16 targetAngleY;
+    if (!coOpSelectZmTargetState(this, "e_zm.move", false,
+                                 dusk::coop::EnemyTargetMode::StickyCombat, NULL,
+                                 &targetAngleY))
+    {
+        targetAngleY = fopAcM_searchPlayerAngleY(this);
+    }
+#endif
     switch (mMode) {
         case MODE_0:
             mCyl.SetCoVsGrp(16);
@@ -435,7 +574,11 @@ void daE_ZM_c::executeMove() {
             mMode = 1;
             // fallthrough
         case MODE_1:
+#if TARGET_PC
+            cLib_addCalcAngleS2(&current.angle.y, targetAngleY, 2, 0x600);
+#else
             cLib_addCalcAngleS2(&current.angle.y, fopAcM_searchPlayerAngleY(this), 2, 0x600);
+#endif
 
             if (field_0x722 == 0) {
                 mTimer = l_HIO.wait_time_before_attack;
@@ -447,10 +590,28 @@ void daE_ZM_c::executeMove() {
 void daE_ZM_c::executeAttack() {
     cXyz i_scale(l_HIO.model_size, l_HIO.model_size, l_HIO.model_size);
     J3DModel* model = mpModelMorf->getModel();
+#if TARGET_PC
+    // Co-op: launch aim commits to the parent Mask's Combat owner for the whole attack.
+    dusk::coop::selected_target_state::SelectedTargetState targetState;
+    s16 targetAngleY;
+    if (!coOpSelectZmTargetState(this, "e_zm.attack", true,
+                                 dusk::coop::EnemyTargetMode::StickyCombat, &targetState,
+                                 &targetAngleY))
+    {
+        targetState.actor = dComIfGp_getPlayer(0);
+        targetState.pos = targetState.actor->current.pos;
+        targetAngleY = fopAcM_searchPlayerAngleY(this);
+    }
+#else
     fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
     cXyz sp44, sp50;
     csXyz angle;
+#if TARGET_PC
+    cLib_addCalcAngleS2(&current.angle.y, targetAngleY, 2, 0x600);
+#else
     cLib_addCalcAngleS2(&current.angle.y, fopAcM_searchPlayerAngleY(this), 2, 0x600);
+#endif
 
     if (mTimer == 0) {
         switch (mMode) {
@@ -469,7 +630,11 @@ void daE_ZM_c::executeAttack() {
 
                 if (mpModelMorf->isStop()) {
                     angle = shape_angle;
+#if TARGET_PC
+                    sp50.set(targetState.pos);
+#else
                     sp50.set(player->current.pos);
+#endif
                     sp50.y += BREG_F(17) + 60.0f;
                     sp50 -= sp44;
                     angle.x = sp50.atan2sY_XZ();
@@ -559,11 +724,22 @@ void daE_ZM_c::executeDamage() {
 void daE_ZM_c::executeDead() {
     cXyz sp4c, sp58;
     csXyz angle;
+#if TARGET_PC
+    // Co-op: death facing consumes the retained Combat owner without producing a new target.
+    s16 targetAngleY;
+    if (!coOpReadZmTargetState(this, "e_zm.dead", NULL, &targetAngleY)) {
+        targetAngleY = fopAcM_searchPlayerAngleY(this);
+    }
+#endif
 
     switch (mMode) {
         case MODE_0:
             setBck(BCK_ZM_MOUTHOPEN, J3DFrameCtrl::EMode_NONE, 3.0f, 0.0f);
+#if TARGET_PC
+            current.angle.y = targetAngleY + 0x8000;
+#else
             current.angle.y = fopAcM_searchPlayerAngleY(this) + 0x8000;
+#endif
             speedF = JREG_F(3) + 40.0f;
             attention_info.distances[fopAc_attn_BATTLE_e] = 0;
             fopAcM_OffStatus(this, 0);
@@ -666,11 +842,26 @@ void daE_ZM_c::executeBullet() {
             if (mSph.ChkAtShieldHit()) {
                 daE_ZM_c* parent_p;
                 if (fopAcM_SearchByID(parentActorID, (fopAc_ac_c**)&parent_p) != 0 && parent_p != NULL) {
+#if TARGET_PC
+                    // Co-op: shield reflection reads the player whose shield touched the ball.
+                    const dusk::coop::defender_owner::DefenderOwnerResult defender =
+                        dusk::coop::defender_owner::resolveDefenderOwner(this, &mSph);
+                    dusk::coop::defender_owner::recordDefenderOwnerContact(
+                        "e_zm.bullet_reflect", this, defender);
+                    const int cutType = defender.localPlayer != NULL
+                                            ? defender.localPlayer->getCutType()
+                                            : daPy_py_c::CUT_TYPE_NONE;
+#else
                     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
                     mDoAud_seStart(Z2SE_EN_ZM_BALL_REFLECT, &current.pos, 0, 0);
                     sp44 = parent_p->current.pos;
 
+#if TARGET_PC
+                    if (cutType != daPy_py_c::CUT_TYPE_NONE) {
+#else
                     if (player->getCutType() != daPy_py_c::CUT_TYPE_NONE) {
+#endif
                         sp44.y += BREG_F(4) + 250.0f;
                     } else {
                         sp44.y -= BREG_F(4) + 250.0f;
@@ -679,7 +870,11 @@ void daE_ZM_c::executeBullet() {
                     sp44 -= current.pos;
                     current.angle.y = sp44.atan2sX_Z();
 
+#if TARGET_PC
+                    if (cutType == daPy_py_c::CUT_TYPE_NONE) {
+#else
                     if (player->getCutType() == daPy_py_c::CUT_TYPE_NONE) {
+#endif
                         if (cM_rnd() < 0.5f) {
                             current.angle.y += 0x4000;
                         } else {
@@ -796,11 +991,26 @@ void daE_ZM_c::cc_set() {
     J3DModel* model = mpModelMorf->getModel();
 
     if (mAction == ACTION_MOVE || mAction == ACTION_ATTACK) {
+#if TARGET_PC
+        // Co-op: visible pitch is a read-only consumer of the retained Combat target.
+        dusk::coop::selected_target_state::SelectedTargetState targetState;
+        const bool targetAvailable =
+            coOpReadZmTargetState(this, "e_zm.pitch", &targetState, NULL);
+#else
         fopAc_ac_c* player = dComIfGp_getPlayer(0);
+#endif
         mDoMtx_stack_c::copy(model->getAnmMtx(JNT_CENTER));
         sp30.set(0.0f, BREG_F(7) + -60.0f, 0.0f);
         mDoMtx_stack_c::multVec(&sp30, &sp3c);
+#if TARGET_PC
+        if (targetAvailable) {
+            sp3c = targetState.pos - sp3c;
+        } else {
+            sp3c = dComIfGp_getPlayer(0)->current.pos - sp3c;
+        }
+#else
         sp3c = player->current.pos - sp3c;
+#endif
         cLib_addCalcAngleS2(&shape_angle.x, sp3c.atan2sY_XZ(), XREG_S(3) + 2, XREG_S(4) + 0x300);
     }
 
@@ -866,6 +1076,10 @@ static int daE_ZM_IsDelete(daE_ZM_c* i_this) {
 }
 
 int daE_ZM_c::_delete() {
+#if TARGET_PC
+    // Co-op: remove the Mask's retained Combat sidecar when any mask/helper/bullet actor dies.
+    dusk::coop::clearAllEnemyTargets(this);
+#endif
     dComIfG_resDelete(&mPhase, "E_ZM");
 
     if (arg0 == 10 || arg0 == 20) {

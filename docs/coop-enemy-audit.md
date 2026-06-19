@@ -23,11 +23,11 @@ surface by default.
 
 ## Current Review Queue
 
-The `E_FK` / `E_GOB` / `E_HZ` / `E_BUG` review is complete. `E_FK`, `E_HZ`, and `E_BUG` had their
-eligible ownership boundaries implemented and were field-validated by the user. `E_GOB` is
-Dangoro, the authored Goron Mines miniboss in `D_MN04B`; its fight, grab/throw mechanics, messages,
-stage actors, save flags, and long demo-camera lifecycle remain deferred to a dedicated
-miniboss/setpiece pass. The next batch should come from the remaining untouched regular enemies.
+The compact `E_FS` / `E_ZM` / `E_ZH` batch is implemented and first-pass validated. Wooden Puppets
+and Zant Masks now cover their ordinary combat, selected-target, damage-owner, and
+projectile-reflection boundaries. Zant's Hand remains Sol/object-driven and only converts genuine
+player damage ownership. The remaining regular-ish passes are the standalone `B_TN` Darknut combat
+core and the mixed `OBJ_GRA` Goron soldier/NPC/rolling actor.
 
 ## Target Policy Requirements
 
@@ -132,6 +132,9 @@ collision-owner, render/visibility culling, or story/demo/global state.
 | Phantom Rider | Phantom Rider / Ganondorf boss child | `src/d/actor/d_a_e_fk.cpp` | `E_FK` | boss-child combat owner pass, first-pass validated | Internal run/approach/attack caches, neck tracking, and attack commitment route through one Combat owner; hit/death facing uses `damage_owner`; horse-angle reads use the selected player's slot-assigned horse. User field testing accepted the converted ordinary combat behavior. Ganondorf's authored child/projectile spawn choreography remains owned by `B_GND`, and the rider's `mDoLib_project()` viewport-dependent despawn/attack test remains deferred boss/setpiece presentation rather than being guessed into ordinary split-screen policy. |
 | Tile Worm | Tile Worm | `src/d/actor/d_a_e_hz.cpp` | `E_HZ` | combat/tool/damage + retained throw owner, first-pass validated | Hide/wake/movement/action caches route through one Combat owner while native bomb/carry/weapon searches remain object-owned. Active-player hookshot, Ball-and-Chain, arrow-charge, boomerang, equipment, and attack eligibility are owner-aware. The exact launched player is retained through event acceptance, repositioning, throw damage, victim-camera force lock, and post-camera release. User field testing confirmed that split-screen remains active so the other player's view stays independent. Ordinary hit direction, cut count/type, and boomerang continuation use `damage_owner`. |
 | Poison Mite | Poison Mite swarm | `src/d/actor/d_a_e_bug.cpp` | `E_BUG` | shared swarm combat owner, first-pass validated | One actor-level Combat owner drives every internal mite's wake, chase, jump, body attachment, model matrix, status gate, lantern/door repulsion, and Midna panic. Beehive-spawned swarms inherit the parent nest hit owner; proximity wake can replace stale retention; any attached mite commits the swarm owner so body-bound mites do not jump players. Every active player's native sword/wolf matrix can damage mites, while boomerang, Spinner, Ball-and-Chain, and bombs retain their distinct item/object reaction paths. User field testing accepted the converted swarm behavior. Native global event pausing and bomb-object search remain shared world/object behavior. |
+| Wooden Puppet | Wooden Puppet | `src/d/actor/d_a_e_fs.cpp` | `E_FS` | compact special batch, first-pass validated | Appear/wait/move/attack caches use one Combat owner; selected target speed, form, position, distance, and angle drive ordinary pursuit and attack follow-through; cut/death reactions use `damage_owner`. Skull Kid parent switches/action teardown, monkey `ACT_DEMOWAIT`, and `mDoLib_project()` plus P1-height off-screen deletion remain authored encounter/presentation behavior. |
+| Zant Mask | Zant Mask | `src/d/actor/d_a_e_zm.cpp` | `E_ZM` | compact special batch, first-pass validated | Hidden appearance acquisition filters active players through the native full-distance occurrence radius before selection. Move/attack and projectile launch aim share one Combat owner; visible pitch and death facing read that retained target without reacquiring. Cut count/type uses `damage_owner`, while reflected balls use `defender_owner` so shield/cut state comes from the actual reflector. Search-point marker actors remain helpers, and room-switch/death state remains native. |
+| Zant's Hand | Zant's Hand / Ball Master | `src/d/actor/d_a_e_zh.cpp` | `E_ZH` | compact special batch, first-pass validated | The actor searches and chases the live Sol actor, so its position naturally follows whichever ALINK is carrying it. On catch, the Hand clears the Sol's shared carry flag; the owning ALINK releases its actor-local grab keep, then the Hand marks the Sol carried again and attaches it to its own hand. Player cut reactions use `damage_owner`. Initial Sol placement, room/dungeon switches, the Hand's return-to-entrance objective lifecycle, authored start/return cameras, blur, and P1 `changeOriginalDemo()` remain shared setpiece behavior. |
 
 ## Reviewed Evidence
 
@@ -191,7 +194,7 @@ This batch resolves the "unclassified" rows from the machine inventory. Sources:
 
 | Actor/File | Profile | Label Evidence | Classification | Targeting Notes |
 | --- | --- | --- | --- | --- |
-| `d_a_e_fs.cpp` | `E_FS` | file comment "Enemy - Puppet"; appear/attack/move/damage actions | demo/special enemy | Possessed puppet enemy; demo paths present. Defer. |
+| `d_a_e_fs.cpp` | `E_FS` | file comment "Enemy - Puppet"; appear/attack/move/damage actions | demo/special enemy | Wooden Puppet. Ordinary Combat/selected-target and damage ownership are first-pass validated; Skull Kid parent flow, monkey demo, and viewport-dependent cleanup remain authored/deferred. |
 | `d_a_e_ga.cpp` | `E_GA` | error string `蛾：シンプルモデル登録失敗しました`; model "E_Ga"; ga_fly/bt_fly | ambient/non-targeting | Simple floating moth swarm; no targeting logic needed. |
 | `d_a_e_mm.cpp` | `E_MM` | internal HIO field `donketsu_*`; actions: normal/dash/defence/magne_wait/turn; `reflect_chance_time` | regular melee candidate | Shield-reflect enemy; two HIO size variants. Needs identity confirmation before first wave. |
 | `d_a_e_oct_bg.cpp` | `E_OctBg` | class `daE_OctBg_c`; actions: born_swim/swim/chase_core/normal_attack | water/special enemy | Large aquatic predator; water policy needed first. |
@@ -215,8 +218,8 @@ This batch resolves the "unclassified" rows from the machine inventory. Sources:
 | `d_a_e_yg.cpp` | `E_YG` | file header "Twilight Vermin"; genLabel `グース`; normal/attack/swim/dokuro/damage/wolfbite | Twilight enemy | Goose / Twilight Vermin. Combat targeting, active wolf-bark awareness, damage-owner wolf-bite start, and retained `wolf_catch_owner` mouth/throw lifetime are implemented pending validation. Skull/dokuro behavior remains object-owned. |
 | `d_a_e_yk.cpp` | `E_YK` | file header "Shadow Keese"; genLabel `闇キース`; wind/cruise/charge/damage/disappear | Twilight flying enemy | Shadow Keese; Twilight bat. Keese-family combat targeting/selected-target state, wolf-bite ownership, and boomerang item awareness are implemented and first-pass validated. |
 | `d_a_e_yr.cpp` | `E_YR` | genLabel `闇カーゴロック`; English comment "Dark Kargarok" at line 2548; wait/hover/attack/fly/damage | Twilight flying enemy | Dark Kargarok. Combat targeting, selected-target flight facts, and defender-owner attack guard are implemented pending validation; selected-slot horse speed remains a deferred horse-owner surface. |
-| `d_a_e_zh.cpp` | `E_ZH` | no HIO label; searches for `daObjCarry_c` lightball objects; `BCK_ZH_CATCH*/FLY_DELETE`; entrance model `BMDV_ZH_ENTRANCE` | boss-encounter special | Likely Palace of Twilight Zant's Hands (catches Sols/light orbs). Defer. |
-| `d_a_e_zm.cpp` | `E_ZM` | HIO comment `ザントの首 Zant's Head`; tongue animations; search/move/attack/bullet | boss/story special | Zant's Head (from Zant boss encounter). Defer. |
+| `d_a_e_zh.cpp` | `E_ZH` | header `Ball Master`; searches for `daObjCarry_c` lightball objects; `BCK_ZH_CATCH*/FLY_DELETE`; entrance model `BMDV_ZH_ENTRANCE` | objective/setpiece special | Palace of Twilight Zant's Hand. The chase/catch path follows the live Sol actor and generic carry cancellation releases whichever ALINK owns it; damage ownership is first-pass validated. Initial placement, switches, return-to-entrance state, and authored start/return camera presentation remain shared/deferred. |
+| `d_a_e_zm.cpp` | `E_ZM` | header `Zant Mask`; HIO comment `ザントの首`; search/move/attack/bullet | ranged special enemy | Combat target, selected-target launch/pitch/death state, damage owner, and reflector owner are first-pass validated; helper markers and room-switch lifecycle remain native. |
 | `d_a_e_zs.cpp` | `E_ZS` | includes `d_a_b_ds.h`; `daB_DS_c` boss lookup; killed by `AT_TYPE_SPINNER` | boss helper | Stallord encounter helper; Spinner-weapon dependent. Defer with Stallord boss work. |
 
 ## Callsite Classification Pass
@@ -307,7 +310,7 @@ Remaining boss files (`d_a_b_bh`, `d_a_b_bq`, `d_a_b_dr`, `d_a_b_ds`, `d_a_b_gg`
 
 **Grab/caught state needs ownership, not nearest-player targeting.** E_ST's `getStCaught()` checks are the clearest example: an enemy actively carrying a player must track that specific player, not whichever player happens to be nearest. Avoid grab-heavy files in the first policy wave unless state boundaries are proven clear. Later work should add a caught/grab owner model and convert only the grab paths that can retain a concrete captured player.
 
-**Story intros and boss/setpiece scenes stay protagonist/global until a dedicated milestone.** E_SF calls `changeOriginalDemo()` and `setPlayerPosAndAngle()` during a scripted encounter intro. Those paths cannot be redirected by `enemy_targeting`. The same pattern likely appears in E_FS, E_PM, and any enemy with `op_demo`, `demo_wait`, or `changeDemoMode()` action states. Boss files are deferred/protagonist-locked for now, not because they can never support co-op targeting, but because boss cameras, phase scripts, and arena state need their own audit.
+**Story intros and boss/setpiece scenes stay protagonist/global until a dedicated milestone.** E_SF calls `changeOriginalDemo()` and `setPlayerPosAndAngle()` during a scripted encounter intro. Those paths cannot be redirected by `enemy_targeting`. E_FS ordinary combat is now converted, but its monkey `ACT_DEMOWAIT` and Skull Kid viewport cleanup remain authored; E_PM and other `op_demo`, `demo_wait`, or `changeDemoMode()` paths remain deferred. Boss files are protagonist-locked for now, not because they can never support co-op targeting, but because boss cameras, phase scripts, and arena state need their own audit.
 
 **`dComIfGp_getPlayer(0)` as a type-only cast is damage-owner work.** Several damage-check functions fetch the player pointer only to cast it to `daPy_py_c*` for a hit-reaction call, not to locate a target. These look like `daPy_py_c* pPy = (daPy_py_c*)dComIfGp_getPlayer(0); someHitCall(pPy->someField)`. If the hit reaction is owner-agnostic, the correct actor is the attacker, not P0. Flag these as **damage-owner callsites** rather than targeting or primary/global state.
 
@@ -364,7 +367,7 @@ Use these groups to minimize manual per-enemy work. Each group should map to reu
 | Damage-owner | Enemy reaction depends on who hit it | Separate damage ownership API, later aggro/threat bias | Many humanoids and item-reactive enemies | Treating attacker identity as nearest target |
 | Bespoke damage counters | Enemy bypasses ordinary HP and counts special hits or object thresholds manually | Actor-local helper over damage/collision owner facts; preserve native object exceptions | `E_FB` first proof; watch ice, armor, shell, and object-reactive enemies | P2 direct hits missing P1's bonus count; unsafe casts when non-object actors hit |
 | Caught/grab/carry-owner | Enemy captures, carries, hangs from, or attaches to a specific player | Use the matching retained owner API: `caught_stun_owner`, `wolf_catch_owner`, `retained_interaction_owner`, or a future grab/swallow helper | `E_GI`, `E_BA`, `E_NZ`, `E_PH`, `E_S1`, `E_DF`; later `E_ST`, `E_SW` | Nearest-player retarget during a retained effect; confusing prompt `interaction_owner` with effect-lifetime ownership |
-| Boss/setpiece/demo | Encounter state owns camera, script, phase, or protagonist placement | Dedicated boss co-op audit | `d_a_b_*`, `E_SF`, `E_FS`, `E_PM`, `E_VT` | Breaking story/camera/phase assumptions |
+| Boss/setpiece/demo | Encounter state owns camera, script, phase, or protagonist placement | Dedicated boss co-op audit | `d_a_b_*`, `E_SF`, `E_FS::ACT_DEMOWAIT`, `E_PM`, `E_VT` | Breaking story/camera/phase assumptions |
 
 ## First Policy-Backed Wave
 
@@ -386,7 +389,7 @@ This sequence keeps the manual work small: build one policy API, convert one alr
 
 Use this queue before writing more enemy behavior code:
 
-1. ~~Finish label/resource extraction for unclassified actors.~~ Done — name identification pass complete. All previously blank rows in the machine inventory now have label evidence and a classification. A few remain uncertain (E_MM identity, E_SG exact species, E_ZH confirmation) but are classified well enough to defer safely.
+1. ~~Finish label/resource extraction for unclassified actors.~~ Done — name identification pass complete. All previously blank rows in the machine inventory now have label evidence and a classification. E_ZH is confirmed as the Palace of Twilight Zant's Hand / Ball Master; E_MM identity and E_SG's exact species remain the notable uncertain labels.
 2. Split the full inventory into buckets:
    - regular ground melee,
    - regular flying/ranged,
@@ -428,7 +431,7 @@ This inventory is generated from `src/d/actor/d_a_e_*.cpp` file names and `g_pro
 | `d_a_e_fb.cpp` | `E_FB` | 21 | static/ranged special enemy | Big Freezard; static/ranged target/selected-target state converted; selected-player heavy-boots/status0 gates converted; Mini Freezard child spawn aim, active-player bullet hit counting, and active-player direct iron-ball hit counting converted pending validation |
 | `d_a_e_fk.cpp` | `E_FK` | 9 | Phantom Rider / boss child | internal Combat owner, damage owner, and selected-slot horse angle first-pass validated; `B_GND` spawn choreography and viewport-dependent despawn test deferred |
 | `d_a_e_fm.cpp` | `E_FM` | 42 | special/grab likely | demo/grab-heavy calls seen in scan |
-| `d_a_e_fs.cpp` | `E_FS` | 11 | demo/special enemy | file comment "Enemy - Puppet"; appear/attack/move/damage; demo/possessed enemy, defer |
+| `d_a_e_fs.cpp` | `E_FS` | 11 | demo/special enemy | Wooden Puppet; ordinary Combat/selected-target and damage owner first-pass validated; Skull Kid parent/demo and viewport cleanup deferred |
 | `d_a_e_fz.cpp` | `E_FZ` | 15 | regular enemy candidate | Mini Freezard; combat/selected-target steering, defender contact, and direct item-hit damage-owner rebound angles converted pending validation; Blizzeta roll-mode remains boss-owned/native |
 | `d_a_e_ga.cpp` | `E_GA` | 0 | ambient/non-targeting | 蛾 (Moth); simple floating swarm with no player targeting; ambient/environmental only |
 | `d_a_e_gb.cpp` | `E_GB` | 17 | plant/special enemy | Giant Baba / Big Deku Baba; head combat targeting and boomerang awareness first-pass validated; bomb/key/demo presentation remains P1/global or object-owned |
@@ -499,16 +502,15 @@ This inventory is generated from `src/d/actor/d_a_e_*.cpp` file names and `g_pro
 | `d_a_e_ym_tag.cpp` | `E_YM_TAG` | 0 | tag/helper likely |  |
 | `d_a_e_ymb.cpp` | `E_YMB` | 42 | Twilit Bloat / Twilight Insect Boss | Header identifies this as `Twilight Insect Boss`; resource/sound names use `YB_*`, and lake/start/battle demo paths match the Lakebed Twilight boss presentation. High density with wolf-bite, wolf-lock, start/battle/lake demos, camera/player placement, and status gates; defer to retained-owner plus presentation/setpiece audit |
 | `d_a_e_yr.cpp` | `E_YR` | 12 | Twilight flying enemy | 闇カーゴロック (Dark Kargarok); combat flight targeting and defender-owner attack guard implemented pending validation; selected-slot horse speed deferred to horse-owner if needed |
-| `d_a_e_zh.cpp` | `E_ZH` | 2 | boss-encounter special | no HIO label; catches `daObjCarry_c` lightball objects (Sol/light orb); catch/fly/entrance mechanics; likely Palace of Twilight Zant's Hands; defer |
-| `d_a_e_zm.cpp` | `E_ZM` | 9 | boss/story special | ザントの首 (Zant's Head); genLabel confirmed; flying boss head from Zant encounter; defer |
+| `d_a_e_zh.cpp` | `E_ZH` | 2 | objective/setpiece special | Zant's Hand / Ball Master; live-Sol pursuit, generic carrier release, and damage ownership are first-pass validated; initial placement, switches, return state, and authored cameras remain shared/deferred |
+| `d_a_e_zm.cpp` | `E_ZM` | 9 | ranged special enemy | Zant Mask; Combat target, launch/pitch/death selected-target state, damage owner, and shield-reflector owner first-pass validated |
 | `d_a_e_zs.cpp` | `E_ZS` | 7 | boss helper | Stallord encounter helper; references `daB_DS_c` (Boss Stallord); killed by Spinner (`AT_TYPE_SPINNER`); defer with Stallord |
 
 ## Next Steps
 
-1. Choose the next regular enemy from an accessible test location, preferably a remaining target-state-sensitive second-wave enemy or another compact non-flying ground enemy.
-2. Before patching, classify its singleton reads into targeting, selected-target state, damage-owner, defender/collision-owner, caught/grab-owner, primary/global, and render/culling.
-3. Convert only the smallest coherent behavior slice, using actor-local helpers over the API families proven by Bokoblin and Tektite.
-4. Continue classifying/test-locating remaining target-state-sensitive second-wave enemies in parallel.
+1. Convert `B_TN` Darknut as a standalone combat pass while preserving the Temple of Time miniboss room/demo lifecycle.
+2. Audit and convert `OBJ_GRA` Goron soldiers as a standalone mixed combat/NPC/retained-throw pass.
+3. Before patching, classify singleton reads into targeting, selected-target state, damage-owner, defender/collision-owner, caught/grab-owner, primary/global, and render/culling.
 
 ## Multiplayer AI Notes
 

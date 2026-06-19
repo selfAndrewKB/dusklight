@@ -18,6 +18,12 @@
 #include "Z2AudioLib/Z2Instances.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 class daE_Fs_HIO_c {
 public:
     daE_Fs_HIO_c();
@@ -85,6 +91,46 @@ daE_Fs_HIO_c::daE_Fs_HIO_c() {
     mDeleteRange = 2000.0f;
 }
 
+#if TARGET_PC
+// Co-op: Wooden Puppets share one Combat owner across appear, chase, and attack behavior; the
+// Skull Kid/monkey demo and viewport cleanup remain authored encounter behavior.
+static bool coOpSelectFsTargetState(
+    e_fs_class* i_this, const char* label, bool committed,
+    dusk::coop::selected_target_state::SelectedTargetState* state, f32* distance_xz,
+    s16* angle_y) {
+    fopEn_enemy_c* actor = &i_this->mEnemy;
+    dusk::coop::EnemyTargetContext context;
+    context.observer = actor;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = dusk::coop::EnemyTargetMode::StickyCombat;
+    context.label = label;
+    context.committed = committed;
+
+    const dusk::coop::EnemyTargetResult target = dusk::coop::selectEnemyTarget(context);
+    const dusk::coop::selected_target_state::SelectedTargetState targetState =
+        dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        actor, label, targetState,
+        targetState.available
+            ? dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget
+            : dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    if (!targetState.available) {
+        return false;
+    }
+
+    if (state != NULL) {
+        *state = targetState;
+    }
+    if (distance_xz != NULL) {
+        *distance_xz = target.distanceXZ;
+    }
+    if (angle_y != NULL) {
+        *angle_y = target.angleY;
+    }
+    return true;
+}
+#endif
+
 static void anm_init(e_fs_class* i_this, int i_anm, f32 i_morf, u8 i_attr, f32 i_rate) {
     i_this->mpMorf->setAnm((J3DAnmTransform*)dComIfG_getObjectRes("E_FS", i_anm),
                            i_attr, i_morf, i_rate, 0.0f, -1.0f);
@@ -127,7 +173,7 @@ static BOOL way_bg_check(e_fs_class* i_this, f32 i_offset, s16 i_angle) {
     }
 }
 
-static void e_fs_appear(e_fs_class* i_this) {
+static void e_fs_appear(e_fs_class* i_this, daPy_py_c* player) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->mEnemy;
     daE_PM_c* skullkid;
     fopAcM_SearchByID(a_this->parentActorID, (fopAc_ac_c**)&skullkid);
@@ -191,12 +237,11 @@ static void e_fs_appear(e_fs_class* i_this) {
     if (skullkid != NULL && skullkid->SwitchChk() != 0 && skullkid->SwitchChk() != 4
                          && i_this->mPlayerDistXZ > 200.0f) {
         a_this->current.angle.y = i_this->mPlayerAngleY;
-        cLib_addCalc2(&a_this->speedF, fopAcM_GetSpeedF(daPy_getPlayerActorClass()) * 0.7f,
-                      1.0f, 0.5f);
+        cLib_addCalc2(&a_this->speedF, fopAcM_GetSpeedF(player) * 0.7f, 1.0f, 0.5f);
     }
 }
 
-static void e_fs_wait(e_fs_class* i_this) {
+static void e_fs_wait(e_fs_class* i_this, daPy_py_c* player) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->mEnemy;
     daE_PM_c* skullkid;
     fopAcM_SearchByID(a_this->parentActorID, (fopAc_ac_c**)&skullkid);
@@ -232,14 +277,13 @@ static void e_fs_wait(e_fs_class* i_this) {
     if (skullkid != NULL && skullkid->SwitchChk() != 0 && skullkid->SwitchChk() != 4 &&
         i_this->mPlayerDistXZ > 200.0f)
     {
-        daPy_py_c* player = daPy_getPlayerActorClass();
         f32 playerSpeed = fopAcM_GetSpeedF(player);
         f32 targetSpeed = playerSpeed * (0.7f + yREG_F(3));
         cLib_addCalc2(&a_this->speedF, targetSpeed, 1.0f, 0.5f);
     }
 }
 
-static void e_fs_move(e_fs_class* i_this) {
+static void e_fs_move(e_fs_class* i_this, daPy_py_c* player) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->mEnemy;
     switch (i_this->mMode) {
     case 0:
@@ -255,10 +299,14 @@ static void e_fs_move(e_fs_class* i_this) {
         break;
     }
 
-    daPy_py_c* player = daPy_getPlayerActorClass();
     f32 player_speed = fopAcM_GetSpeedF(player);
     f32 target_speed = l_HIO.mMoveSpeedRatio * (0.8f * player_speed + 20.0f);
+#if TARGET_PC
+    // Co-op: movement speed uses the selected player's live form rather than saved/global P1 form.
+    if (!player->checkWolf()) {
+#else
     if (!daPy_py_c::checkNowWolf()) {
+#endif
         target_speed = 0.7f * (0.8f * player_speed + 20.0f);
     }
     cLib_addCalc2(&a_this->speedF, target_speed, 1.0f, 0.5f);
@@ -282,9 +330,8 @@ static void e_fs_move(e_fs_class* i_this) {
     cLib_addCalcAngleS2(&a_this->current.angle.y, i_this->mTargetAngleY, 0x10, 0x400);
 }
 
-static void e_fs_attack(e_fs_class* i_this) {
+static void e_fs_attack(e_fs_class* i_this, daPy_py_c* player) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->mEnemy;
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
     int frame = i_this->mpMorf->getFrame();
 
     switch (i_this->mMode) {
@@ -351,21 +398,33 @@ static void e_fs_end(e_fs_class* i_this) {
     i_this->mIFrameTimer = 10;
 
     switch (i_this->mMode) {
-    case 0:
+    case 0: {
+#if TARGET_PC
+        // Co-op: scope owner locals inside this case so later case labels stay valid C++.
+#endif
         anm_init(i_this, ANM_DIE, 2.0f, J3DFrameCtrl::EMode_NONE, cM_rndF(0.4f) + 0.7f);
         i_this->mMode++;
         fopAcM_OffStatus(a_this, 0);
         a_this->attention_info.flags = 0;
 
+#if TARGET_PC
+        // Co-op: death spin follows the sword owner that actually delivered the finishing hit.
+        const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+            dusk::coop::damage_owner::resolveDamageOwner(a_this, i_this->mAtInfo.mpCollider);
+        const int cutType = damageOwner.cutType;
+#else
+        const int cutType = daPy_getPlayerActorClass()->getCutType();
+#endif
         if (i_this->mAtInfo.mHitType == 1
-            && (daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_TURN_RIGHT
-                || daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_UNK_9))
+            && (cutType == daPy_py_c::CUT_TYPE_TURN_RIGHT
+                || cutType == daPy_py_c::CUT_TYPE_UNK_9))
         {
             i_this->mTargetAngleY = cM_rndF(2000.0f) + 1000.0f;
         } else {
             i_this->mTargetAngleY = cM_rndFX(1000.0f);
         }
         break;
+    }
 
     case 1:
         if (i_this->mpMorf->checkFrame(23.0f)) {
@@ -427,7 +486,20 @@ static void damage_check(e_fs_class* i_this) {
 
         if (i_this->mCcCyl.ChkTgHit()) {
             i_this->mAtInfo.mpCollider = i_this->mCcCyl.GetTgHitObj();
+#if TARGET_PC
+            // Co-op: jump-cancel and death reactions belong to the player/weapon that hit this
+            // Puppet, independently of its current Combat target.
+            const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+                dusk::coop::damage_owner::resolveDamageOwner(a_this, i_this->mAtInfo.mpCollider);
+            daPy_py_c* damagePlayer =
+                dusk::coop::damage_owner::resolveDamageOwnerPlayer(damageOwner);
+#endif
             cc_at_check(a_this, &i_this->mAtInfo);
+#if TARGET_PC
+            // Co-op: record after native damage processing fills hit status/power facts.
+            dusk::coop::damage_owner::recordDamageOwnerHit("e_fs.damage", a_this, damageOwner,
+                                                           &i_this->mAtInfo);
+#endif
             if (i_this->mAtInfo.mpCollider->ChkAtType(AT_TYPE_UNK)) {
                 i_this->mIFrameTimer = 20;
             } else {
@@ -443,8 +515,13 @@ static void damage_check(e_fs_class* i_this) {
                 i_this->mAction = e_fs_class::ACT_DAMAGE;
                 i_this->mCreatureSound.startCreatureSound(Z2SE_EN_FS_DAMAGE, 0, -1);
                 a_this->speedF = -30.0f;
+#if TARGET_PC
+                if (damagePlayer->getCutType() == daPy_py_c::CUT_TYPE_JUMP
+                    && damagePlayer->checkCutJumpCancelTurn())
+#else
                 if (daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_JUMP
                     && daPy_getPlayerActorClass()->checkCutJumpCancelTurn())
+#endif
                 {
                     a_this->speedF = -5.0f;
                     i_this->mIFrameTimer = 3;
@@ -530,23 +607,43 @@ static void e_fs_demowait(e_fs_class* i_this) {
 static void action(e_fs_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->mEnemy;
     cXyz vec1, vec2;
+#if TARGET_PC
+    daPy_py_c* player = daPy_getPlayerActorClass();
+    if (i_this->mAction == e_fs_class::ACT_APPEAR || i_this->mAction == e_fs_class::ACT_WAIT ||
+        i_this->mAction == e_fs_class::ACT_MOVE || i_this->mAction == e_fs_class::ACT_ATTACK)
+    {
+        dusk::coop::selected_target_state::SelectedTargetState targetState;
+        const bool committed = i_this->mAction == e_fs_class::ACT_ATTACK;
+        if (coOpSelectFsTargetState(i_this, "e_fs.action", committed, &targetState,
+                                    &i_this->mPlayerDistXZ, &i_this->mPlayerAngleY))
+        {
+            player = targetState.player;
+        }
+    } else {
+        // Co-op: the monkey/Skull Kid demo keeps the authored P1 metrics.
+        i_this->mPlayerAngleY = fopAcM_searchPlayerAngleY(a_this);
+        i_this->mPlayerDistXZ = fopAcM_searchPlayerDistanceXZ(a_this);
+    }
+#else
+    daPy_py_c* player = daPy_getPlayerActorClass();
     i_this->mPlayerAngleY = fopAcM_searchPlayerAngleY(a_this);
     i_this->mPlayerDistXZ = fopAcM_searchPlayerDistanceXZ(a_this);
+#endif
     daE_PM_c* skullkid = (daE_PM_c*)fopAcM_SearchByID(a_this->parentActorID);
     s8 link_search = 0;
 
     switch (i_this->mAction) {
     case e_fs_class::ACT_APPEAR:
-        e_fs_appear(i_this);
+        e_fs_appear(i_this, player);
         link_search = 1;
         break;
     case e_fs_class::ACT_WAIT:
-        e_fs_wait(i_this);
+        e_fs_wait(i_this, player);
         link_search = 1;
         break;
     case e_fs_class::ACT_MOVE:
         if (!dComIfGp_event_runCheck()) {
-            e_fs_move(i_this);
+            e_fs_move(i_this, player);
             daE_PM_c* skullkid = (daE_PM_c*)fopAcM_SearchByID(a_this->parentActorID);
             if (i_this->field_0x5b4 == 0) {
                 fopAcM_OffStatus(a_this, 0x4000);
@@ -558,7 +655,7 @@ static void action(e_fs_class* i_this) {
         link_search = 1;
         break;
     case e_fs_class::ACT_ATTACK:
-        e_fs_attack(i_this);
+        e_fs_attack(i_this, player);
         link_search = 1;
         break;
     case e_fs_class::ACT_DAMAGE:
@@ -610,7 +707,10 @@ static void action(e_fs_class* i_this) {
     }
 
     if (!checkViewArea(&a_this->current.pos) && skullkid != NULL) {
-        if (i_this->mPlayerDistXZ > l_HIO.mDeleteRange && skullkid->SwitchChk() != 4) {
+        // Co-op: viewport-dependent Skull Kid cleanup remains authored to P1 until the encounter
+        // has an explicit multi-view despawn policy.
+        const f32 cleanupPlayerDistXZ = fopAcM_searchPlayerDistanceXZ(a_this);
+        if (cleanupPlayerDistXZ > l_HIO.mDeleteRange && skullkid->SwitchChk() != 4) {
             fopAcM_delete(a_this);
         } else if (daPy_getPlayerActorClass()->current.pos.y - a_this->current.pos.y > 400.0f
                                                      && skullkid->SwitchChk() != 4) {
@@ -693,6 +793,9 @@ static int daE_Fs_IsDelete(e_fs_class* i_this) {
 
 static int daE_Fs_Delete(e_fs_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->mEnemy;
+#if TARGET_PC
+    dusk::coop::clearAllEnemyTargets(a_this);
+#endif
     dComIfG_resDelete(&i_this->mPhase, "E_FS");
 
     if (i_this->mHIOInit) {
