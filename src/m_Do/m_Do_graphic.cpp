@@ -2873,6 +2873,27 @@ int mDoGph_Painter() {
             }
             draw_window(window_idx);
         }
+#if TARGET_PC
+        if (dusk::coop::event_presentation::shouldRefreshViewportOwnedWorldState()) {
+            dDlst_window_c* primary_window = dComIfGp_getWindow(0);
+            camera_process_class* primary_camera =
+                primary_window != NULL ? dComIfGp_getCamera(primary_window->getCameraID()) : NULL;
+            if (primary_camera != NULL) {
+                // Co-op: shared J3D models and projected materials finish on the last replayed
+                // camera. Restore the native Camera 0 baseline before later global render work.
+                dComIfGp_setCurrentWindow(primary_window);
+                dComIfGp_setCurrentView(&primary_camera->view);
+                dComIfGp_setCurrentViewport(primary_window->getViewPort());
+                dComIfGd_setWindow(primary_window);
+                dComIfGd_setView(&primary_camera->view);
+                dComIfGd_setViewport(primary_window->getViewPort());
+                j3dSys.setViewMtx(primary_camera->view.viewMtx);
+                dKy_setLight();
+                dKy_setLight_again();
+                dusk::coop::render_materials::refreshKankyoMaterialsForCurrentView();
+            }
+        }
+#endif
     }
 
     #if DEBUG

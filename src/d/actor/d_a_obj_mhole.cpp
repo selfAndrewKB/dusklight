@@ -9,6 +9,9 @@
 #include "d/d_cc_d.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_debug_viewer.h"
+#if TARGET_PC
+#include "dusk/coop/render_materials.h"
+#endif
 #include "m_Do/m_Do_graphic.h"
 
 static u32 const l_bmd[2] = {5, 5};
@@ -329,6 +332,11 @@ int daObjMHole_c::draw() {
     }
 
     mDoExt_modelUpdateDL(mpModel);
+#if TARGET_PC
+    // Co-op: materials 0 and 1 use the native camera light-projection matrix. Replay that same
+    // calculation for every viewport instead of leaving both views with camera 0's matrix.
+    dusk::coop::render_materials::registerLightProjectionModel(mpModel, (1u << 0) | (1u << 1));
+#endif
     dComIfGd_setList();
     mDoExt_brkAnmRemove(mpModel->getModelData());
     mDoExt_btkAnmRemove(mpModel->getModelData());
