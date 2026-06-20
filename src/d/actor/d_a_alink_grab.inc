@@ -2162,6 +2162,17 @@ int daAlink_c::procGoatMove() {
 }
 
 int daAlink_c::procGoatCatchInit(fopAc_ac_c* i_actor, f32 param_1) {
+#if TARGET_PC
+    if (fopAcM_GetName(i_actor) == fpcNm_OBJ_GRA_e &&
+        static_cast<daObj_GrA_c*>(i_actor)->isFirstGra() &&
+        dusk::coop::isAdditionalPlayer(this))
+    {
+        // Co-op: the first Goron catch enters a P1-authored compulsory event and camera.
+        setDoStatus(BUTTON_STATUS_NONE);
+        return 0;
+    }
+#endif
+
     s16 temp_r28 = cLib_targetAngleY(&current.pos, &i_actor->current.pos);
 
     if (!checkGoatStopGame()) {
@@ -2191,6 +2202,16 @@ int daAlink_c::procGoatCatchInit(fopAc_ac_c* i_actor, f32 param_1) {
     commonProcInit(PROC_GOAT_CATCH);
     field_0x280c.setData(i_actor);
     mProcVar4.field_0x3010 = 0;
+
+#if TARGET_PC
+    if (fopAcM_GetName(i_actor) == fpcNm_OBJ_GRA_e) {
+        // Co-op: retain the ALINK whose native catch proc actually took ownership of this Goron.
+        dusk::coop::retained_interaction_owner::beginRetainedInteraction(
+            "obj_gra.carrier", i_actor,
+            dusk::coop::retained_interaction_owner::RetainedInteractionScope::Carry, this,
+            dusk::coop::retained_interaction_owner::RetainedInteractionReason::DirectPlayer);
+    }
+#endif
 
     if (!checkGoatStopGame()) {
         shape_angle.y = temp_r28;

@@ -152,6 +152,33 @@ DefenderOwnerResult resolveDefenderOwner(fopAc_ac_c* attacker, dCcD_GObjInf* att
     return result;
 }
 
+DefenderOwnerResult resolveDefenderOwnerFromActor(fopAc_ac_c* attacker,
+                                                  fopAc_ac_c* hitActor) {
+    DefenderOwnerResult result;
+    result.attackerDebug = actorDebug(attacker);
+    result.hitActor = hitActor;
+    result.hitActorDebug = actorDebug(hitActor);
+    if (hitActor == nullptr) {
+        result.reason = DefenderOwnerReason::NoHit;
+        return result;
+    }
+
+    const PlayerSlot slot = getSlotForActor(hitActor);
+    if (isValidSlot(slot)) {
+        result.slot = slot;
+        result.localPlayerActor = hitActor;
+        result.localPlayer = static_cast<daPy_py_c*>(hitActor);
+        result.defenderDebug = actorDebug(hitActor);
+        result.reason = DefenderOwnerReason::DirectPlayer;
+        result.found = true;
+        fillDefenderFacts(&result);
+        return result;
+    }
+
+    result.reason = DefenderOwnerReason::UnknownActor;
+    return result;
+}
+
 void recordDefenderOwnerContact(const char* label, fopAc_ac_c* attacker,
                                 const DefenderOwnerResult& result) {
     DefenderOwnerResult debugResult = result;

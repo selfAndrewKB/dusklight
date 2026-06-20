@@ -21,6 +21,17 @@
 #include "Z2AudioLib/Z2Instances.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/coop/defender_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/event_presentation.h"
+#include "dusk/coop/message_owner.h"
+#include "dusk/coop/player_camera_status.h"
+#include "dusk/coop/player_query.h"
+#include "dusk/coop/retained_interaction_owner.h"
+#include "dusk/coop/selected_target_state.h"
+#endif
+
 class daObj_GrA_Param_c {
 public:
     virtual ~daObj_GrA_Param_c() {}
@@ -208,6 +219,199 @@ static DUSK_CONSTEXPR u16 l_entryJntNoList[4] = {
     5, 6, 7, 0xFFFF,
 };
 
+#if TARGET_PC
+namespace {
+
+static daObj_GrA_c* s_coOpGraRollDemoPresentationOwner = NULL;
+
+struct CoOpGraCandidateData {
+    cXyz actorPos = cXyz::Zero;
+    cXyz homePos = cXyz::Zero;
+    cXyz areaPos = cXyz::Zero;
+    f32 range = 0.0f;
+    f32 areaExtent = 0.0f;
+    f32 areaHeight = 0.0f;
+    int areaMode = 0;
+    bool checkHomeRange = false;
+    bool rollStart = false;
+};
+
+static dusk::coop::PlayerQueryEligibility coOpGraCandidate(
+    dusk::coop::PlayerSlot slot, fopAc_ac_c* actor, void* userData) {
+    dusk::coop::PlayerQueryEligibility eligibility;
+    CoOpGraCandidateData* data = static_cast<CoOpGraCandidateData*>(userData);
+    const dusk::coop::selected_target_state::SelectedTargetState state =
+        dusk::coop::selected_target_state::stateForSlot(slot, actor);
+    if (!state.available || state.player == NULL) {
+        eligibility.eligible = false;
+        eligibility.failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Status;
+        return eligibility;
+    }
+
+    if (data->rollStart) {
+        if (state.player->checkPlayerFly() != 0 || state.player->checkClimbMove() ||
+            dusk::coop::player_camera_status::checkStatus0(slot, 8) != 0)
+        {
+            eligibility.eligible = false;
+            eligibility.failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Status;
+            return eligibility;
+        }
+
+        cXyz offset = state.pos - (data->areaMode == 1 ? data->actorPos : data->areaPos);
+        if (data->areaMode == 1) {
+            offset.y *= 2.0f;
+            if (offset.abs() >= data->range) {
+                eligibility.eligible = false;
+                eligibility.failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Range;
+            }
+        } else if (offset.absXZ() >= data->areaExtent || offset.y <= -30.0f ||
+                   offset.y >= data->areaHeight)
+        {
+            eligibility.eligible = false;
+            eligibility.failureFlags =
+                dusk::coop::PlayerQueryEligibilityFailure_Range |
+                dusk::coop::PlayerQueryEligibilityFailure_Vertical;
+        }
+        return eligibility;
+    }
+
+    if (dusk::coop::player_camera_status::checkStatus0(slot, 0x100) != 0) {
+        eligibility.eligible = false;
+        eligibility.failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Status;
+        return eligibility;
+    }
+
+    cXyz adjustedPos = state.pos;
+    adjustedPos.y -= daPy_py_c::getAttentionOffsetY();
+    if (data->checkHomeRange && (data->homePos - adjustedPos).absXZ() > data->range) {
+        eligibility.eligible = false;
+        eligibility.failureFlags |= dusk::coop::PlayerQueryEligibilityFailure_Range;
+    }
+    if ((adjustedPos - data->actorPos).absXZ() > data->range) {
+        eligibility.eligible = false;
+        eligibility.failureFlags |= dusk::coop::PlayerQueryEligibilityFailure_Range;
+    }
+    if (std::abs(adjustedPos.y - data->actorPos.y) >= 300.0f) {
+        eligibility.eligible = false;
+        eligibility.failureFlags |= dusk::coop::PlayerQueryEligibilityFailure_Vertical;
+    }
+    return eligibility;
+}
+
+// Co-op: standing and rolling soldiers each keep one behavior-owned opponent. Authored first-Goron
+// demos deliberately bypass this helper and retain their native P1 choreography.
+static dusk::coop::EnemyTargetResult coOpSelectGraTarget(
+    daObj_GrA_c* i_this, const char* label, dusk::coop::EnemyTargetMode mode, bool committed,
+    dusk::coop::PlayerQueryPredicate predicate = NULL, void* predicateData = NULL) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.candidatePredicate = predicate;
+    context.candidatePredicateData = predicateData;
+    context.committed = committed;
+    return dusk::coop::selectEnemyTarget(context);
+}
+
+static dusk::coop::selected_target_state::SelectedTargetState coOpGraTargetState(
+    daObj_GrA_c* i_this, const char* label) {
+    dusk::coop::selected_target_state::SelectedTargetState state;
+    const dusk::coop::EnemyTargetResult target =
+        dusk::coop::getEnemyTarget(i_this, dusk::coop::EnemyTargetScope::Combat);
+    state = dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    if (state.available) {
+        dusk::coop::selected_target_state::recordSelectedTargetState(
+            i_this, label, state,
+            dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget);
+        return state;
+    }
+
+    daPy_py_c* player = daPy_getPlayerActorClass();
+    if (player != NULL) {
+        // Co-op: preserve vanilla P1 fallback identity when no retained soldier target exists.
+        state.slot = dusk::coop::PlayerSlot::Slot0;
+        state.player = player;
+        state.actor = player;
+        state.pos = player->current.pos;
+        state.shapeAngleY = player->shape_angle.y;
+        state.speedF = player->getSpeedF();
+        state.equipHeavyBoots = player->checkEquipHeavyBoots() != 0;
+        state.available = true;
+    }
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, state,
+        dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    return state;
+}
+
+static daPy_py_c* coOpGraCarrierPlayer(daObj_GrA_c* i_this) {
+    const dusk::coop::retained_interaction_owner::RetainedInteractionState retained =
+        dusk::coop::retained_interaction_owner::updateRetainedInteraction(
+            "obj_gra.carrier", i_this,
+            dusk::coop::retained_interaction_owner::RetainedInteractionScope::Carry);
+    return retained.found ? retained.localPlayer : daPy_getPlayerActorClass();
+}
+
+static daPy_py_c* coOpGraRiderPlayer(daObj_GrA_c* i_this) {
+    const dusk::coop::retained_interaction_owner::RetainedInteractionState retained =
+        dusk::coop::retained_interaction_owner::updateRetainedInteraction(
+            "obj_gra.rider", i_this,
+            dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach);
+    return retained.found ? retained.localPlayer : daPy_getPlayerActorClass();
+}
+
+static bool coOpGraAnyOtherBgCheck(daObj_GrA_c* i_this) {
+    bool hit = false;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
+        if (!hit && fopAcM_otherBgCheck(i_this, actor)) {
+            hit = true;
+        }
+    });
+    return hit;
+}
+
+static bool coOpGraAnyHumanPlayer() {
+    bool anyHuman = false;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot slot, fopAc_ac_c* actor) {
+        const dusk::coop::selected_target_state::SelectedTargetState state =
+            dusk::coop::selected_target_state::stateForSlot(slot, actor);
+        anyHuman = anyHuman || (state.available && !state.wolf);
+    });
+    return anyHuman;
+}
+
+static void coOpBeginGraRollDemoPresentation(daObj_GrA_c* i_this) {
+    // Co-op: the first Death Mountain rolling Goron intro is one authored camera, so present it
+    // fullscreen from the native P1 camera instead of leaving an unmatched split-screen window.
+    if (s_coOpGraRollDemoPresentationOwner == i_this) {
+        return;
+    }
+    if (s_coOpGraRollDemoPresentationOwner != NULL) {
+        dusk::coop::event_presentation::end(
+            dusk::coop::event_presentation::Source::EnemyAuthoredDemo);
+    }
+
+    dusk::coop::event_presentation::Options options;
+    options.fullscreenSlot = dusk::coop::PlayerSlot::Primary;
+    options.hideNonPresenterVisuals = true;
+    s_coOpGraRollDemoPresentationOwner = i_this;
+    dusk::coop::event_presentation::begin(
+        dusk::coop::event_presentation::Source::EnemyAuthoredDemo, options);
+}
+
+static void coOpEndGraRollDemoPresentation(daObj_GrA_c* i_this) {
+    if (s_coOpGraRollDemoPresentationOwner != i_this) {
+        return;
+    }
+    s_coOpGraRollDemoPresentationOwner = NULL;
+    dusk::coop::event_presentation::end(
+        dusk::coop::event_presentation::Source::EnemyAuthoredDemo);
+}
+
+}  // namespace
+#endif
+
 static int jointCtrlCallBack(J3DJoint* i_joint, int param_2) {
     if (param_2 == 0) {
         J3DModel* model = j3dSys.getModel();
@@ -224,6 +428,15 @@ void daObj_GrA_c::rideCallBack(dBgW* param_1, fopAc_ac_c* actor_p, fopAc_ac_c* p
     daObj_GrA_c* aActor_p = (daObj_GrA_c*) actor_p;
     JUT_ASSERT(684, NULL != aActor_p);
     aActor_p->field_0x10c4 = fopAcM_GetProfName(param_3) == fpcNm_ALINK_e;
+#if TARGET_PC
+    if (aActor_p->field_0x10c4 != 0) {
+        // Co-op: the stone-form launch belongs to the ALINK actually standing on this Goron.
+        dusk::coop::retained_interaction_owner::beginRetainedInteraction(
+            "obj_gra.rider", aActor_p,
+            dusk::coop::retained_interaction_owner::RetainedInteractionScope::Attach, param_3,
+            dusk::coop::retained_interaction_owner::RetainedInteractionReason::DirectPlayer);
+    }
+#endif
 }
 
 daObj_GrA_c::daObj_GrA_c() {}
@@ -407,6 +620,12 @@ int daObj_GrA_c::CreateHeap() {
 
 int daObj_GrA_c::Delete() {
     fopAcM_RegisterDeleteID(this, "OBJ_GRA");
+#if TARGET_PC
+    // Co-op: actor teardown releases combat, presentation, and retained rider/carrier ownership.
+    coOpEndGraRollDemoPresentation(this);
+    dusk::coop::clearAllEnemyTargets(this);
+    dusk::coop::retained_interaction_owner::clearAllRetainedInteractions(this);
+#endif
     if (dComIfGp_getVibration().CheckQuake()) {
         dComIfGp_getVibration().StopQuake(31);
     }
@@ -965,7 +1184,14 @@ void daObj_GrA_c::setParam() {
             attention_info.flags = 0;
         }
 
-        if (field_0x844 == false && daPy_py_c::checkNowWolf() != 0) {
+        if (field_0x844 == false
+#if TARGET_PC
+            // Co-op: friendly-Goron attention remains available when any active ALINK is human.
+            && !coOpGraAnyHumanPlayer()
+#else
+            && daPy_py_c::checkNowWolf() != 0
+#endif
+        ) {
             attention_info.flags = 0;
         }
     } else if (mMode == 2) {
@@ -1269,13 +1495,32 @@ int daObj_GrA_c::lookat() {
     cXyz* pcVar11 = NULL;
 
     if (field_0x1500 != 0) {
+#if TARGET_PC
+        // Co-op: friendly Gorons retain the nearby/listening ALINK selected by their native
+        // awareness or message lifecycle instead of clearing back to P1 during look setup.
+        if (mMode != 1 || mLookMode != 1) {
+            field_0x14f8.entry(NULL);
+        }
+#else
         field_0x14f8.entry(NULL);
+#endif
         switch (mLookMode) {
             case 0:
                 break;
 
             case 1:
+#if TARGET_PC
+                // Co-op: combat look-at consumes the existing soldier target; NPC/dialogue and
+                // the authored first rolling duel remain separate ownership surfaces.
+                if (mMode == 0 || (mMode == 2 && !isFirstGra())) {
+                    field_0x14f8.entry(
+                        coOpGraTargetState(this, "obj_gra.lookat").actor);
+                } else if (mMode != 1) {
+                    field_0x14f8.entry(daPy_getPlayerActorClass());
+                }
+#else
                 field_0x14f8.entry(daPy_getPlayerActorClass());
+#endif
                 break;
 
             case 2:
@@ -1449,8 +1694,29 @@ int daObj_GrA_c::talk(void* param_1) {
             field_0xaa0 = 0;
             break;
 
-        case 1:
+        case 1: {
+#if TARGET_PC
+            // Co-op: dialogue faces the retained listener actor without requiring ALINK's complete
+            // derived type here; ordinary fallback uses the NPC's last sight target, then P1.
+            fopAc_ac_c* listenerActor = dusk::coop::message_owner::isActive()
+                                            ? dusk::coop::message_owner::listener()
+                                            : NULL;
+            daPy_py_c* listener =
+                listenerActor != NULL && fopAcM_GetName(listenerActor) == fpcNm_ALINK_e
+                    ? static_cast<daPy_py_c*>(listenerActor)
+                    : NULL;
+            if (listener == NULL && field_0x14f8.getActor() != NULL &&
+                fopAcM_GetName(field_0x14f8.getActor()) == fpcNm_ALINK_e)
+            {
+                listener = static_cast<daPy_py_c*>(field_0x14f8.getActor());
+            }
+            if (listener == NULL) {
+                listener = daPy_getPlayerActorClass();
+            }
+            sVar1 = cLib_targetAngleY(&current.pos, &listener->current.pos);
+#else
             sVar1 = cLib_targetAngleY(&current.pos, &daPy_getPlayerActorClass()->current.pos);
+#endif
             if (sVar1 != field_0x91a.y) {
                 if (field_0x1fcc < 2) {
                     if (turn_step(sVar1, 0, 19, 20)) {
@@ -1498,6 +1764,7 @@ int daObj_GrA_c::talk(void* param_1) {
                 setFaceTalkAfter();
             }
             break;
+        }
 
         case 2:
             dComIfGp_event_reset();

@@ -16,6 +16,7 @@ enum class Source : u8 {
     Dialogue,
     ItemGet,
     EnemyRetainedInteraction,
+    EnemyAuthoredDemo,
     Count,
 };
 
@@ -44,6 +45,7 @@ struct DebugState {
     int dialogueDepth = 0;
     int itemGetDepth = 0;
     int enemyRetainedInteractionDepth = 0;
+    int enemyAuthoredDemoDepth = 0;
     Transition lastTransition = Transition::None;
     Source lastSource = Source::WolfHowl;
     PlayerSlot presenterSlot = PlayerSlot::Primary;

@@ -50,14 +50,36 @@ int daObj_GrA_c::standWait(void* param_1) {
                     }
                 }
             } else {
+#if TARGET_PC
+                // Co-op: wake acquisition considers every active player that passes the native
+                // range, height, and owner-local camera-status gates.
+                CoOpGraCandidateData candidateData;
+                candidateData.actorPos = current.pos;
+                candidateData.range = getSrchCircleR();
+                const dusk::coop::EnemyTargetResult selected = coOpSelectGraTarget(
+                    this, "obj_gra.stand_wait", dusk::coop::EnemyTargetMode::ImmediateAcquire,
+                    false, coOpGraCandidate, &candidateData);
+                const dusk::coop::selected_target_state::SelectedTargetState target =
+                    dusk::coop::selected_target_state::stateForEnemyTarget(selected);
+                sp5c = current.pos;
+                if (target.available) {
+                    sp5c = target.pos;
+                    sp5c.y -= daPy_py_c::getAttentionOffsetY();
+                }
+#else
                 sp5c = daPy_getPlayerActorClass()->current.pos;
                 sp5c.y -= daPy_py_c::getAttentionOffsetY();
+#endif
                 f32 fVar1 = (sp5c - current.pos).absXZ();
                 s16 val = cLib_targetAngleY(&attention_info.position, &sp5c);
                 val -= cLib_targetAngleY(&current.pos, &eyePos);
 
                 if (
+#if TARGET_PC
+                    (target.available && field_0x1fdc == 0)
+#else
                     (field_0x1fdc == 0 && dComIfGp_checkPlayerStatus0(0, 0x100) == 0)
+#endif
                     && (
                         (home.pos - current.pos).absXZ() <= getSrchCircleR()
                         && fVar1 <= getSrchCircleR()
@@ -103,7 +125,21 @@ int daObj_GrA_c::walk(void* param_1) {
             break;
 
         case 1: {
+#if TARGET_PC
+            // Co-op: chase keeps one sticky combat opponent after the wake producer chooses it.
+            CoOpGraCandidateData candidateData;
+            candidateData.actorPos = current.pos;
+            candidateData.homePos = home.pos;
+            candidateData.range = getSrchCircleR() + 100.0f;
+            candidateData.checkHomeRange = true;
+            coOpSelectGraTarget(this, "obj_gra.walk", dusk::coop::EnemyTargetMode::StickyCombat,
+                                false, coOpGraCandidate, &candidateData);
+            const dusk::coop::selected_target_state::SelectedTargetState target =
+                coOpGraTargetState(this, "obj_gra.walk.state");
+            player_pos = target.pos;
+#else
             player_pos = daPy_getPlayerActorClass()->current.pos;
+#endif
             f32 fVar1 = (player_pos - current.pos).absXZ();
             s16 sVar1 = cLib_targetAngleY(&current.pos, &player_pos);
             s16 dbg_0xa = cLib_targetAngleY(&current.pos, &eyePos);
@@ -113,7 +149,12 @@ int daObj_GrA_c::walk(void* param_1) {
             cLib_calcTimer(&field_0x1fdc);
 
             if (
+#if TARGET_PC
+                (target.available && field_0x1fdc == 0 &&
+                 dusk::coop::player_camera_status::checkStatus0(target.slot, 0x100) == 0)
+#else
                 (field_0x1fdc == 0 && dComIfGp_checkPlayerStatus0(0, 0x100) == 0)
+#endif
                 && (
                     (sp6c - player_pos).absXZ() <= (getSrchCircleR() + 100.0f)
                     && fVar1 <= getSrchCircleR() + 100.0f
@@ -237,7 +278,14 @@ int daObj_GrA_c::toStone(void* param_1) {
             switch (field_0xaac) {
                 case 1:
                     if (field_0x109c != 0) {
+#if TARGET_PC
+                        // Co-op: stone-form proximity follows the soldier's retained opponent.
+                        const dusk::coop::selected_target_state::SelectedTargetState target =
+                            coOpGraTargetState(this, "obj_gra.stone_wait");
+                        cXyz sp70(target.pos);
+#else
                         cXyz sp70(daPy_getPlayerActorClass()->current.pos);
+#endif
                         var_f30 = (sp70 - current.pos).absXZ();
                         if (field_0xaa8 != 0) {
                             field_0xaa8--;
@@ -269,7 +317,13 @@ int daObj_GrA_c::toStone(void* param_1) {
                         mSound.startCreatureSoundLevel(Z2SE_GORON_TREMBLE, 0, -1);
                         field_0x10a0--;
                     } else {
+#if TARGET_PC
+                        // Co-op: the launch applies to the ALINK that actually rode the stone body.
+                        daPy_py_c* rider = coOpGraRiderPlayer(this);
+                        if (field_0x10c4 != 0 && rider != NULL && !rider->checkWolf()) {
+#else
                         if (field_0x10c4 != 0 && daPy_py_c::checkNowWolf() == 0) {
+#endif
                             sVar1 = cM_deg2s(mpHIO->m.field_0x4c);
 
                             if (strcmp(dComIfGp_getStartStageName(), "F_SP109") == 0) {
@@ -279,8 +333,18 @@ int daObj_GrA_c::toStone(void* param_1) {
                             }
 
                             // reversed in debug?!
+#if TARGET_PC
+                            rider->setRollJump(var_f31 * cM_scos(sVar1),
+                                               var_f31 * cM_ssin(sVar1),
+                                               rider->shape_angle.y);
+                            dusk::coop::retained_interaction_owner::clearRetainedInteraction(
+                                "obj_gra.rider.release", this,
+                                dusk::coop::retained_interaction_owner::
+                                    RetainedInteractionScope::Attach);
+#else
                             daPy_getPlayerActorClass()->setRollJump(var_f31 * cM_scos(sVar1), var_f31 * cM_ssin(sVar1),
                                                         daPy_getPlayerActorClass()->shape_angle.y);
+#endif
                         } else {
                             field_0xf50.OnAtSetBit();
                             field_0x109c = 0;
@@ -351,7 +415,17 @@ int daObj_GrA_c::step(void* param_1) {
                 field_0xce0[1].ClrAtHit();
             } else {
                 cLib_addCalc2(&speedF, mpHIO->m.field_0x90 / 3.0f, 0.25f, 3.5f);
-                cLib_addCalcAngleS2(&current.angle.y, cLib_targetAngleY(&current.pos, &daPy_getPlayerActorClass()->current.pos),
+#if TARGET_PC
+                // Co-op: a committed punch continues facing the opponent chosen before startup.
+                coOpSelectGraTarget(this, "obj_gra.step",
+                                    dusk::coop::EnemyTargetMode::StickyCombat, true);
+                const dusk::coop::selected_target_state::SelectedTargetState target =
+                    coOpGraTargetState(this, "obj_gra.step.state");
+                const cXyz& targetPos = target.pos;
+#else
+                const cXyz& targetPos = daPy_getPlayerActorClass()->current.pos;
+#endif
+                cLib_addCalcAngleS2(&current.angle.y, cLib_targetAngleY(&current.pos, &targetPos),
                                     4, mpHIO->m.field_0x88 / 4);
                 shape_angle.y = current.angle.y;
                 field_0x91a.y = current.angle.y;
@@ -683,6 +757,10 @@ f32 daObj_GrA_c::getSpeed() {
 int daObj_GrA_c::standRoll(void* param_1) {
     cXyz sp38;
     daPy_py_c* player = daPy_getPlayerActorClass();
+#if TARGET_PC
+    dusk::coop::PlayerSlot playerSlot = dusk::coop::PlayerSlot::Slot0;
+    bool coOpTargetAvailable = isFirstGra();
+#endif
 
     switch (field_0xa7c) {
         case 0:
@@ -693,6 +771,34 @@ int daObj_GrA_c::standRoll(void* param_1) {
             break;
 
         case 1:
+#if TARGET_PC
+            if (!isFirstGra()) {
+                // Co-op: later rolling soldiers may start against any active eligible player;
+                // the first duel remains tied to its authored P1 event and camera.
+                CoOpGraCandidateData candidateData;
+                candidateData.actorPos = current.pos;
+                candidateData.range = getSrchLinkR();
+                candidateData.rollStart = true;
+                if (getTagNo() == 0 || mGraMode == 1) {
+                    candidateData.areaMode = 1;
+                } else {
+                    candidateData.areaPos = mGraPos;
+                    candidateData.areaExtent = mGraExtent;
+                    candidateData.areaHeight = mGraHeight;
+                }
+                const dusk::coop::EnemyTargetResult selected = coOpSelectGraTarget(
+                    this, "obj_gra.roll_start",
+                    dusk::coop::EnemyTargetMode::ImmediateAcquire, false, coOpGraCandidate,
+                    &candidateData);
+                const dusk::coop::selected_target_state::SelectedTargetState target =
+                    dusk::coop::selected_target_state::stateForEnemyTarget(selected);
+                if (target.available) {
+                    player = target.player;
+                    playerSlot = target.slot;
+                    coOpTargetAvailable = true;
+                }
+            }
+#endif
             if (field_0x2031 == 0 && player != NULL) {
                 if (player->current.pos.y > current.pos.y) {
                     fopAcM_delete(this);
@@ -716,15 +822,32 @@ int daObj_GrA_c::standRoll(void* param_1) {
                 } else if (mGraMode == 1) {
                     sp38 = player->current.pos - current.pos;
                     sp38.y = 2.0f * sp38.y;
-                    if (sp38.abs() < getSrchLinkR() && player->checkPlayerFly() == 0 && !player->checkClimbMove() &&
+                    if (
+#if TARGET_PC
+                        coOpTargetAvailable &&
+#endif
+                        sp38.abs() < getSrchLinkR() && player->checkPlayerFly() == 0 && !player->checkClimbMove() &&
+#if TARGET_PC
+                        dusk::coop::player_camera_status::checkStatus0(playerSlot, 8) == 0) {
+#else
                         dComIfGp_checkPlayerStatus0(0, 8) == 0) {
+#endif
                         setProcess(&daObj_GrA_c::rollDemo);
                         dComIfGoat_SetThrow(this);
                     }
                 } else {
                     sp38 = player->current.pos - mGraPos;
-                    if (sp38.absXZ() < mGraExtent && player->checkPlayerFly() == 0 && sp38.y > -30.0f && sp38.y < mGraHeight &&
+                    if (
+#if TARGET_PC
+                        coOpTargetAvailable &&
+#endif
+                        sp38.absXZ() < mGraExtent && player->checkPlayerFly() == 0 && sp38.y > -30.0f && sp38.y < mGraHeight &&
+#if TARGET_PC
+                        !player->checkClimbMove() &&
+                        dusk::coop::player_camera_status::checkStatus0(playerSlot, 8) == 0) {
+#else
                         !player->checkClimbMove() && dComIfGp_checkPlayerStatus0(0, 8) == 0) {
+#endif
                         setProcess(&daObj_GrA_c::rollDemo);
                         dComIfGoat_SetThrow(this);
                     }
@@ -732,8 +855,16 @@ int daObj_GrA_c::standRoll(void* param_1) {
             } else {
                 sp38 = player->current.pos - current.pos;
                 sp38.y = sp38.y * 2.0f;
-                if (sp38.abs() < getSrchLinkR() && player->checkPlayerFly() == 0 && !player->checkClimbMove() &&
+                if (
+#if TARGET_PC
+                    coOpTargetAvailable &&
+#endif
+                    sp38.abs() < getSrchLinkR() && player->checkPlayerFly() == 0 && !player->checkClimbMove() &&
+#if TARGET_PC
+                    dusk::coop::player_camera_status::checkStatus0(playerSlot, 8) == 0) {
+#else
                     dComIfGp_checkPlayerStatus0(0, 8) == 0) {
+#endif
                     setProcess(&daObj_GrA_c::rollDemo);
                     dComIfGoat_SetThrow(this);
                 }
@@ -854,6 +985,18 @@ int daObj_GrA_c::rollDemo(void* param_1) {
 
 int daObj_GrA_c::rollAttack(void* param_1) {
     daPy_py_c* player = daPy_getPlayerActorClass();
+#if TARGET_PC
+    dusk::coop::PlayerSlot playerSlot = dusk::coop::PlayerSlot::Slot0;
+    if (!isFirstGra()) {
+        // Co-op: a rolling charge remains committed to the opponent selected at its start.
+        coOpSelectGraTarget(this, "obj_gra.roll_attack",
+                            dusk::coop::EnemyTargetMode::StickyCombat, true);
+        const dusk::coop::selected_target_state::SelectedTargetState target =
+            coOpGraTargetState(this, "obj_gra.roll_attack.state");
+        player = target.player;
+        playerSlot = target.slot;
+    }
+#endif
     cXyz sp3c;
     f32 fVar1, fVar2;
     bool bVar1;
@@ -903,7 +1046,13 @@ int daObj_GrA_c::rollAttack(void* param_1) {
 
                 s16 sVar1 = cLib_targetAngleX(&sp54, &player->eyePos);
                 if (isFirstGra() || !dComIfG_Bgsp().LineCross(&field_0x1f4c)) {
+#if TARGET_PC
+                    if (!player->checkClimbMove() &&
+                        dusk::coop::player_camera_status::checkStatus0(playerSlot, 8) == 0 &&
+                        sVar1 > -0x2000 && sVar1 < 0x2000) {
+#else
                     if (!player->checkClimbMove() && dComIfGp_checkPlayerStatus0(0, 8) == 0 && sVar1 > -0x2000 && sVar1 < 0x2000) {
+#endif
                         field_0x150c = 1;
                         bVar1 = true;
 
@@ -981,7 +1130,12 @@ int daObj_GrA_c::rollAttack(void* param_1) {
                         dComIfGoat_SetThrow(NULL);
                     }
 
-                    if (field_0x2030 == 1 && field_0x2005 == 0 && fopAcM_otherBgCheck(this, dComIfGp_getPlayer(0))) {
+                    if (field_0x2030 == 1 && field_0x2005 == 0 &&
+#if TARGET_PC
+                        coOpGraAnyOtherBgCheck(this)) {
+#else
+                        fopAcM_otherBgCheck(this, dComIfGp_getPlayer(0))) {
+#endif
                         fopAcM_delete(this);
                         if (dComIfGp_getVibration().CheckQuake()) {
                             dComIfGp_getVibration().StopQuake(31);
@@ -1054,12 +1208,34 @@ int daObj_GrA_c::rollAttack(void* param_1) {
             if (field_0x1fe9 == 0 && field_0xf50.ChkCoHit() != 0) {
                 fopAc_ac_c* hitobj_p = dCc_GetAc(field_0xf50.GetCoHitObj()->GetAc());
                 if (fopAcM_GetName(hitobj_p) == fpcNm_ALINK_e) {
+#if TARGET_PC
+                    // Co-op: body collision launches the ALINK actually touched, even if another
+                    // player owns the rolling soldier's current pursuit.
+                    const dusk::coop::defender_owner::DefenderOwnerResult defender =
+                        dusk::coop::defender_owner::resolveDefenderOwnerFromActor(this, hitobj_p);
+                    dusk::coop::defender_owner::recordDefenderOwnerContact(
+                        "obj_gra.roll_contact", this, defender);
+                    if (defender.found) {
+                        if (player != defender.localPlayer && field_0x2014 != 0) {
+                            // Co-op: release pursuit-owned side movement before collision ownership
+                            // switches to a different ALINK.
+                            player->offGoronSideMove();
+                            player->offGoronUpStopCancel();
+                        }
+                        player = defender.localPlayer;
+                    }
+#endif
                     field_0x1fe9 = 1;
                     player->offGoronSideMove();
                     player->offGoronUpStopCancel();
 
                     s16 sVar1;
-                    if (isFirstGra()) {
+                    if (isFirstGra()
+#if TARGET_PC
+                        // Co-op: only P1 may topple the first Goron into its authored victory demo.
+                        && dusk::coop::getSlotForActor(player) == dusk::coop::PlayerSlot::Slot0
+#endif
+                    ) {
                         sVar1 = home.angle.y;
                         if (player->checkEquipHeavyBoots() != 0) {
                             player->setThrowDamage(sVar1, 30.0f, 40.0f, 1, 0, 0);
@@ -1098,6 +1274,7 @@ int daObj_GrA_c::rollAttack(void* param_1) {
 int daObj_GrA_c::rollAttacked(void* param_1) {
     BOOL bVar1;
     s16 sVar1;
+    // Co-op: first-Goron recovery remains part of the authored P1 duel and camera.
     daPy_py_c* player = daPy_getPlayerActorClass();
     attention_info.flags = 0;
 
@@ -1260,6 +1437,15 @@ int daObj_GrA_c::rollEscape(void* param_1) {
     BOOL bVar1;
     cXyz sp68;
     s16 sVar1;
+#if TARGET_PC
+    daPy_py_c* player = daPy_getPlayerActorClass();
+    if (!isFirstGra()) {
+        // Co-op: ordinary rolling escape effects read the retained combat opponent.
+        coOpSelectGraTarget(this, "obj_gra.roll_escape",
+                            dusk::coop::EnemyTargetMode::StickyCombat, false);
+        player = coOpGraTargetState(this, "obj_gra.roll_escape.state").player;
+    }
+#endif
 
     switch (field_0xa7c) {
         case 0:
@@ -1269,7 +1455,11 @@ int daObj_GrA_c::rollEscape(void* param_1) {
             break;
 
         case 1: {
+#if TARGET_PC
+            cXyz player_pos = player->current.pos;
+#else
             cXyz player_pos = daPy_getPlayerActorClass()->current.pos;
+#endif
             f32 fVar1 = (player_pos - current.pos).absXZ();
             if (fVar1 <= 1800.0f) {
                 if (field_0x2005 != 2) {
@@ -1301,7 +1491,11 @@ int daObj_GrA_c::rollEscape(void* param_1) {
                 }
 
                 if (field_0x2030 == 1 && field_0x2005 == 0 &&
+#if TARGET_PC
+                    (coOpGraAnyOtherBgCheck(this) || fopAcM_CheckCondition(this, 4) != 0)) {
+#else
                     (fopAcM_otherBgCheck(this, dComIfGp_getPlayer(0)) || fopAcM_CheckCondition(this, 4) != 0)) {
+#endif
                     if (dComIfGp_getVibration().CheckQuake()) {
                         dComIfGp_getVibration().StopQuake(31);
                     }
@@ -1455,6 +1649,9 @@ void daObj_GrA_c::demo_camera() {
                 return;
             }
 
+#if TARGET_PC
+            coOpBeginGraRollDemoPresentation(this);
+#endif
             camera->mCamera.Stop();
             mDemoCamMode = 2;
             field_0x2056 = 0;
@@ -1548,6 +1745,9 @@ void daObj_GrA_c::demo_camera() {
                 camera->mCamera.Start();
                 camera->mCamera.SetTrimSize(0);
                 dComIfGp_event_reset();
+#if TARGET_PC
+                coOpEndGraRollDemoPresentation(this);
+#endif
                 mDemoCamMode = 0;
                 field_0x2056 = 0;
             } else {
@@ -1793,6 +1993,30 @@ void daObj_GrA_c::graThrowDemo() {
 }
 
 void daObj_GrA_c::setCarryStatus() {
+#if TARGET_PC
+    // Co-op: later Gorons expose the native pickup corridor to every active ALINK; the authored
+    // first-Goron event remains P1-only, and the catch producer records the actual later carrier.
+    bool inCarryRange = false;
+    const auto checkCarryRange = [&](fopAc_ac_c* actor) {
+        if (inCarryRange) {
+            return;
+        }
+        cXyz sp38;
+        mDoMtx_stack_c::YrotS(-shape_angle.y);
+        mDoMtx_stack_c::transM(-current.pos.x, -current.pos.y, -current.pos.z);
+        mDoMtx_stack_c::multVec(&actor->current.pos, &sp38);
+        inCarryRange = fabsf(sp38.x) < 100.0f && sp38.z > 0.0f && sp38.z < 800.0f;
+    };
+    if (isFirstGra()) {
+        checkCarryRange(daPy_getPlayerActorClass());
+    } else {
+        dusk::coop::forEachActivePlayer(
+            [&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) { checkCarryRange(actor); });
+    }
+    if (inCarryRange) {
+        attention_info.flags |= fopAc_AttnFlag_CARRY_e;
+    }
+#else
     cXyz sp38;
     mDoMtx_stack_c::YrotS(-shape_angle.y);
     mDoMtx_stack_c::transM(-current.pos.x, -current.pos.y, -current.pos.z);
@@ -1800,6 +2024,7 @@ void daObj_GrA_c::setCarryStatus() {
     if (fabsf(sp38.x) < 100.0f && sp38.z > 0.0f && sp38.z < 800.0f) {
         attention_info.flags |= fopAc_AttnFlag_CARRY_e;
     }
+#endif
 }
 
 bool daObj_GrA_c::checkThrow() {
@@ -1823,7 +2048,12 @@ bool daObj_GrA_c::checkThrow() {
 }
 
 void daObj_GrA_c::calcCatchPos(f32 param_1, int param_2) {
+#if TARGET_PC
+    // Co-op: carried-Goron matrices and release geometry follow the ALINK retained at catch time.
+    daPy_py_c* player = coOpGraCarrierPlayer(this);
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
     s16 opp_shape_angle = player->shape_angle.y + 0x8000;
     // (void) opp_shape_angle;  // affects dbg if uncommented..
     f32 fVar1 = player->current.pos.y - mGroundY;
@@ -1912,7 +2142,12 @@ void daObj_GrA_c::initCrazyCatch(int param_1) {
 void daObj_GrA_c::executeCrazyCatch() {
     switch (field_0x1ff4) {
         case 0:
+#if TARGET_PC
+            // Co-op: catch settling reads the retained carrier's movement.
+            if (!coOpGraCarrierPlayer(this)->speedF) {
+#else
             if (!daPy_getPlayerActorClass()->speedF) {
+#endif
                 field_0x1ff4 = 1;
                 calcCatchPos(-110.0f, 2);
                 dComIfGp_getVibration().StartQuake(1, 15, cXyz(0.0f, 1.0f, 0.0f));
@@ -1939,7 +2174,11 @@ void daObj_GrA_c::executeCrazyCatch() {
         } else if ((field_0xa48 & 16) != 0) {
             initCrazyThrow(1);
         } else if ((field_0xa48 & 4) != 0) {
+#if TARGET_PC
+            if (!coOpGraCarrierPlayer(this)->speedF) {
+#else
             if (!daPy_getPlayerActorClass()->speedF) {
+#endif
                 initCrazyAttack();
             } else {
                 initCrazyAttack();
@@ -2022,13 +2261,22 @@ void daObj_GrA_c::executeCrazyThrow() {
 
 void daObj_GrA_c::initCrazyAttack() {
     camera_process_class* camera;
+#if TARGET_PC
+    // Co-op: interruption clears the carried actor's owner before it returns to rolling AI.
+    daPy_py_c* carrier = coOpGraCarrierPlayer(this);
+#endif
 
     if (field_0x1ff0 == 3 && field_0x1ff8 == 0) {
         field_0x1ff0 = 4;
         field_0x1fe9 = 1;
 
+#if TARGET_PC
+        carrier->offGoronSideMove();
+        carrier->offGoronUpStopCancel();
+#else
         daPy_getPlayerActorClass()->offGoronSideMove();
         daPy_getPlayerActorClass()->offGoronUpStopCancel();
+#endif
 
         if (isFirstGra()) {
             camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
@@ -2043,7 +2291,11 @@ void daObj_GrA_c::initCrazyAttack() {
             field_0x91a.y = shape_angle.y;
         }
     } else {
+#if TARGET_PC
+        carrier->offGoronSideMove();
+#else
         daPy_getPlayerActorClass()->offGoronSideMove();
+#endif
 
         if (isFirstGra()) {
             if (mDemoCamMode != 0) {
@@ -2061,7 +2313,14 @@ void daObj_GrA_c::initCrazyAttack() {
         }
 
         gravity = -4.0f;
+#if TARGET_PC
+        current.angle.y = cLib_targetAngleY(&current.pos, &carrier->current.pos);
+        dusk::coop::retained_interaction_owner::clearRetainedInteraction(
+            "obj_gra.carrier.interrupt", this,
+            dusk::coop::retained_interaction_owner::RetainedInteractionScope::Carry);
+#else
         current.angle.y = cLib_targetAngleY(&current.pos, &daPy_getPlayerActorClass()->current.pos);
+#endif
     }
 }
 
@@ -2084,7 +2343,15 @@ void daObj_GrA_c::executeCrazyJumping() {
             speed.y = 0.0f;
             setProcess(&daObj_GrA_c::rollEscape);
             field_0x1fe9 = 1;
+#if TARGET_PC
+            daPy_py_c* carrier = coOpGraCarrierPlayer(this);
+            carrier->offGoronSideMove();
+            dusk::coop::retained_interaction_owner::clearRetainedInteraction(
+                "obj_gra.carrier.land", this,
+                dusk::coop::retained_interaction_owner::RetainedInteractionScope::Carry);
+#else
             daPy_getPlayerActorClass()->offGoronSideMove();
+#endif
             field_0x2004 = 0;
             gravity = -4.0f;
         } else {
@@ -2108,7 +2375,15 @@ void daObj_GrA_c::executeCrazyJumping() {
 
         setProcess(&daObj_GrA_c::rollEscape);
         field_0x1fe9 = 1;
+#if TARGET_PC
+        daPy_py_c* carrier = coOpGraCarrierPlayer(this);
+        carrier->offGoronSideMove();
+        dusk::coop::retained_interaction_owner::clearRetainedInteraction(
+            "obj_gra.carrier.wall", this,
+            dusk::coop::retained_interaction_owner::RetainedInteractionScope::Carry);
+#else
         daPy_getPlayerActorClass()->offGoronSideMove();
+#endif
         field_0x2004 = 0;
         gravity = -4.0f;
     }

@@ -53,6 +53,7 @@
 #include "d/d_s_play.h"
 
 #if TARGET_PC
+#include "d/actor/d_a_obj_gra2.h"
 #include "dusk/action_bindings.h"
 #include "dusk/coop/alink_form_resources.h"
 #include "dusk/coop/alink_model_data_owner.h"
@@ -67,6 +68,7 @@
 #include "dusk/coop/player_button_status.h"
 #include "dusk/coop/player_camera_status.h"
 #include "dusk/coop/player_slots.h"
+#include "dusk/coop/retained_interaction_owner.h"
 #include "dusk/diagnostics.h"
 #include "dusk/logging.h"
 #endif

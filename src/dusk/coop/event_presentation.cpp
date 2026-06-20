@@ -57,6 +57,8 @@ void refreshDebugState(Transition transition, Source source) {
     s_state.debug.itemGetDepth = s_state.depths[sourceIndex(Source::ItemGet)];
     s_state.debug.enemyRetainedInteractionDepth =
         s_state.depths[sourceIndex(Source::EnemyRetainedInteraction)];
+    s_state.debug.enemyAuthoredDemoDepth =
+        s_state.depths[sourceIndex(Source::EnemyAuthoredDemo)];
     s_state.debug.lastTransition = transition;
     s_state.debug.lastSource = source;
     s_state.debug.fullscreen = s_state.debug.totalDepth != 0;
@@ -189,6 +191,8 @@ const char* sourceName(Source source) {
         return "item_get";
     case Source::EnemyRetainedInteraction:
         return "enemy_retained_interaction";
+    case Source::EnemyAuthoredDemo:
+        return "enemy_authored_demo";
     default:
         return "unknown";
     }

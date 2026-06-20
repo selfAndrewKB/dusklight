@@ -27,8 +27,12 @@ The compact `E_FS` / `E_ZM` / `E_ZH` batch is implemented and first-pass validat
 and Zant Masks now cover their ordinary combat, selected-target, damage-owner, and
 projectile-reflection boundaries. Zant's Hand remains Sol/object-driven and only converts genuine
 player damage ownership. The standalone `B_TN` Darknut combat core is first-pass validated. The
-remaining regular-ish pass is the mixed `OBJ_GRA` Goron soldier/NPC/rolling actor, followed by a
-dedicated `B_GG` Aeralfos audit.
+mixed `OBJ_GRA` Goron soldier/NPC/rolling actor and `B_GG` Aeralfos ordinary-combat passes are also
+first-pass validated. The first rolling Goron's authored P1 intro now collapses presentation to that
+camera after native event acceptance; this final presentation polish awaits direct field
+confirmation. Other authored first-encounter/miniboss cameras stay outside shared combat ownership.
+After this batch, choose the next dedicated boss/miniboss audit rather than treating another
+encounter actor as an ordinary-enemy conversion.
 
 ## Target Policy Requirements
 
@@ -137,6 +141,8 @@ collision-owner, render/visibility culling, or story/demo/global state.
 | Zant Mask | Zant Mask | `src/d/actor/d_a_e_zm.cpp` | `E_ZM` | compact special batch, first-pass validated | Hidden appearance acquisition filters active players through the native full-distance occurrence radius before selection. Move/attack and projectile launch aim share one Combat owner; visible pitch and death facing read that retained target without reacquiring. Cut count/type uses `damage_owner`, while reflected balls use `defender_owner` so shield/cut state comes from the actual reflector. Search-point marker actors remain helpers, and room-switch/death state remains native. |
 | Zant's Hand | Zant's Hand / Ball Master | `src/d/actor/d_a_e_zh.cpp` | `E_ZH` | compact special batch, first-pass validated | The actor searches and chases the live Sol actor, so its position naturally follows whichever ALINK is carrying it. On catch, the Hand clears the Sol's shared carry flag; the owning ALINK releases its actor-local grab keep, then the Hand marks the Sol carried again and attaches it to its own hand. Player cut reactions use `damage_owner`. Initial Sol placement, room/dungeon switches, the Hand's return-to-entrance objective lifecycle, authored start/return cameras, blur, and P1 `changeOriginalDemo()` remain shared setpiece behavior. |
 | Darknut | Darknut / Temple of Time miniboss | `src/d/actor/d_a_b_tn.cpp` | `B_TN` | standalone shared-combat pass, first-pass validated | Both armored and unarmored phases use one Combat owner for wake, chase, attack choice, commitment, facing, target cut/form/speed/damage state, and joint tracking. Multi-frame guard/damage/armor-loss reactions retain the actual `damage_owner`; enemy sword/shield contact retains the actual `defender_owner`; hookshot, Ball-and-Chain, and boomerang dodges scan active-player tools separately. The regular `mType == 1` armor-loss sequence remains ordinary combat. The Temple of Time `mType == 0` room/opening/change/ending events, camera 0, player placement, boss-room wait, stage middle-boss state, switches, lighting, and authored armor-break presentation remain P1/global and explicitly do not acquire a Combat target. Native loose bomb/arrow/carry-object search and global Darknut group attack throttle remain shared object/group behavior. User field testing accepted both converted combat phases and preserved authored behavior. |
+| Goron | Goron soldier / rolling soldier / friendly NPC | `src/d/actor/d_a_obj_gra2.cpp`, `src/d/actor/d_a_obj_gra2_soldier.inc`, `src/d/actor/d_a_obj_gra2_base.inc` | `OBJ_GRA` | mixed combat/NPC/retained-interaction pass, first-pass validated; intro presentation pending | Standing soldiers use one Combat owner for native wake eligibility, chase, punch commitment, stone wait, and look-at. Later rolling soldiers acquire an eligible active player and retain that opponent through the charge; body collision applies Heavy Boots and throw behavior to the actual `defender_owner`. Stone-form rider launches, later-Goron ALINK catch/carry/throw matrices, and release cleanup retain the actual rider/carrier. Friendly Gorons scan eligible players with the native form/distance/sight rules and face the active `message_owner` listener during talk. The first scripted Goron duel, its compulsory catch, and its topple/victory transition remain P1-only; P2 can still be struck by the rolling body without advancing that authored sequence. After native acceptance, the first rolling-Goron intro collapses to the authored P1 camera through `event_presentation::EnemyAuthoredDemo` and releases after native camera reset; this final presentation change awaits direct validation. The mode-3 intro director, camera 0/player placement, event/message choreography, shared `dComIfGoat` encounter singleton, and create-time P1 height/deletion gate remain authored scene/global behavior. User field testing accepted standing/rolling combat and retained interaction behavior. |
+| Aeralfos | Aeralfos / City in the Sky miniboss variants | `src/d/actor/d_a_b_gg.cpp` | `B_GG` | mixed ordinary-combat/miniboss pass, first-pass validated | Outside authored phases, one Combat owner fills the actor's native per-frame player position, angle, and distance cache for flight, ground movement, attack commitment, attention, and stop behavior. Multi-frame guard/combo/cut/head-jump reactions retain the actual `damage_owner`; sword contact and guard checks use the actual `defender_owner`. Hookshot approach scans active players independently and retains the hook owner through pull/release status, while wolf-lock cleanup reaches every active player. `ACTION_DEMO`, the hidden phase-change wait, and the City in the Sky miniboss death camera remain authored P1/global together with camera 0, player placement/demo modes, stage middle-boss state, switches, BGM/event flow, boss-room wait, and scene changes. The static boomerang-lock cancellation remains shared native tool cleanup; no caught/grab or spawned-child ownership surface was found. User field testing found no issues in the converted combat behavior. |
 
 ## Reviewed Evidence
 
@@ -299,12 +305,12 @@ Do not leave these permanently primary-player-only just because V1 is cautious. 
 
 ### Boss files — protagonist lock status
 
-All `d_a_b_*` boss files are treated as protagonist-locked/deferred for now. A targeted read of `d_a_b_yo.cpp` and `d_a_b_zant.cpp` confirmed that boss-shaped player lookups are embedded in story-fight state machines and should wait for a dedicated boss co-op audit:
+Unaudited `d_a_b_*` boss files remain protagonist-locked/deferred. A targeted read of `d_a_b_yo.cpp` and `d_a_b_zant.cpp` confirmed that boss-shaped player lookups are embedded in story-fight state machines and should wait for a dedicated boss co-op audit:
 
 - **d_a_b_yo.cpp** — mixed: angle/distance attack-pattern calls could technically be re-targeted, but position-capture logic is tightly coupled to P1 throughout. Protagonist-locked until boss co-op work begins.
 - **d_a_b_zant.cpp** — many targeting-shaped calls (~18) embedded in story-fight state machines. Protagonist-locked/deferred until boss co-op work begins.
 
-Remaining boss files (`d_a_b_bh`, `d_a_b_bq`, `d_a_b_dr`, `d_a_b_ds`, `d_a_b_gg`, `d_a_b_gm`, `d_a_b_go`, `d_a_b_oh`, `d_a_b_oh2`) were not read in this pass. `d_a_b_tn` is now audited as a mixed regular/miniboss actor: shared Darknut combat is first-pass validated, while the Temple of Time authored encounter lifecycle remains deferred. `d_a_b_gg` is Aeralfos/Gargoyle and is queued for a dedicated co-op audit rather than being folded blindly into a regular-enemy batch.
+Remaining boss files (`d_a_b_bh`, `d_a_b_bq`, `d_a_b_dr`, `d_a_b_ds`, `d_a_b_gm`, `d_a_b_go`, `d_a_b_oh`, `d_a_b_oh2`) were not read in this pass. `d_a_b_tn` and `d_a_b_gg` are now explicitly audited mixed actors: Darknut shared combat is first-pass validated, while Aeralfos ordinary combat is converted pending validation. Their Temple of Time and City in the Sky authored encounter lifecycles remain deferred.
 
 ### Key findings from this pass
 
@@ -510,9 +516,9 @@ This inventory is generated from `src/d/actor/d_a_e_*.cpp` file names and `g_pro
 
 ## Next Steps
 
-1. Audit and convert `OBJ_GRA` Goron soldiers as a standalone mixed combat/NPC/retained-throw pass.
-2. Audit `B_GG` Aeralfos separately, preserving any miniboss encounter and camera choreography outside ordinary shared combat.
-3. Before patching either actor, classify singleton reads into targeting, selected-target state, damage-owner, defender/collision-owner, caught/grab-owner, primary/global, and render/culling.
+1. Directly field-confirm the first rolling-Goron intro collapse: one P1-authored fullscreen view during the demo, hidden P2 visuals only for that presentation, and restored split view after native camera reset.
+2. Keep the remaining first-Goron duel/catch/victory lifecycle and Aeralfos opening, phase-change, and death cameras authored P1/global until dedicated encounter ownership says otherwise.
+3. Select the next dedicated boss/miniboss or world-trigger audit and classify its combat, retained interaction, objective, camera, and encounter-global boundaries before implementation.
 
 ## Multiplayer AI Notes
 

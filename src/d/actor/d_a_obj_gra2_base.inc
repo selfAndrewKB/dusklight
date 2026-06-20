@@ -520,6 +520,72 @@ BOOL daObj_GrA_c::turn_step(s16 param_1, int param_2, int param_3, int param_4) 
 }
 
 BOOL daObj_GrA_c::chkFindPlayer2(int param_1, s16 param_2) {
+#if TARGET_PC
+    // Co-op: friendly Goron awareness applies the same distance-table and sight rules to every
+    // active ALINK, then retains the nearest eligible actor for look-at and talk facing.
+    fopAc_ac_c* selectedActor = NULL;
+    f32 selectedDistance = 0.0f;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot slot, fopAc_ac_c* actor) {
+        const dusk::coop::selected_target_state::SelectedTargetState state =
+            dusk::coop::selected_target_state::stateForSlot(slot, actor);
+        if (!state.available || (field_0x844 == false && state.wolf)) {
+            return;
+        }
+
+        cXyz sp80 = getAttentionPos(actor);
+        s16 angle_diff = cLib_targetAngleY(&current.pos, &actor->current.pos) - current.angle.y;
+
+        int dist_tbl_idx;
+        if (abs(angle_diff) < 0x3C00) {
+            dist_tbl_idx =
+                (param_1 == 0) ? getDistTableIdx(10, 6) : getDistTableIdx(12, 6);
+        } else {
+            dist_tbl_idx =
+                (param_1 == 0) ? getDistTableIdx(4, 6) : getDistTableIdx(6, 6);
+        }
+
+        f32 maxDistance =
+            (param_1 == 0)
+                ? dComIfGp_getAttention()->getDistTable(dist_tbl_idx).mDistMax
+                : dComIfGp_getAttention()->getDistTable(dist_tbl_idx).mDistMaxRelease;
+        f32 lowerY = dComIfGp_getAttention()->getDistTable(dist_tbl_idx).mLowerY * -1.0f;
+        f32 upperY = dComIfGp_getAttention()->getDistTable(dist_tbl_idx).mUpperY * -1.0f;
+        u32 angleSelect = dComIfGp_getAttention()->getDistTable(dist_tbl_idx).mAngleSelect;
+
+        f32 sightAngle = 180.0f;
+        if ((angleSelect & 8) != 0) {
+            sightAngle = 30.0f;
+        } else if ((angleSelect & 16) != 0) {
+            sightAngle = 45.0f;
+        } else if ((angleSelect & 32) != 0) {
+            sightAngle = 60.0f;
+        } else if ((angleSelect & 64) != 0) {
+            sightAngle = 90.0f;
+        } else if ((angleSelect & 128) != 0) {
+            sightAngle = 110.0f;
+        } else if ((angleSelect & 256) != 0) {
+            sightAngle = 135.0f;
+        }
+
+        if (!chkPointInArea(sp80, attention_info.position, maxDistance, lowerY, upperY, 0) ||
+            !chkActorInSight2(actor, sightAngle, param_2))
+        {
+            return;
+        }
+
+        const f32 distance = fopAcM_searchActorDistance(this, actor);
+        if (selectedActor == NULL || distance < selectedDistance) {
+            selectedActor = actor;
+            selectedDistance = distance;
+        }
+    });
+
+    if (selectedActor != NULL) {
+        field_0x14f8.entry(selectedActor);
+        return TRUE;
+    }
+    return FALSE;
+#else
     cXyz sp80 = getAttentionPos(daPy_getPlayerActorClass());
     s16 angle_diff = fopAcM_searchPlayerAngleY(this) - current.angle.y;
 
@@ -558,6 +624,7 @@ BOOL daObj_GrA_c::chkFindPlayer2(int param_1, s16 param_2) {
     }
 
     return FALSE;
+#endif
 }
 
 BOOL daObj_GrA_c::chkPointInArea(cXyz param_1, cXyz param_2, f32 param_3, f32 param_4, f32 param_5, s16 param_6) {
@@ -631,9 +698,11 @@ int daObj_GrA_c::standWaitJump(void* param_1) {
             } else {
                 BOOL bVar1 = field_0x14f8.getActor() != NULL;
                 if (chkFindPlayer2(bVar1, shape_angle.y) != 0) {
+#if !TARGET_PC
                     if (!bVar1) {
                         field_0x14f8.entry(daPy_getPlayerActorClass());
                     }
+#endif
                 } else if (bVar1) {
                     field_0x14f8.entry(NULL);
                 }

@@ -14,6 +14,15 @@
 #include "f_op/f_op_camera_mng.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/defender_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/player_query.h"
+#include "dusk/coop/selected_target_state.h"
+#include <vector>
+#endif
+
 class daB_GG_HIO_c : public JORReflexible {
 public:
     daB_GG_HIO_c();
@@ -552,6 +561,193 @@ static s16 s_M_Action;
 
 static s16 s_W_Action;
 }
+
+#if TARGET_PC
+namespace {
+
+struct CoOpGgTargetState {
+    dusk::coop::selected_target_state::SelectedTargetState state;
+    f32 distance = 0.0f;
+    f32 distanceXZ = 0.0f;
+};
+
+struct CoOpGgOwnerState {
+    daB_GG_c* enemy = NULL;
+    dusk::coop::PlayerSlot damageSlot = dusk::coop::PlayerSlot::Invalid;
+    dusk::coop::PlayerSlot hookSlot = dusk::coop::PlayerSlot::Invalid;
+};
+
+std::vector<CoOpGgOwnerState> s_coOpGgOwnerStates;
+
+static CoOpGgOwnerState* coOpFindGgOwnerState(daB_GG_c* i_this, bool create) {
+    for (CoOpGgOwnerState& state : s_coOpGgOwnerStates) {
+        if (state.enemy == i_this) {
+            return &state;
+        }
+    }
+    if (!create) {
+        return NULL;
+    }
+
+    CoOpGgOwnerState state;
+    state.enemy = i_this;
+    s_coOpGgOwnerStates.push_back(state);
+    return &s_coOpGgOwnerStates.back();
+}
+
+// Co-op: ordinary flight and ground phases share one opponent; authored camera phases bypass it.
+static void coOpSelectGgTarget(daB_GG_c* i_this, const char* label, bool committed) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = dusk::coop::EnemyTargetMode::StickyCombat;
+    context.label = label;
+    context.committed = committed;
+    dusk::coop::selectEnemyTarget(context);
+}
+
+static CoOpGgTargetState coOpGgTargetState(daB_GG_c* i_this, const char* label) {
+    CoOpGgTargetState result;
+    const dusk::coop::EnemyTargetResult target =
+        dusk::coop::getEnemyTarget(i_this, dusk::coop::EnemyTargetScope::Combat);
+    result.state = dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    if (result.state.available) {
+        result.distance = target.distance;
+        result.distanceXZ = target.distanceXZ;
+        dusk::coop::selected_target_state::recordSelectedTargetState(
+            i_this, label, result.state,
+            dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget);
+        return result;
+    }
+
+    daPy_py_c* player = daPy_getPlayerActorClass();
+    if (player != NULL) {
+        result.state.slot = dusk::coop::PlayerSlot::Slot0;
+        result.state.actor = player;
+        result.state.player = player;
+        result.state.pos = player->current.pos;
+        result.state.shapeAngleY = player->shape_angle.y;
+        result.state.speedF = player->getSpeedF();
+        result.state.cutType = player->getCutType();
+        result.state.cutCount = player->getCutCount();
+        result.state.cutActive = player->getCutType() != daPy_py_c::CUT_TYPE_NONE;
+        result.state.available = true;
+        result.distance = fopAcM_searchPlayerDistance(i_this);
+        result.distanceXZ = fopAcM_searchPlayerDistanceXZ(i_this);
+    }
+    return result;
+}
+
+static daPy_py_c* coOpGgCombatPlayer(daB_GG_c* i_this) {
+    return coOpGgTargetState(i_this, "b_gg.combat_player").state.player;
+}
+
+static void coOpRememberGgDamageOwner(
+    daB_GG_c* i_this, const dusk::coop::damage_owner::DamageOwnerResult& owner) {
+    if (!owner.found || owner.slot == dusk::coop::PlayerSlot::Invalid) {
+        return;
+    }
+    CoOpGgOwnerState* state = coOpFindGgOwnerState(i_this, true);
+    state->damageSlot = owner.slot;
+    if (owner.attackType & AT_TYPE_HOOKSHOT) {
+        state->hookSlot = owner.slot;
+    }
+}
+
+static dusk::coop::damage_owner::DamageOwnerResult coOpGgDamageOwner(
+    daB_GG_c* i_this, cCcD_Obj* collider) {
+    const dusk::coop::damage_owner::DamageOwnerResult owner =
+        dusk::coop::damage_owner::resolveDamageOwner(i_this, collider);
+    coOpRememberGgDamageOwner(i_this, owner);
+    return owner;
+}
+
+static daPy_py_c* coOpGgPlayerForSlot(dusk::coop::PlayerSlot slot) {
+    fopAc_ac_c* actor = dusk::coop::getPlayer(slot);
+    return actor != NULL ? static_cast<daPy_py_c*>(actor) : NULL;
+}
+
+static daPy_py_c* coOpGgDamagePlayer(daB_GG_c* i_this) {
+    CoOpGgOwnerState* state = coOpFindGgOwnerState(i_this, false);
+    daPy_py_c* player =
+        state != NULL ? coOpGgPlayerForSlot(state->damageSlot) : NULL;
+    return player != NULL ? player : coOpGgCombatPlayer(i_this);
+}
+
+static daPy_py_c* coOpGgHookPlayer(daB_GG_c* i_this) {
+    CoOpGgOwnerState* state = coOpFindGgOwnerState(i_this, false);
+    daPy_py_c* player = state != NULL ? coOpGgPlayerForSlot(state->hookSlot) : NULL;
+    return player != NULL ? player : coOpGgCombatPlayer(i_this);
+}
+
+// Co-op: preserve the native status0 hook gate for the retained hookshot owner.
+static bool coOpGgHookStatusActive(daB_GG_c* i_this) {
+    daPy_py_c* player = coOpGgHookPlayer(i_this);
+    const dusk::coop::PlayerSlot slot = dusk::coop::getSlotForActor(player);
+    return dusk::coop::selected_target_state::stateForSlot(slot, player).status0_0x4000;
+}
+
+static daPy_py_c* coOpFindGgHookThreat(daB_GG_c* i_this, bool requireFar) {
+    daPy_py_c* best = NULL;
+    f32 bestDistance = 0.0f;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot slot, fopAc_ac_c* actor) {
+        const dusk::coop::selected_target_state::SelectedTargetState state =
+            dusk::coop::selected_target_state::stateForSlot(slot, actor);
+        if (!state.available || state.player == NULL ||
+            !state.player->checkHookshotShootReturnMode() ||
+            state.player->checkHookshotReturnMode())
+        {
+            return;
+        }
+
+        cXyz* hookshotTop = state.player->getHookshotTopPos();
+        if (hookshotTop == NULL) {
+            return;
+        }
+        const f32 distance = i_this->current.pos.abs(*hookshotTop);
+        if ((requireFar && hookshotTop->absXZ(i_this->current.pos) <= 100.0f) ||
+            (!requireFar && distance >= 1500.0f))
+        {
+            return;
+        }
+
+        const s16 angle =
+            (fopAcM_searchActorAngleY(i_this, actor) - actor->shape_angle.y) + 0x8000;
+        if (angle >= 0x500 || angle <= -0x500) {
+            return;
+        }
+        if (best == NULL || distance < bestDistance) {
+            best = state.player;
+            bestDistance = distance;
+            coOpFindGgOwnerState(i_this, true)->hookSlot = slot;
+        }
+    });
+    return best;
+}
+
+static void coOpCancelGgWolfLocks(daB_GG_c* i_this) {
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot,
+                                        fopAc_ac_c* actor) {
+        daPy_py_c* player = static_cast<daPy_py_c*>(actor);
+        if (player->checkWolfLock(i_this)) {
+            player->cancelWolfLock(i_this);
+        }
+    });
+}
+
+static void coOpClearGgOwnerState(daB_GG_c* i_this) {
+    for (std::vector<CoOpGgOwnerState>::iterator it = s_coOpGgOwnerStates.begin();
+         it != s_coOpGgOwnerStates.end(); ++it)
+    {
+        if (it->enemy == i_this) {
+            s_coOpGgOwnerStates.erase(it);
+            return;
+        }
+    }
+}
+
+}  // namespace
+#endif
 
 void daB_GG_c::DemoSkip(int param_0) {
     cXyz offset(0.0f, 200.0f, 300.0f);
@@ -1539,12 +1735,29 @@ void daB_GG_c::F_WaitAction() {
 }
 
 void daB_GG_c::F_FookChk() {
+#if TARGET_PC
+    // Co-op: hookshot evasion reacts to the active player whose hook is actually approaching.
+    daPy_py_c* player = coOpFindGgHookThreat(this, false);
+    if (player == NULL) {
+        return;
+    }
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
     cXyz* hookshot_top = player->getHookshotTopPos();
 
     if (hookshot_top != NULL) {
+#if TARGET_PC
+        s16 temp_r26 =
+            (fopAcM_searchActorAngleY(this, player) - fopAcM_GetShapeAngle_p(player)->y) +
+            0x8000;
+        if (current.pos.abs(*hookshot_top) < 1500.0f &&
+            player->checkHookshotShootReturnMode() && !player->checkHookshotReturnMode() &&
+            temp_r26 < 0x500 && temp_r26 > -0x500) {
+#else
         s16 temp_r26 = (s_TargetAngle - fopAcM_GetShapeAngle_p(player)->y) + 0x8000;
         if (current.pos.abs(*hookshot_top) < 1500.0f && daPy_getPlayerActorClass()->checkHookshotShootReturnMode() && !daPy_getPlayerActorClass()->checkHookshotReturnMode() && temp_r26 < 0x500 && temp_r26 > -0x500) {
+#endif
             mMode = 2;
             mTimers[1] = 30;
             mTimers[2] = 50;
@@ -1572,7 +1785,12 @@ void daB_GG_c::F_FookChk() {
 void daB_GG_c::F_MoveAction() {
     cXyz sp34;
     cXyz sp28;
+#if TARGET_PC
+    // Co-op: movement obstruction and setpiece-height gates consume the retained opponent.
+    daPy_py_c* player = coOpGgCombatPlayer(this);
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
 
     switch (mMode) {
     case 0:
@@ -1793,7 +2011,11 @@ void daB_GG_c::F_AttackAction() {
             field_0x5ba = s_TargetAngle;
             current.angle.y = s_TargetAngle;
 
+#if TARGET_PC
+            f32 var_f31 = coOpGgTargetState(this, "b_gg.fly_attack_start").distanceXZ;
+#else
             f32 var_f31 = fopAcM_searchPlayerDistanceXZ(this);
+#endif
             if (var_f31 < 40.0f) {
                 var_f31 = 40.0f;
             }
@@ -1808,7 +2030,13 @@ void daB_GG_c::F_AttackAction() {
     case 1: {
         mSound.startCreatureSoundLevel(Z2SE_EN_GG_ATK_MOVE, 0, -1);
 
+#if TARGET_PC
+        const CoOpGgTargetState target =
+            coOpGgTargetState(this, "b_gg.fly_attack_follow");
+        f32 var_f31 = target.distanceXZ;
+#else
         f32 var_f31 = fopAcM_searchPlayerDistanceXZ(this);
+#endif
         if (var_f31 < 40.0f) {
             var_f31 = 40.0f;
         }
@@ -1816,7 +2044,11 @@ void daB_GG_c::F_AttackAction() {
         field_0x5c0 = (100.0f + (s_LinkPos->y - current.pos.y)) / ((0.9f * var_f31) / speedF);
         field_0x5ba = cLib_targetAngleY(&current.pos, s_LinkPos);
 
+#if TARGET_PC
+        if (target.distance < 600.0f || mAcch.ChkGroundHit() || mAcch.ChkWallHit()) {
+#else
         if (fopAcM_searchPlayerDistance(this) < 600.0f || mAcch.ChkGroundHit() || mAcch.ChkWallHit()) {
+#endif
             SetAnm(BCK_GGA_ATTACK_3, 0, 5.0f, 1.0f);
             mMode++;
             field_0x5bc *= 0.5f;
@@ -1946,7 +2178,12 @@ void daB_GG_c::F_AttackAction() {
 
 void daB_GG_c::F_DamageAction() {
     cXyz sp30;
+#if TARGET_PC
+    // Co-op: hook-pull continuation follows the hookshot owner retained from the actual hit.
+    daPy_py_c* player = coOpGgHookPlayer(this);
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
 
     switch (mMode) {
     case 0:
@@ -2008,7 +2245,7 @@ void daB_GG_c::F_DamageAction() {
         }
         break;
     case 11:
-        if (!daPy_getPlayerActorClass()->checkHookshotReturnMode()) {
+        if (!player->checkHookshotReturnMode()) {
             gravity = -9.0f;
             SetAnm(BCK_GGA_FS_OFF, 0, 5.0f, 1.0f);
             speed.y = 0.0f;
@@ -2130,7 +2367,13 @@ void daB_GG_c::AttentionChk() {
     if (s_dis < 3000.0f) {
         attention_info.flags = fopAc_AttnFlag_BATTLE_e;
         if (field_0x5b0 != 0 && mSubAction == SUBACT_ATTACK) {
+#if TARGET_PC
+            // Co-op: attack-facing attention uses the selected opponent's actor-local facing.
+            daPy_py_c* player = coOpGgCombatPlayer(this);
+            s16 temp_r0 = fopAcM_toActorShapeAngleY(this, player) + 0x8000;
+#else
             s16 temp_r0 = fopAcM_toPlayerShapeAngleY(this) + 0x8000;
+#endif
             if (temp_r0 < 0x3000 && temp_r0 > -0x3000) {
                 attention_info.flags = fopAc_AttnFlag_BATTLE_e;
             } else {
@@ -2178,9 +2421,14 @@ void daB_GG_c::FlyAction() {
 
     AttentionChk();
 
+#if TARGET_PC
+    // Co-op: state changes clear wolf locks owned by any active player, not only P1.
+    coOpCancelGgWolfLocks(this);
+#else
     if (daPy_getPlayerActorClass()->checkWolfLock(this)) {
         daPy_getPlayerActorClass()->cancelWolfLock(this);
     }
+#endif
 
     cLib_addCalc2(&speed.y, field_0x5c0, 0.2f, 100.0f);
     cLib_addCalc2(&speedF, field_0x5bc, 0.2f, 100.0f);
@@ -2327,9 +2575,13 @@ void daB_GG_c::F_A_Action() {
         break;
     }
 
+#if TARGET_PC
+    coOpCancelGgWolfLocks(this);
+#else
     if (daPy_getPlayerActorClass()->checkWolfLock(this)) {
         daPy_getPlayerActorClass()->cancelWolfLock(this);
     }
+#endif
 
     cLib_addCalc2(&speedF, field_0x5bc, 0.2f, 100.0f);
 
@@ -2338,12 +2590,29 @@ void daB_GG_c::F_A_Action() {
 }
 
 void daB_GG_c::FookChk() {
+#if TARGET_PC
+    // Co-op: ground pull reacts to the approaching hookshot independently of combat targeting.
+    daPy_py_c* player = coOpFindGgHookThreat(this, true);
+    if (player == NULL) {
+        return;
+    }
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
     cXyz* hookshot_top = player->getHookshotTopPos();
 
     if (hookshot_top != NULL) {
+#if TARGET_PC
+        s16 temp_r27 =
+            (fopAcM_searchActorAngleY(this, player) - fopAcM_GetShapeAngle_p(player)->y) +
+            0x8000;
+        if (hookshot_top->absXZ(current.pos) > 100.0f &&
+            player->checkHookshotShootReturnMode() && !player->checkHookshotReturnMode() &&
+            temp_r27 < 0x500 && temp_r27 > -0x500) {
+#else
         s16 temp_r27 = (s_TargetAngle - fopAcM_GetShapeAngle_p(player)->y) + 0x8000;
         if (hookshot_top->absXZ(current.pos) > 100.0f && daPy_getPlayerActorClass()->checkHookshotShootReturnMode() && !daPy_getPlayerActorClass()->checkHookshotReturnMode() && temp_r27 < 0x500 && temp_r27 > -0x500) {
+#endif
             SpeedClear();
             mMode = 5;
             SetAnm(BCK_GGB_PULL, 2, 5.0f, 1.0f);
@@ -2353,7 +2622,12 @@ void daB_GG_c::FookChk() {
 
 void daB_GG_c::CutChk() {
     int rnd = cM_rndF(100.0f);
+#if TARGET_PC
+    // Co-op: proactive sword avoidance reads the selected opponent's live cut state.
+    u32 cut_type = coOpGgCombatPlayer(this)->getCutType();
+#else
     u32 cut_type = daPy_getPlayerActorClass()->getCutType();
+#endif
 
     if (s_dis < 400.0f && mMode != 4 && rnd < (20.0f + XREG_F(0)) && cut_type != 0 && !mCcCyl.ChkTgHit() && !mCcShieldSph.ChkTgHit() && cut_type != daPy_py_c::CUT_TYPE_GUARD_ATTACK) {
         SetAction(ACTION_GROUND, SUBACT_MOVE, 0);
@@ -2363,7 +2637,11 @@ void daB_GG_c::CutChk() {
 void daB_GG_c::G_MoveAction() {
     CutChk();
 
+#if TARGET_PC
+    daPy_py_c* player = coOpGgCombatPlayer(this);
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
     cXyz& player_pos = fopAcM_GetPosition(player);
 
     switch (mMode) {
@@ -2532,9 +2810,13 @@ void daB_GG_c::G_MoveAction() {
                 dComIfGs_onSwitch(142, fopAcM_GetRoomNo(this));
             }
 
+#if TARGET_PC
+            coOpCancelGgWolfLocks(this);
+#else
             if (daPy_getPlayerActorClass()->checkWolfLock(this)) {
                 daPy_getPlayerActorClass()->cancelWolfLock(this);
             }
+#endif
         } else {
             if (mpModelMorf->checkFrame(18.0f)) {
                 speed.y = 70.0f;
@@ -2565,7 +2847,11 @@ void daB_GG_c::G_MoveAction() {
         }
         break;
     case 5:
+#if TARGET_PC
+        if (!coOpGgHookPlayer(this)->checkHookshotShootReturnMode()) {
+#else
         if (!daPy_getPlayerActorClass()->checkHookshotShootReturnMode()) {
+#endif
             mMode = 3;
         }
         break;
@@ -2780,6 +3066,13 @@ void daB_GG_c::G_AttackAction() {
 
 void daB_GG_c::G_DamageAction() {
     cXyz sp38;
+#if TARGET_PC
+    // Co-op: multi-frame guard and combo reactions keep reading the player whose hit started them.
+    daPy_py_c* damagePlayer = coOpGgDamagePlayer(this);
+    s_LinkPos = &fopAcM_GetPosition(damagePlayer);
+    s_TargetAngle = fopAcM_searchActorAngleY(this, damagePlayer);
+    s_dis = current.pos.abs(*s_LinkPos);
+#endif
     if (mAnm != BCK_GGB_ATTACK_C && mAnm != BCK_GGB_GUARD) {
         for (int i = 0; i < 3; i++) {
             mCcSph[i].OffAtSetBit();
@@ -2819,7 +3112,11 @@ void daB_GG_c::G_DamageAction() {
                     }
                 }
 
+#if TARGET_PC
+                u32 cut_type = damagePlayer->getCutType();
+#else
                 u32 cut_type = daPy_getPlayerActorClass()->getCutType();
+#endif
                 if (cut_type == daPy_py_c::CUT_TYPE_TURN_LEFT || cut_type == daPy_py_c::CUT_TYPE_TURN_RIGHT || cut_type == daPy_py_c::CUT_TYPE_LARGE_TURN_LEFT || cut_type == daPy_py_c::CUT_TYPE_LARGE_TURN_RIGHT) {
                     SetAnm(BCK_GGB_ATTACK_C, 0, 1.0f, 1.0f);
 
@@ -2843,7 +3140,11 @@ void daB_GG_c::G_DamageAction() {
 
             field_0x5f0 = 0;
         } else {
+#if TARGET_PC
+            u32 cut_type = damagePlayer->getCutType();
+#else
             u32 cut_type = daPy_getPlayerActorClass()->getCutType();
+#endif
             int rnd = cM_rndF(100.0f);
 
             if (field_0x5f0 > 1) {
@@ -2961,8 +3262,13 @@ void daB_GG_c::G_DamageAction() {
         }
         break;
     case 3: {
+#if TARGET_PC
+        u8 cut_count = damagePlayer->getCutCount();
+        u32 cut_type = damagePlayer->getCutType();
+#else
         u8 cut_count = daPy_getPlayerActorClass()->getCutCount();
         u32 cut_type = daPy_getPlayerActorClass()->getCutType();
+#endif
 
         if ((cut_type == daPy_py_c::CUT_TYPE_TURN_LEFT ||
              cut_type == daPy_py_c::CUT_TYPE_TURN_RIGHT ||
@@ -3366,7 +3672,13 @@ void daB_GG_c::GroundAction() {
 }
 
 void daB_GG_c::StopAction() {
+#if TARGET_PC
+    // Co-op: stop-state visibility and hook release read the retained combat/tool owners.
+    daPy_py_c* player = coOpGgCombatPlayer(this);
+    if (!other_bg_check(this, player)) {
+#else
     if (!other_bg_check(this, daPy_getPlayerActorClass())) {
+#endif
         attention_info.flags = fopAc_AttnFlag_BATTLE_e;
     } else {
         attention_info.flags = 0;
@@ -3388,7 +3700,11 @@ void daB_GG_c::StopAction() {
         FookChk();
         break;
     case 5:
+#if TARGET_PC
+        if (!coOpGgHookStatusActive(this)) {
+#else
         if (!dComIfGp_checkPlayerStatus0(0, 0x4000)) {
+#endif
             mMode = 0;
         }
         break;
@@ -3705,10 +4021,32 @@ void daB_GG_c::SoundChk() {
 }
 
 int daB_GG_c::Execute() {
+#if TARGET_PC
+    // Co-op: ordinary combat fills the native per-frame player cache from one retained opponent.
+    // Opening, phase-change, hidden-wait, and miniboss-death cameras remain authored P1 surfaces.
+    const bool authoredPresentation =
+        mAction == ACTION_DEMO ||
+        (mAction == ACTION_F_A && mSubAction == SUBACT_WAIT) ||
+        (mType == TYPE_L7_MBOSS && mAction == ACTION_GROUND &&
+         mSubAction == SUBACT_DEATH);
+    daPy_py_c* player = daPy_getPlayerActorClass();
+    if (authoredPresentation) {
+        dusk::coop::clearEnemyTarget(this, dusk::coop::EnemyTargetScope::Combat);
+    } else {
+        const bool committed =
+            mSubAction == SUBACT_ATTACK || mSubAction == SUBACT_DAMAGE;
+        coOpSelectGgTarget(this, "b_gg.action", committed);
+        player = coOpGgCombatPlayer(this);
+    }
+    s_LinkPos = &fopAcM_GetPosition(player);
+    s_TargetAngle = fopAcM_searchActorAngleY(this, player);
+    s_dis = current.pos.abs(*s_LinkPos);
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
     s_LinkPos = &fopAcM_GetPosition(player);
     s_TargetAngle = fopAcM_searchPlayerAngleY(this);
     s_dis = current.pos.abs(*s_LinkPos);
+#endif
 
     for (int i = 0; i < 4; i++) {
         mTimers[i]--;
@@ -3776,10 +4114,25 @@ void daB_GG_c::ObjHit() {
 }
 
 void daB_GG_c::At_Check() {
+#if TARGET_PC
+    daPy_py_c* player = NULL;
+#else
     daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+#endif
 
     mAtInfo.mpActor = at_power_check(&mAtInfo);
     if (mAtInfo.mpActor != NULL) {
+#if TARGET_PC
+        // Co-op: damage math and cut-cancel behavior belong to the player who produced this hit.
+        const dusk::coop::damage_owner::DamageOwnerResult owner =
+            coOpGgDamageOwner(this, mAtInfo.mpCollider);
+        player = dusk::coop::damage_owner::resolveDamageOwnerPlayer(owner);
+        if (player == NULL) {
+            player = coOpGgCombatPlayer(this);
+        }
+        dusk::coop::damage_owner::recordDamageOwnerHit(
+            "b_gg.damage", this, owner, &mAtInfo, mMode);
+#endif
         if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_HOOKSHOT)) {
             mAtInfo.mAttackPower = 0;
         } else if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_BOMB)) {
@@ -3843,7 +4196,11 @@ void daB_GG_c::MoveAt() {
 }
 
 void daB_GG_c::F_AtHit() {
+#if TARGET_PC
+    daPy_py_c* player = coOpGgCombatPlayer(this);
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
 
     field_0x65a--;
     if (field_0x65a <= 0) {
@@ -3858,9 +4215,31 @@ void daB_GG_c::F_AtHit() {
     }
 
     for (int i = 0; i < 3; i++) {
-        if (mCcSph[i].ChkAtHit() && !player->checkPlayerGuard()) {
+        if (mCcSph[i].ChkAtHit()) {
+#if TARGET_PC
+            // Co-op: sword contact tests and launches the ALINK touched by this attack sphere.
+            daPy_py_c* contactPlayer = player;
+            const dusk::coop::defender_owner::DefenderOwnerResult defender =
+                dusk::coop::defender_owner::resolveDefenderOwner(this, &mCcSph[i]);
+            dusk::coop::defender_owner::recordDefenderOwnerContact(
+                "b_gg.attack_contact", this, defender);
+            if (defender.found) {
+                contactPlayer = defender.localPlayer;
+            }
+            if (contactPlayer->checkPlayerGuard()) {
+#else
+            if (player->checkPlayerGuard()) {
+#endif
+                continue;
+            }
             if (mAction != ACTION_FLY && mAction == ACTION_GROUND && mCcSph[i].GetAtSpl() == 0) {
+#if TARGET_PC
+                const s16 hitAngle = fopAcM_searchActorAngleY(this, contactPlayer);
+                contactPlayer->setThrowDamage(hitAngle, 20.0f + nREG_F(4),
+                                              15.0f + nREG_F(5), 0, 0, 0);
+#else
                 player->setThrowDamage(s_TargetAngle, 20.0f + nREG_F(4), 15.0f + nREG_F(5), 0, 0, 0);
+#endif
             }
 
             field_0x65a = 20;
@@ -3957,14 +4336,23 @@ void daB_GG_c::ChanceTime() {
 
             mSound.startCreatureVoice(Z2SE_EN_GG_V_DAMAGE, -1);
             
+#if TARGET_PC
+            u32 cut_type = coOpGgDamagePlayer(this)->getCutType();
+#else
             u32 cut_type = daPy_getPlayerActorClass()->getCutType();
+#endif
             if (cut_type == daPy_py_c::CUT_TYPE_TURN_LEFT || cut_type == daPy_py_c::CUT_TYPE_TURN_RIGHT) {
                 field_0x6bc++;
                 field_0x5cc = 20;
             }
         }
 
+#if TARGET_PC
+        if (coOpGgDamagePlayer(this)->getCutType() == daPy_py_c::CUT_TYPE_HEAD_JUMP &&
+            mType == TYPE_L7_MBOSS) {
+#else
         if (daPy_getPlayerActorClass()->getCutType() == daPy_py_c::CUT_TYPE_HEAD_JUMP && mType == TYPE_L7_MBOSS) {
+#endif
             if (field_0x5b1 == 0) {
                 field_0x5b1 = 1;
                 health = prev_hp;
@@ -3987,9 +4375,15 @@ void daB_GG_c::ChanceTime() {
 }
 
 void daB_GG_c::ArmAngleSet() {
+#if TARGET_PC
+    // Co-op: guard arm recoil follows the actual sword swing that struck the shield.
+    u32 cutType = coOpGgDamagePlayer(this)->getCutType();
+#else
     daPy_getPlayerActorClass()->getCutType();
+    u32 cutType = daPy_getPlayerActorClass()->getCutType();
+#endif
 
-    switch (daPy_getPlayerActorClass()->getCutType()) {
+    switch (cutType) {
     case daPy_py_c::CUT_TYPE_NM_RIGHT:
     case daPy_py_c::CUT_TYPE_FINISH_RIGHT:
     case daPy_py_c::CUT_TYPE_MORTAL_DRAW_B:
@@ -4055,6 +4449,14 @@ void daB_GG_c::Guard() {
         s16 prev_hp = health;
         At_Check();
         health = prev_hp;
+#if TARGET_PC
+        // Co-op: shield and guard reactions face the player whose collider produced the hit.
+        daPy_py_c* hitPlayer = coOpGgDamagePlayer(this);
+        const s16 hitAngle = fopAcM_searchActorAngleY(this, hitPlayer);
+        current.angle.y = hitAngle;
+        field_0x5ba = hitAngle;
+        shape_angle.y = hitAngle;
+#endif
         field_0x5cc = 10;
 
         if (mSubAction == SUBACT_ATTACK && mAction != ACTION_GROUND) {
@@ -4196,6 +4598,11 @@ int daB_GG_c::Draw() {
 }
 
 int daB_GG_c::Delete() {
+#if TARGET_PC
+    // Co-op: actor teardown releases combat and retained damage/tool-owner sidecars.
+    dusk::coop::clearAllEnemyTargets(this);
+    coOpClearGgOwnerState(this);
+#endif
     dComIfG_resDelete(&mPhase, "B_gg");
 
     if (mHIOInit) {

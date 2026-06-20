@@ -66,6 +66,8 @@ struct DefenderOwnerDebugState {
 
 void advanceDefenderOwnerFrame(u32 frame);
 DefenderOwnerResult resolveDefenderOwner(fopAc_ac_c* attacker, dCcD_GObjInf* attackCollider);
+DefenderOwnerResult resolveDefenderOwnerFromActor(fopAc_ac_c* attacker,
+                                                  fopAc_ac_c* hitActor);
 void recordDefenderOwnerContact(const char* label, fopAc_ac_c* attacker,
                                 const DefenderOwnerResult& result);
 

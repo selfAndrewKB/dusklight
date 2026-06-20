@@ -1848,6 +1848,7 @@ json collectEventPresentation() {
             {"dialogue", state.dialogueDepth},
             {"item_get", state.itemGetDepth},
             {"enemy_retained_interaction", state.enemyRetainedInteractionDepth},
+            {"enemy_authored_demo", state.enemyAuthoredDemoDepth},
         }},
         {"last_transition", coop::event_presentation::transitionName(state.lastTransition)},
         {"last_source", coop::event_presentation::sourceName(state.lastSource)},
