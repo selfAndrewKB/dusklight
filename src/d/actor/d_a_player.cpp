@@ -588,30 +588,23 @@ static const u8* l_sightDL_get() {
 #endif
 
 #if TARGET_PC
-struct SightPacketOwner {
-    daPy_sightPacket_c* packet;
-    dusk::coop::PlayerSlot slot;
-};
-
-static SightPacketOwner s_sightPacketOwners[dusk::coop::kPlayerSlotCount];
+static daPy_sightPacket_c* s_sightPacketOwners[dusk::coop::kPlayerSlotCount];
 
 static void recordSightPacketOwner(daPy_sightPacket_c* i_packet, dusk::coop::PlayerSlot i_slot) {
-    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
-        if (s_sightPacketOwners[i].packet == i_packet || s_sightPacketOwners[i].packet == NULL) {
-            s_sightPacketOwners[i].packet = i_packet;
-            s_sightPacketOwners[i].slot = i_slot;
-            return;
-        }
+    unsigned int slot_index = static_cast<unsigned int>(i_slot);
+    if (slot_index >= static_cast<unsigned int>(dusk::coop::kPlayerSlotCount)) {
+        slot_index = static_cast<unsigned int>(dusk::coop::PlayerSlot::Primary);
     }
 
-    s_sightPacketOwners[0].packet = i_packet;
-    s_sightPacketOwners[0].slot = i_slot;
+    // Co-op: ALINK sight packets are scene-local, so replace the slot entry when
+    // area reconstruction creates a new actor instead of retaining stale pointers.
+    s_sightPacketOwners[slot_index] = i_packet;
 }
 
-static dusk::coop::PlayerSlot findSightPacketOwner(daPy_sightPacket_c* i_packet) {
+static dusk::coop::PlayerSlot findSightPacketOwner(const daPy_sightPacket_c* i_packet) {
     for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
-        if (s_sightPacketOwners[i].packet == i_packet) {
-            return s_sightPacketOwners[i].slot;
+        if (s_sightPacketOwners[i] == i_packet) {
+            return static_cast<dusk::coop::PlayerSlot>(i);
         }
     }
 
@@ -629,8 +622,8 @@ void daPy_sightPacket_c::draw() {
     bool restore_viewport = false;
     if (dusk::coop::camera::isSplitScreenEnabled()) {
         // Co-op: sight packets are queued into a shared 2D list, so restore their owner viewport.
-        restore_viewport = dusk::coop::ui_owner::beginViewport(findSightPacketOwner(this),
-                                                                &viewport_state);
+        restore_viewport =
+            dusk::coop::ui_owner::beginViewport(getSightPlayerSlot(), &viewport_state);
     }
 #endif
 
@@ -700,6 +693,10 @@ void daPy_sightPacket_c::setSightForPlayer(dusk::coop::PlayerSlot i_slot) {
     mDoMtx_stack_c::scaleM(32.0f, 32.0f, 32.0f);
     mDoMtx_copy(mDoMtx_stack_c::get(), mProjMtx);
     dComIfGd_set2DXlu(this);
+}
+
+dusk::coop::PlayerSlot daPy_sightPacket_c::getSightPlayerSlot() const {
+    return findSightPacketOwner(this);
 }
 #endif
 

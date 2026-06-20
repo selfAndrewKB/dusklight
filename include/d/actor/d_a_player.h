@@ -44,6 +44,7 @@ public:
 #if TARGET_PC
     // Co-op: delayed live reticle drawing follows the ALINK slot that submitted it.
     void setSightForPlayer(dusk::coop::PlayerSlot);
+    dusk::coop::PlayerSlot getSightPlayerSlot() const;
 #endif
     void setSightImage(ResTIMG* i_img);
 

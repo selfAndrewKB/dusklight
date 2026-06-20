@@ -7,6 +7,7 @@
 
 #include "d/actor/d_a_boomerang.h"
 #include "JSystem/J2DGraph/J2DAnmLoader.h"
+#include "JSystem/J2DGraph/J2DOrthoGraph.h"
 #include "d/actor/d_a_alink.h"
 #include "d/d_pane_class.h"
 #include "d/d_drawlist.h"
@@ -61,33 +62,29 @@ static camera_process_class* daBoomerang_getOwnerCamera(daBoomerang_c* i_boomera
     return dComIfGp_getCamera(dComIfGp_getPlayerCameraID(static_cast<int>(slot)));
 }
 
-#if TARGET_PC
-struct SightDrawOwner {
-    daBoomerang_sight_c* sight;
-    dusk::coop::PlayerSlot slot;
-};
+static int daBoomerang_getOwnerCameraMode(daBoomerang_c* i_boomerang) {
+    camera_process_class* camera = daBoomerang_getOwnerCamera(i_boomerang);
+    return camera != NULL ? camera->mCamera.Mode() : dCam_getBody()->Mode();
+}
 
-static SightDrawOwner s_sightDrawOwners[dusk::coop::kPlayerSlotCount];
+#if TARGET_PC
+static daBoomerang_sight_c* s_sightDrawOwners[dusk::coop::kPlayerSlotCount];
 
 static void daBoomerang_recordSightDrawOwner(daBoomerang_sight_c* i_sight,
                                               dusk::coop::PlayerSlot i_slot) {
-    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
-        if (s_sightDrawOwners[i].sight == i_sight || s_sightDrawOwners[i].sight == NULL) {
-            s_sightDrawOwners[i].sight = i_sight;
-            s_sightDrawOwners[i].slot = i_slot;
-            return;
-        }
+    unsigned int slot_index = static_cast<unsigned int>(i_slot);
+    if (slot_index >= static_cast<unsigned int>(dusk::coop::kPlayerSlotCount)) {
+        slot_index = static_cast<unsigned int>(dusk::coop::PlayerSlot::Primary);
     }
 
-    JUT_ASSERT(105, 0);
-    s_sightDrawOwners[0].sight = i_sight;
-    s_sightDrawOwners[0].slot = i_slot;
+    // Co-op: replace a slot's stale item-actor pointer when its boomerang is recreated.
+    s_sightDrawOwners[slot_index] = i_sight;
 }
 
 static dusk::coop::PlayerSlot daBoomerang_findSightDrawSlot(daBoomerang_sight_c* i_sight) {
     for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
-        if (s_sightDrawOwners[i].sight == i_sight) {
-            return s_sightDrawOwners[i].slot;
+        if (s_sightDrawOwners[i] == i_sight) {
+            return static_cast<dusk::coop::PlayerSlot>(i);
         }
     }
 
@@ -449,11 +446,17 @@ void daBoomerang_sight_c::draw() {
     J2DGrafContext* ctx = dComIfGp_getCurrentGrafPort();
 #if TARGET_PC
     dusk::coop::ui_owner::ViewportState viewport_state;
+    J2DOrthoGraph graph;
+    dusk::coop::PlayerSlot sight_slot = daBoomerang_findSightDrawSlot(this);
     bool restore_viewport = false;
     if (dusk::coop::camera::isSplitScreenEnabled()) {
         // Co-op: boomerang lock cursors are view overlays, not shared P1 HUD elements.
-        restore_viewport = dusk::coop::ui_owner::beginViewport(
-            daBoomerang_findSightDrawSlot(this), &viewport_state);
+        restore_viewport = dusk::coop::ui_owner::beginViewport(sight_slot, &viewport_state);
+        if (restore_viewport &&
+            dusk::coop::ui_owner::setViewportGraph(sight_slot, &graph))
+        {
+            ctx = &graph;
+        }
     }
 #endif
     u8* alpha_p = m_alpha;
@@ -521,6 +524,7 @@ void daBoomerang_sight_c::draw() {
     }
 #if TARGET_PC
     if (restore_viewport) {
+        dComIfGp_getCurrentGrafPort()->setPort();
         dusk::coop::ui_owner::endViewport(viewport_state);
     }
 #endif
@@ -1090,7 +1094,9 @@ int daBoomerang_c::procWait() {
         field_0x962 = player->getBoomBgThroughTime();
 
         procMove();
-    } else if (dCam_getBody()->Mode() != 8) {
+    } else if (daBoomerang_getOwnerCameraMode(this) != 8) {
+        // Co-op: vanilla uses the aiming player's mode-8 subject camera to enable
+        // line-based multi-lock; querying Camera 0 prevents P2 from entering that path.
         if (daBoomerang_checkOwnerStatus0(this, 0x80000) && player->getAtnActor() != NULL && m_lockCnt < BOOMERANG_LOCK_MAX) {
             fpc_ProcID atn_actor_id = (fpc_ProcID)fopAcM_GetID(player->getAtnActor());
             

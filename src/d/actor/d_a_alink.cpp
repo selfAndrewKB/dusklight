@@ -7,6 +7,7 @@
 
 #include "d/actor/d_a_alink.h"
 #include "JSystem/J2DGraph/J2DAnmLoader.h"
+#include "JSystem/J2DGraph/J2DOrthoGraph.h"
 #include "JSystem/J3DGraphBase/J3DMaterial.h"
 #include "JSystem/J3DGraphLoader/J3DAnmLoader.h"
 #include "JSystem/J3DGraphBase/J3DDrawBuffer.h"
@@ -69,6 +70,7 @@
 #include "dusk/coop/player_camera_status.h"
 #include "dusk/coop/player_slots.h"
 #include "dusk/coop/retained_interaction_owner.h"
+#include "dusk/coop/ui_owner.h"
 #include "dusk/diagnostics.h"
 #include "dusk/logging.h"
 #endif

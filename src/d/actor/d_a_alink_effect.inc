@@ -2264,8 +2264,39 @@ BOOL daAlink_sight_c::create() {
 
 void daAlink_sight_c::draw() {
     if (mLockFlag) {
+#if TARGET_PC
+        dusk::coop::ui_owner::ViewportState viewport_state;
+        J2DOrthoGraph graph;
+        J2DOrthoGraph* old_graf =
+            static_cast<J2DOrthoGraph*>(dComIfGp_getCurrentGrafPort());
+        bool restore_viewport = false;
+        bool restore_graf = false;
+        if (dusk::coop::camera::isSplitScreenEnabled()) {
+            // Co-op: the lock-cursor variant must keep the same owner viewport as the
+            // ordinary reticle instead of falling back to the shared P1 graf context.
+            restore_viewport =
+                dusk::coop::ui_owner::beginViewport(getSightPlayerSlot(), &viewport_state);
+            if (restore_viewport &&
+                dusk::coop::ui_owner::setViewportGraph(getSightPlayerSlot(), &graph))
+            {
+                dComIfGp_setCurrentGrafPort(&graph);
+                restore_graf = true;
+            }
+        }
+#endif
         mLockCursor.setPos(mProjMtx[0][3], mProjMtx[1][3]);
+#if TARGET_PC
         mLockCursor.draw();
+        if (restore_graf) {
+            dComIfGp_setCurrentGrafPort(old_graf);
+            old_graf->setPort();
+        }
+        if (restore_viewport) {
+            dusk::coop::ui_owner::endViewport(viewport_state);
+        }
+#else
+        mLockCursor.draw();
+#endif
     } else {
         daPy_sightPacket_c::draw();
     }
