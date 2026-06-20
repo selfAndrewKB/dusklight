@@ -24,12 +24,12 @@
 #if TARGET_PC
 #include "dusk/coop/defender_owner.h"
 #include "dusk/coop/enemy_targeting.h"
-#include "dusk/coop/event_presentation.h"
 #include "dusk/coop/message_owner.h"
 #include "dusk/coop/player_camera_status.h"
 #include "dusk/coop/player_query.h"
 #include "dusk/coop/retained_interaction_owner.h"
 #include "dusk/coop/selected_target_state.h"
+#include "dusk/coop/world_trigger.h"
 #endif
 
 class daObj_GrA_Param_c {
@@ -222,7 +222,12 @@ static DUSK_CONSTEXPR u16 l_entryJntNoList[4] = {
 #if TARGET_PC
 namespace {
 
-static daObj_GrA_c* s_coOpGraRollDemoPresentationOwner = NULL;
+static const dusk::coop::world_trigger::TriggerPolicy kFirstGraTriggerPolicy = {
+    dusk::coop::world_trigger::TriggerFamily::ActorLocal,
+    dusk::coop::world_trigger::ActivationPolicy::AnyActivePlayer,
+    dusk::coop::world_trigger::SubjectPolicy::TriggeringPlayer,
+    dusk::coop::world_trigger::PresentationPolicy::TriggeringPlayerFullscreen,
+};
 
 struct CoOpGraCandidateData {
     cXyz actorPos = cXyz::Zero;
@@ -298,8 +303,50 @@ static dusk::coop::PlayerQueryEligibility coOpGraCandidate(
     return eligibility;
 }
 
-// Co-op: standing and rolling soldiers each keep one behavior-owned opponent. Authored first-Goron
-// demos deliberately bypass this helper and retain their native P1 choreography.
+static bool coOpSelectFirstGraTrigger(
+    daObj_GrA_c* i_this, CoOpGraCandidateData* candidateData,
+    dusk::coop::world_trigger::TriggerMatch* triggerMatch, daPy_py_c** player,
+    dusk::coop::PlayerSlot* playerSlot) {
+    *triggerMatch = dusk::coop::world_trigger::evaluate(
+        i_this, "obj_gra.first_roll_gate", kFirstGraTriggerPolicy,
+        coOpGraCandidate, candidateData);
+    if (!triggerMatch->found) {
+        return false;
+    }
+
+    *player = static_cast<daPy_py_c*>(triggerMatch->actor);
+    *playerSlot = triggerMatch->slot;
+    return true;
+}
+
+static void coOpAcceptFirstGraTrigger(
+    daObj_GrA_c* i_this,
+    const dusk::coop::world_trigger::TriggerMatch& triggerMatch) {
+    dusk::coop::world_trigger::accept(
+        i_this, "obj_gra.first_roll_activate", kFirstGraTriggerPolicy, triggerMatch);
+}
+
+static daPy_py_c* coOpFirstGraSubject(daObj_GrA_c* i_this) {
+    fopAc_ac_c* subject = dusk::coop::world_trigger::subjectPlayerForSource(i_this);
+    if (subject != NULL && fopAcM_GetName(subject) == fpcNm_ALINK_e) {
+        return static_cast<daPy_py_c*>(subject);
+    }
+    return daPy_getPlayerActorClass();
+}
+
+static dusk::coop::PlayerSlot coOpFirstGraSubjectSlot(daObj_GrA_c* i_this) {
+    return dusk::coop::world_trigger::subjectSlotForSource(i_this);
+}
+
+static camera_process_class* coOpFirstGraCamera(daObj_GrA_c* i_this) {
+    const dusk::coop::PlayerSlot slot = coOpFirstGraSubjectSlot(i_this);
+    camera_process_class* camera =
+        dComIfGp_getCamera(dComIfGp_getPlayerCameraID(static_cast<int>(slot)));
+    return camera != NULL ? camera : dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
+}
+
+// Co-op: standing and rolling soldiers each keep one behavior-owned opponent. The first-Goron
+// duel instead consumes its world-trigger subject through the helpers above.
 static dusk::coop::EnemyTargetResult coOpSelectGraTarget(
     daObj_GrA_c* i_this, const char* label, dusk::coop::EnemyTargetMode mode, bool committed,
     dusk::coop::PlayerQueryPredicate predicate = NULL, void* predicateData = NULL) {
@@ -350,7 +397,11 @@ static daPy_py_c* coOpGraCarrierPlayer(daObj_GrA_c* i_this) {
         dusk::coop::retained_interaction_owner::updateRetainedInteraction(
             "obj_gra.carrier", i_this,
             dusk::coop::retained_interaction_owner::RetainedInteractionScope::Carry);
-    return retained.found ? retained.localPlayer : daPy_getPlayerActorClass();
+    if (retained.found) {
+        return retained.localPlayer;
+    }
+    // Co-op: the first duel already retains its subject before native carry ownership begins.
+    return i_this->isFirstGra() ? coOpFirstGraSubject(i_this) : daPy_getPlayerActorClass();
 }
 
 static daPy_py_c* coOpGraRiderPlayer(daObj_GrA_c* i_this) {
@@ -382,31 +433,19 @@ static bool coOpGraAnyHumanPlayer() {
 }
 
 static void coOpBeginGraRollDemoPresentation(daObj_GrA_c* i_this) {
-    // Co-op: the first Death Mountain rolling Goron intro is one authored camera, so present it
-    // fullscreen from the native P1 camera instead of leaving an unmatched split-screen window.
-    if (s_coOpGraRollDemoPresentationOwner == i_this) {
-        return;
-    }
-    if (s_coOpGraRollDemoPresentationOwner != NULL) {
-        dusk::coop::event_presentation::end(
-            dusk::coop::event_presentation::Source::EnemyAuthoredDemo);
-    }
-
-    dusk::coop::event_presentation::Options options;
-    options.fullscreenSlot = dusk::coop::PlayerSlot::Primary;
-    options.hideNonPresenterVisuals = true;
-    s_coOpGraRollDemoPresentationOwner = i_this;
-    dusk::coop::event_presentation::begin(
-        dusk::coop::event_presentation::Source::EnemyAuthoredDemo, options);
+    // Co-op: the first Death Mountain rolling Goron intro follows the retained trigger player's
+    // authored camera and presents that camera fullscreen.
+    dusk::coop::world_trigger::beginPresentation(i_this, "obj_gra.first_roll_demo");
 }
 
 static void coOpEndGraRollDemoPresentation(daObj_GrA_c* i_this) {
-    if (s_coOpGraRollDemoPresentationOwner != i_this) {
-        return;
-    }
-    s_coOpGraRollDemoPresentationOwner = NULL;
-    dusk::coop::event_presentation::end(
-        dusk::coop::event_presentation::Source::EnemyAuthoredDemo);
+    dusk::coop::world_trigger::endPresentation(i_this, "obj_gra.first_roll_demo_end");
+}
+
+static void coOpReleaseFirstGraTrigger(daObj_GrA_c* i_this) {
+    dusk::coop::world_trigger::release(
+        i_this, "obj_gra.first_duel_complete",
+        dusk::coop::world_trigger::ReleaseReason::EventEnded);
 }
 
 }  // namespace
@@ -622,7 +661,7 @@ int daObj_GrA_c::Delete() {
     fopAcM_RegisterDeleteID(this, "OBJ_GRA");
 #if TARGET_PC
     // Co-op: actor teardown releases combat, presentation, and retained rider/carrier ownership.
-    coOpEndGraRollDemoPresentation(this);
+    dusk::coop::world_trigger::clearSource(this, "obj_gra.delete");
     dusk::coop::clearAllEnemyTargets(this);
     dusk::coop::retained_interaction_owner::clearAllRetainedInteractions(this);
 #endif
@@ -1510,11 +1549,13 @@ int daObj_GrA_c::lookat() {
 
             case 1:
 #if TARGET_PC
-                // Co-op: combat look-at consumes the existing soldier target; NPC/dialogue and
-                // the authored first rolling duel remain separate ownership surfaces.
+                // Co-op: combat look-at consumes the existing soldier target; the authored first
+                // rolling duel follows its retained world-trigger subject.
                 if (mMode == 0 || (mMode == 2 && !isFirstGra())) {
                     field_0x14f8.entry(
                         coOpGraTargetState(this, "obj_gra.lookat").actor);
+                } else if (mMode == 2 && isFirstGra()) {
+                    field_0x14f8.entry(coOpFirstGraSubject(this));
                 } else if (mMode != 1) {
                     field_0x14f8.entry(daPy_getPlayerActorClass());
                 }

@@ -29,6 +29,7 @@
 #include "dusk/coop/player_slots.h"
 #include "dusk/coop/selected_target_state.h"
 #include "dusk/coop/wolf_catch_owner.h"
+#include "dusk/coop/world_trigger.h"
 #include "dusk/coop/world_switch_probe.h"
 #include "dusk/coop/young_gohma_state_probe.h"
 #include "dusk/dusk.h"
@@ -2117,6 +2118,33 @@ json playerQueryCandidateSummary(const coop::PlayerQueryCandidateDebug& candidat
     };
 }
 
+void emitWorldTriggerEvents(const Provider& provider, const json& data) {
+    if (!data.contains("transitions") || !data["transitions"].is_array()) {
+        return;
+    }
+
+    for (const json& transition : data["transitions"]) {
+        const u64 eventId = transition.value("event_id", 0ull);
+        if (eventId == 0) {
+            continue;
+        }
+
+        const json eventKey = {{"event_id", eventId}};
+        const std::string stateKey = fmt::format(
+            FMT_STRING("world.trigger:{}"), static_cast<unsigned long long>(eventId));
+        if (provider.emitOnChange && !shouldEmitProviderEvent(stateKey, eventKey)) {
+            continue;
+        }
+
+        const json eventData = {
+            {"schema_version", data.value("schema_version", 1)},
+            {"transition", transition},
+        };
+        const std::string kind = transition.value<std::string>("transition", "state");
+        emitProviderEvent(provider, kind.c_str(), eventData);
+    }
+}
+
 json playerQueryDecisionSummary(const coop::PlayerQueryDecisionDebug& decision) {
     json candidates = json::array();
     for (int i = 0; i < decision.candidateCount && i < coop::kPlayerSlotCount; i++) {
@@ -2890,6 +2918,111 @@ json collectWorldSwitchProbe() {
     };
 }
 
+json worldTriggerPolicySummary(const coop::world_trigger::TriggerPolicy& policy) {
+    return {
+        {"family", coop::world_trigger::triggerFamilyName(policy.family)},
+        {"activation", coop::world_trigger::activationPolicyName(policy.activation)},
+        {"subject", coop::world_trigger::subjectPolicyName(policy.subject)},
+        {"presentation", coop::world_trigger::presentationPolicyName(policy.presentation)},
+    };
+}
+
+json worldTriggerSlotsForMask(u8 mask) {
+    json slots = json::array();
+    for (int i = 0; i < coop::kPlayerSlotCount; i++) {
+        if ((mask & (1u << i)) != 0) {
+            slots.push_back(i);
+        }
+    }
+    return slots;
+}
+
+json worldTriggerStateSummary(const coop::world_trigger::TriggerState& state) {
+    const char* sourceModule =
+        state.sourceProfile >= 0 ? cDyl_getModuleName(static_cast<s16>(state.sourceProfile))
+                                 : nullptr;
+    return {
+        {"label", state.label},
+        {"source_actor", ptrString(reinterpret_cast<uintptr_t>(state.source))},
+        {"source_actor_id", state.sourceId},
+        {"source_profile", state.sourceProfile},
+        {"source_module", sourceModule != nullptr ? sourceModule : ""},
+        {"source_room", state.sourceRoom},
+        {"triggering_player", ptrString(reinterpret_cast<uintptr_t>(state.triggeringPlayer))},
+        {"triggering_player_id", state.triggeringPlayerId},
+        {"triggering_slot", state.triggeringSlot != coop::PlayerSlot::Invalid
+                                ? static_cast<int>(state.triggeringSlot)
+                                : -1},
+        {"policy", worldTriggerPolicySummary(state.policy)},
+        {"event_id", state.metadata.eventId},
+        {"switch_no", state.metadata.switchNo},
+        {"candidate_mask", static_cast<unsigned int>(state.candidateMask)},
+        {"eligible_mask", static_cast<unsigned int>(state.eligibleMask)},
+        {"candidate_slots", worldTriggerSlotsForMask(state.candidateMask)},
+        {"eligible_slots", worldTriggerSlotsForMask(state.eligibleMask)},
+        {"active", state.active},
+        {"presenting", state.presenting},
+    };
+}
+
+json worldTriggerDecisionSummary(const coop::world_trigger::TriggerDecisionDebug& decision) {
+    const char* sourceModule =
+        decision.sourceProfile >= 0 ? cDyl_getModuleName(static_cast<s16>(decision.sourceProfile))
+                                    : nullptr;
+    json failures = json::array();
+    for (int i = 0; i < coop::kPlayerSlotCount; i++) {
+        failures.push_back(static_cast<unsigned int>(decision.failureFlags[i]));
+    }
+    return {
+        {"label", decision.label},
+        {"source_actor", ptrString(decision.source)},
+        {"source_actor_id", decision.sourceId},
+        {"source_profile", decision.sourceProfile},
+        {"source_module", sourceModule != nullptr ? sourceModule : ""},
+        {"source_room", decision.sourceRoom},
+        {"policy", worldTriggerPolicySummary(decision.policy)},
+        {"selected_slot", decision.selectedSlot != coop::PlayerSlot::Invalid
+                              ? static_cast<int>(decision.selectedSlot)
+                              : -1},
+        {"candidate_mask", static_cast<unsigned int>(decision.candidateMask)},
+        {"eligible_mask", static_cast<unsigned int>(decision.eligibleMask)},
+        {"candidate_slots", worldTriggerSlotsForMask(decision.candidateMask)},
+        {"eligible_slots", worldTriggerSlotsForMask(decision.eligibleMask)},
+        {"failure_flags", failures},
+        {"found", decision.found},
+    };
+}
+
+json collectWorldTrigger() {
+    const coop::world_trigger::WorldTriggerDebugState& state =
+        coop::world_trigger::getWorldTriggerDebugState();
+    json states = json::array();
+    for (int i = 0; i < state.stateCount; i++) {
+        states.push_back(worldTriggerStateSummary(state.states[i]));
+    }
+    json decisions = json::array();
+    for (int i = 0; i < state.decisionCount; i++) {
+        decisions.push_back(worldTriggerDecisionSummary(state.decisions[i]));
+    }
+    json transitions = json::array();
+    for (int i = 0; i < state.transitionCount; i++) {
+        const coop::world_trigger::TriggerTransitionDebug& transition = state.transitions[i];
+        transitions.push_back({
+            {"event_id", static_cast<unsigned long long>(transition.eventId)},
+            {"transition", coop::world_trigger::transitionName(transition.transition)},
+            {"reason", coop::world_trigger::releaseReasonName(transition.reason)},
+            {"state", worldTriggerStateSummary(transition.state)},
+        });
+    }
+    return {
+        {"schema_version", 1},
+        {"revision", static_cast<unsigned int>(state.revision)},
+        {"states", states},
+        {"decisions", decisions},
+        {"transitions", transitions},
+    };
+}
+
 json collectYoungGohmaStateProbe() {
     const coop::young_gohma_state_probe::YoungGohmaStateProbeDebugState& state =
         coop::young_gohma_state_probe::getYoungGohmaStateProbeDebugState();
@@ -3188,6 +3321,7 @@ Provider s_providers[] = {
     {"gibdo.state", 1, "cheap", 1, true, 240, 8192, collectGibdoStateProbe},
     {"ghost_rat.state", 1, "cheap", 1, true, 240, 8192, collectGhostRatStateProbe},
     {"world.switch", 1, "cheap", 1, true, 600, 8192, collectWorldSwitchProbe},
+    {"world.trigger", 1, "cheap", 1, true, 600, 65536, collectWorldTrigger},
     {"young_gohma.state", 1, "cheap", 1, true, 240, 8192, collectYoungGohmaStateProbe},
     {"coop.probes", 2, "cheap", 30, true, 20, 4096, collectCoopProbes},
     {"alink.secondary", 4, "cheap", 1, true, 120, 8192, collectAlinkSecondary},
@@ -3390,6 +3524,10 @@ void tick(u32 frame) {
         }
         if (std::string(provider.name) == "world.switch") {
             emitWorldSwitchEvents(provider, data);
+            continue;
+        }
+        if (std::string(provider.name) == "world.trigger") {
+            emitWorldTriggerEvents(provider, data);
             continue;
         }
         if (std::string(provider.name) == "young_gohma.state") {

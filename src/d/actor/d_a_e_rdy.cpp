@@ -29,6 +29,7 @@
 #include "dusk/coop/horse_owner.h"
 #include "dusk/coop/retained_interaction_owner.h"
 #include "dusk/coop/selected_target_state.h"
+#include "dusk/coop/world_trigger.h"
 #endif
 
 class daE_RDY_HIO_c : public JORReflexible {
@@ -218,6 +219,29 @@ static int target_info_count;
 
 #if TARGET_PC
 static e_rdy_class* s_coOpRdyCarryPresentationOwner;
+
+static const dusk::coop::world_trigger::TriggerPolicy kRdyTkusaTriggerPolicy = {
+    dusk::coop::world_trigger::TriggerFamily::ActorLocal,
+    dusk::coop::world_trigger::ActivationPolicy::AnyActivePlayer,
+    dusk::coop::world_trigger::SubjectPolicy::Primary,
+    dusk::coop::world_trigger::PresentationPolicy::PrimaryFullscreen,
+};
+
+struct CoOpRdyTkusaTriggerData {
+    cXyz pos = cXyz::Zero;
+    f32 range = 0.0f;
+};
+
+static dusk::coop::PlayerQueryEligibility coOpRdyTkusaTriggerPredicate(
+    dusk::coop::PlayerSlot, fopAc_ac_c* actor, void* userData) {
+    dusk::coop::PlayerQueryEligibility eligibility;
+    CoOpRdyTkusaTriggerData* data = static_cast<CoOpRdyTkusaTriggerData*>(userData);
+    if ((actor->current.pos - data->pos).abs() >= data->range) {
+        eligibility.eligible = false;
+        eligibility.failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Range;
+    }
+    return eligibility;
+}
 
 static bool coOpSelectRdyTargetState(
     e_rdy_class* i_this, const char* label, bool committed, dusk::coop::EnemyTargetMode mode,
@@ -1836,12 +1860,33 @@ static void e_rdy_tkusa(e_rdy_class* i_this) {
         return;
     }
 
+#if TARGET_PC
+    if (i_this->mMode <= 1) {
+        // Co-op: this encounter gate is independent of the Rider's sticky combat target.
+        CoOpRdyTkusaTriggerData triggerData;
+        triggerData.pos = a_this->current.pos;
+        triggerData.range = 1300.0f + TREG_F(7);
+        const dusk::coop::world_trigger::TriggerMatch triggerMatch =
+            dusk::coop::world_trigger::evaluate(
+                a_this, "e_rdy.tkusa_gate", kRdyTkusaTriggerPolicy,
+                coOpRdyTkusaTriggerPredicate, &triggerData);
+        if (triggerMatch.found) {
+            dusk::coop::world_trigger::accept(
+                a_this, "e_rdy.tkusa_activate", kRdyTkusaTriggerPolicy, triggerMatch);
+            i_this->mDemoMode = 10;
+            i_this->mDemoTimer = 0;
+            i_this->mMode = 2;
+            anm_init(i_this, ANM_WAIT01, 7.0f, J3DFrameCtrl::EMode_LOOP, 1.0f);
+        }
+    }
+#else
     if (i_this->mMode <= 1 && i_this->mPlayerDist < 1300.0f + TREG_F(7)) {
         i_this->mDemoMode = 10;
         i_this->mDemoTimer = 0;
         i_this->mMode = 2;
         anm_init(i_this, ANM_WAIT01, 7.0f, J3DFrameCtrl::EMode_LOOP, 1.0f);
     }
+#endif
 
     switch (i_this->mMode) {
     case 0:
@@ -4269,6 +4314,9 @@ static void demo_camera(e_rdy_class* i_this) {
             a_this->eventInfo.onCondition(dEvtCnd_CANDEMO_e);
             return;
         }
+#if TARGET_PC
+        dusk::coop::world_trigger::beginPresentation(a_this, "e_rdy.tkusa_demo");
+#endif
         player_camera->mCamera.Stop();
         i_this->mDemoMode = 11;
         i_this->mDemoTimer = 0;
@@ -4689,6 +4737,11 @@ static void demo_camera(e_rdy_class* i_this) {
         }
         player_camera->mCamera.Start();
         player_camera->mCamera.SetTrimSize(0);
+#if TARGET_PC
+        dusk::coop::world_trigger::release(
+            a_this, "e_rdy.tkusa_demo_end",
+            dusk::coop::world_trigger::ReleaseReason::CameraRestored);
+#endif
         dComIfGp_event_reset();
         player->cancelOriginalDemo();
 #if TARGET_PC
@@ -5171,6 +5224,7 @@ static int daE_RDY_Delete(e_rdy_class* i_this) {
     // Co-op: rider-scoped target/carry state must not survive actor deletion.
     coOpClearRdyCarry(i_this, "e_rdy.delete");
     dusk::coop::clearAllEnemyTargets(a_this);
+    dusk::coop::world_trigger::clearSource(a_this, "e_rdy.delete");
 #endif
     fopAcM_RegisterDeleteID(i_this, "E_RDY");
     dComIfG_resDelete(&i_this->mPhase, i_this->mpArcName);

@@ -31,6 +31,7 @@
 #include "dusk/coop/message_owner.h"
 #include "dusk/coop/midna_owner.h"
 #include "dusk/coop/player_button_status.h"
+#include "dusk/coop/world_trigger.h"
 #include "m_Do/m_Do_controller_pad.h"
 #include "m_Do/m_Do_lib.h"
 
@@ -83,6 +84,19 @@ static void beginCoopInteractiveDialogue(dMsgObject_c* msg,
             dusk::coop::event_presentation::isFullscreen(),
             dusk::coop::event_presentation::presenterWindowIndex(),
             dusk::coop::message_owner::beginSourceName(source));
+        return;
+    }
+
+    const dusk::coop::world_trigger::TriggerState triggerState =
+        dusk::coop::world_trigger::stateForSource(talkActor);
+    if (triggerState.active &&
+        triggerState.policy.subject ==
+            dusk::coop::world_trigger::SubjectPolicy::TriggeringPlayer)
+    {
+        // Co-op: explicitly classified world-trigger dialogue follows its retained subject without
+        // rewriting the native event Pt1 used by the surrounding state machine.
+        dusk::coop::message_owner::begin(
+            triggerState.triggeringSlot, triggerState.triggeringPlayer, talkActor, true, source);
         return;
     }
 

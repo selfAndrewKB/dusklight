@@ -10,6 +10,39 @@
 
 #include "dusk/string.hpp"
 
+#if TARGET_PC
+#include "dusk/coop/world_trigger.h"
+#endif
+
+#if TARGET_PC
+namespace {
+
+static const dusk::coop::world_trigger::TriggerPolicy kTagEvtTriggerPolicy = {
+    dusk::coop::world_trigger::TriggerFamily::TagEvt,
+    dusk::coop::world_trigger::ActivationPolicy::AnyActivePlayer,
+    dusk::coop::world_trigger::SubjectPolicy::Primary,
+    dusk::coop::world_trigger::PresentationPolicy::Split,
+};
+
+static dusk::coop::PlayerQueryEligibility coOpTagEvtAreaPredicate(
+    dusk::coop::PlayerSlot, fopAc_ac_c* actor, void* userData) {
+    dusk::coop::PlayerQueryEligibility eligibility;
+    daTag_Evt_c* tag = static_cast<daTag_Evt_c*>(userData);
+    const cXyz offset = actor->current.pos - tag->current.pos;
+    if (offset.absXZ() >= tag->scale.x) {
+        eligibility.eligible = false;
+        eligibility.failureFlags |= dusk::coop::PlayerQueryEligibilityFailure_Range;
+    }
+    if (offset.y <= -tag->scale.y || offset.y >= tag->scale.y) {
+        eligibility.eligible = false;
+        eligibility.failureFlags |= dusk::coop::PlayerQueryEligibilityFailure_Vertical;
+    }
+    return eligibility;
+}
+
+}  // namespace
+#endif
+
 static DUSK_CONST char* l_evtNameList[] = {
     NULL,
     "JUMP_DEMOSTAGE",
@@ -36,12 +69,17 @@ int daTag_Evt_c::create() {
 }
 
 int daTag_Evt_c::destroy() {
+#if TARGET_PC
+    dusk::coop::world_trigger::clearSource(this, "tag_evt.delete");
+#endif
     dComIfG_resDelete(&mPhase, l_resFileName);
     return 1;
 }
 
 int daTag_Evt_c::execute() {
+#if !TARGET_PC
     cXyz sp14;
+#endif
     int var_r29 = 0;
     BOOL bVar = true;
     u16 eventId;
@@ -59,6 +97,11 @@ int daTag_Evt_c::execute() {
                 if (eventInfo.checkCommandDemoAccrpt()) {
                     if (dComIfGp_getEventManager().endCheck(field_0x572)) {
                         dComIfGp_event_reset();
+#if TARGET_PC
+                        dusk::coop::world_trigger::release(
+                            this, "tag_evt.event_end",
+                            dusk::coop::world_trigger::ReleaseReason::EventEnded);
+#endif
                         field_0x570 = 0;
                         field_0x572 = -1;
                         bVar = true;
@@ -86,6 +129,11 @@ int daTag_Evt_c::execute() {
             } else if (field_0x5DC != 0) {
                 if (mMsgFlow.doFlow(this, NULL, 0) != 0) {
                     dComIfGp_event_reset();
+#if TARGET_PC
+                    dusk::coop::world_trigger::release(
+                        this, "tag_evt.message_end",
+                        dusk::coop::world_trigger::ReleaseReason::EventEnded);
+#endif
                     eventId = mMsgFlow.getEventId(NULL);
                     if (eventId != 0) {
                         daNpcMsg_setEvtNum(eventId);
@@ -100,12 +148,27 @@ int daTag_Evt_c::execute() {
                 field_0x5DC = 1;
             }
         }
+#if TARGET_PC
+        if (!isDelete() && field_0x570 == 0 && cLib_calcTimer(&field_0x5D0) == 0) {
+            // Co-op: proximity may come from any active player, but the tag's talk/scene flow
+            // remains authored around canonical P1.
+            const dusk::coop::world_trigger::TriggerMatch triggerMatch =
+                dusk::coop::world_trigger::evaluate(
+                    this, "tag_evt.area", kTagEvtTriggerPolicy, coOpTagEvtAreaPredicate, this);
+            if (triggerMatch.found) {
+                field_0x570 = 1;
+                dusk::coop::world_trigger::accept(
+                    this, "tag_evt.activate", kTagEvtTriggerPolicy, triggerMatch);
+            }
+        }
+#else
         if (!isDelete() && cLib_calcTimer(&field_0x5D0) == 0) {
             sp14 = daPy_getPlayerActorClass()->current.pos - current.pos;
             if (sp14.absXZ() < scale.x && -scale.y < sp14.y && sp14.y < scale.y) {
                 field_0x570 = 1;
             }
         }
+#endif
         if (bVar != 0 && field_0x570 != 0) {
             field_0x572 = dComIfGp_getEventManager().getEventIdx(this, l_evtNameList[field_0x570], -1);
             fopAcM_orderOtherEventId(this, field_0x572, -1, -1, 0, 1);

@@ -759,7 +759,8 @@ int daObj_GrA_c::standRoll(void* param_1) {
     daPy_py_c* player = daPy_getPlayerActorClass();
 #if TARGET_PC
     dusk::coop::PlayerSlot playerSlot = dusk::coop::PlayerSlot::Slot0;
-    bool coOpTargetAvailable = isFirstGra();
+    bool coOpTargetAvailable = false;
+    dusk::coop::world_trigger::TriggerMatch firstGraTriggerMatch;
 #endif
 
     switch (field_0xa7c) {
@@ -773,8 +774,8 @@ int daObj_GrA_c::standRoll(void* param_1) {
         case 1:
 #if TARGET_PC
             if (!isFirstGra()) {
-                // Co-op: later rolling soldiers may start against any active eligible player;
-                // the first duel remains tied to its authored P1 event and camera.
+                // Co-op: later rolling soldiers retain a Combat target; the first duel uses the
+                // world-trigger subject selected below.
                 CoOpGraCandidateData candidateData;
                 candidateData.actorPos = current.pos;
                 candidateData.range = getSrchLinkR();
@@ -820,6 +821,17 @@ int daObj_GrA_c::standRoll(void* param_1) {
                         field_0x2032 = 1;
                     }
                 } else if (mGraMode == 1) {
+#if TARGET_PC
+                    if (isFirstGra()) {
+                        CoOpGraCandidateData candidateData;
+                        candidateData.actorPos = current.pos;
+                        candidateData.range = getSrchLinkR();
+                        candidateData.areaMode = 1;
+                        candidateData.rollStart = true;
+                        coOpTargetAvailable = coOpSelectFirstGraTrigger(
+                            this, &candidateData, &firstGraTriggerMatch, &player, &playerSlot);
+                    }
+#endif
                     sp38 = player->current.pos - current.pos;
                     sp38.y = 2.0f * sp38.y;
                     if (
@@ -832,10 +844,26 @@ int daObj_GrA_c::standRoll(void* param_1) {
 #else
                         dComIfGp_checkPlayerStatus0(0, 8) == 0) {
 #endif
+#if TARGET_PC
+                        if (isFirstGra()) {
+                            coOpAcceptFirstGraTrigger(this, firstGraTriggerMatch);
+                        }
+#endif
                         setProcess(&daObj_GrA_c::rollDemo);
                         dComIfGoat_SetThrow(this);
                     }
                 } else {
+#if TARGET_PC
+                    if (isFirstGra()) {
+                        CoOpGraCandidateData candidateData;
+                        candidateData.areaPos = mGraPos;
+                        candidateData.areaExtent = mGraExtent;
+                        candidateData.areaHeight = mGraHeight;
+                        candidateData.rollStart = true;
+                        coOpTargetAvailable = coOpSelectFirstGraTrigger(
+                            this, &candidateData, &firstGraTriggerMatch, &player, &playerSlot);
+                    }
+#endif
                     sp38 = player->current.pos - mGraPos;
                     if (
 #if TARGET_PC
@@ -848,11 +876,27 @@ int daObj_GrA_c::standRoll(void* param_1) {
 #else
                         !player->checkClimbMove() && dComIfGp_checkPlayerStatus0(0, 8) == 0) {
 #endif
+#if TARGET_PC
+                        if (isFirstGra()) {
+                            coOpAcceptFirstGraTrigger(this, firstGraTriggerMatch);
+                        }
+#endif
                         setProcess(&daObj_GrA_c::rollDemo);
                         dComIfGoat_SetThrow(this);
                     }
                 }
             } else {
+#if TARGET_PC
+                if (isFirstGra()) {
+                    CoOpGraCandidateData candidateData;
+                    candidateData.actorPos = current.pos;
+                    candidateData.range = getSrchLinkR();
+                    candidateData.areaMode = 1;
+                    candidateData.rollStart = true;
+                    coOpTargetAvailable = coOpSelectFirstGraTrigger(
+                        this, &candidateData, &firstGraTriggerMatch, &player, &playerSlot);
+                }
+#endif
                 sp38 = player->current.pos - current.pos;
                 sp38.y = sp38.y * 2.0f;
                 if (
@@ -864,6 +908,11 @@ int daObj_GrA_c::standRoll(void* param_1) {
                     dusk::coop::player_camera_status::checkStatus0(playerSlot, 8) == 0) {
 #else
                     dComIfGp_checkPlayerStatus0(0, 8) == 0) {
+#endif
+#if TARGET_PC
+                    if (isFirstGra()) {
+                        coOpAcceptFirstGraTrigger(this, firstGraTriggerMatch);
+                    }
 #endif
                     setProcess(&daObj_GrA_c::rollDemo);
                     dComIfGoat_SetThrow(this);
@@ -879,6 +928,10 @@ int daObj_GrA_c::standRoll(void* param_1) {
 }
 
 int daObj_GrA_c::rollDemo(void* param_1) {
+#if TARGET_PC
+    // Co-op: opening facing and camera choreography follow the player who activated this duel.
+    daPy_py_c* player = coOpFirstGraSubject(this);
+#endif
     switch (field_0xa7c) {
         case 0:
             if (isFirstGra()) {
@@ -893,7 +946,11 @@ int daObj_GrA_c::rollDemo(void* param_1) {
                 switch (field_0x2000) {
                     case -1:
                         cLib_addCalcAngleS2(&current.angle.y, cLib_targetAngleY(&current.pos,
+#if TARGET_PC
+                                            &player->current.pos),
+#else
                                             &daPy_getPlayerActorClass()->current.pos),
+#endif
                                             4, mpHIO->m.field_0x88);
                         shape_angle.y = current.angle.y;
                         field_0x91a.y = current.angle.y;
@@ -987,7 +1044,12 @@ int daObj_GrA_c::rollAttack(void* param_1) {
     daPy_py_c* player = daPy_getPlayerActorClass();
 #if TARGET_PC
     dusk::coop::PlayerSlot playerSlot = dusk::coop::PlayerSlot::Slot0;
-    if (!isFirstGra()) {
+    if (isFirstGra()) {
+        // Co-op: retain the activating player through the complete first-Goron duel so the
+        // post-demo charge cannot fall back to a distant P1 and restart the opening forever.
+        player = coOpFirstGraSubject(this);
+        playerSlot = coOpFirstGraSubjectSlot(this);
+    } else {
         // Co-op: a rolling charge remains committed to the opponent selected at its start.
         coOpSelectGraTarget(this, "obj_gra.roll_attack",
                             dusk::coop::EnemyTargetMode::StickyCombat, true);
@@ -1232,8 +1294,8 @@ int daObj_GrA_c::rollAttack(void* param_1) {
                     s16 sVar1;
                     if (isFirstGra()
 #if TARGET_PC
-                        // Co-op: only P1 may topple the first Goron into its authored victory demo.
-                        && dusk::coop::getSlotForActor(player) == dusk::coop::PlayerSlot::Slot0
+                        // Co-op: only the retained duel subject may advance this authored result.
+                        && dusk::coop::getSlotForActor(player) == coOpFirstGraSubjectSlot(this)
 #endif
                     ) {
                         sVar1 = home.angle.y;
@@ -1274,8 +1336,11 @@ int daObj_GrA_c::rollAttack(void* param_1) {
 int daObj_GrA_c::rollAttacked(void* param_1) {
     BOOL bVar1;
     s16 sVar1;
-    // Co-op: first-Goron recovery remains part of the authored P1 duel and camera.
     daPy_py_c* player = daPy_getPlayerActorClass();
+#if TARGET_PC
+    // Co-op: first-Goron fail/retry choreography stays with the retained duel subject.
+    player = coOpFirstGraSubject(this);
+#endif
     attention_info.flags = 0;
 
     switch (field_0xa7c) {
@@ -1439,7 +1504,10 @@ int daObj_GrA_c::rollEscape(void* param_1) {
     s16 sVar1;
 #if TARGET_PC
     daPy_py_c* player = daPy_getPlayerActorClass();
-    if (!isFirstGra()) {
+    if (isFirstGra()) {
+        // Co-op: first-Goron escape/retry behavior remains committed to its trigger subject.
+        player = coOpFirstGraSubject(this);
+    } else {
         // Co-op: ordinary rolling escape effects read the retained combat opponent.
         coOpSelectGraTarget(this, "obj_gra.roll_escape",
                             dusk::coop::EnemyTargetMode::StickyCombat, false);
@@ -1487,6 +1555,11 @@ int daObj_GrA_c::rollEscape(void* param_1) {
                         mDemoCamMode = 3;
                         graThrowDemo();
                         daNpcF_onEvtBit(0x52);
+#if TARGET_PC
+                        // Co-op: this alternate native success path restores its camera above.
+                        coOpEndGraRollDemoPresentation(this);
+                        coOpReleaseFirstGraTrigger(this);
+#endif
                     }
                 }
 
@@ -1633,9 +1706,16 @@ int daObj_GrA_c::thrown(void* param_1) {
 void daObj_GrA_c::demo_camera() {
     f32 fVar1;
     int prm_short;
+#if TARGET_PC
+    // Co-op: seed, drive, and restore the opening through the triggering player's camera.
+    daPy_py_c* player = coOpFirstGraSubject(this);
+    camera_process_class* camera = coOpFirstGraCamera(this);
+    dCamera_c* camBody = &camera->mCamera;
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
     camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
     dCamera_c* camBody = dCam_getBody();
+#endif
 
     switch (mDemoCamMode) {
         case 0: {
@@ -1778,11 +1858,18 @@ void daObj_GrA_c::demo_camera() {
 
 void daObj_GrA_c::rollAttackedDemo() {
     f32 fVar1;
-
-    daPy_py_c* player = daPy_getPlayerActorClass();
     int cmp_val;
+
+#if TARGET_PC
+    // Co-op: fail/retry demo state follows the same retained player and camera as the duel.
+    daPy_py_c* player = coOpFirstGraSubject(this);
+    camera_process_class* camera = coOpFirstGraCamera(this);
+    dCamera_c* camBody = &camera->mCamera;
+#else
+    daPy_py_c* player = daPy_getPlayerActorClass();
     camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
     dCamera_c* camBody = dCam_getBody();
+#endif
 
     switch (mDemoCamMode) {
         case 1:
@@ -1900,9 +1987,21 @@ void daObj_GrA_c::rollAttackedDemo() {
 
 void daObj_GrA_c::graThrowDemo() {
     cXyz sp2c;
+#if TARGET_PC
+    // Co-op: carried-Goron camera choreography follows the retained carrier's native camera.
+    daPy_py_c* player = coOpGraCarrierPlayer(this);
+    dusk::coop::PlayerSlot playerSlot = dusk::coop::getSlotForActor(player);
+    if (playerSlot == dusk::coop::PlayerSlot::Invalid) {
+        playerSlot = dusk::coop::PlayerSlot::Primary;
+    }
+    camera_process_class* camera = dComIfGp_getCamera(
+        dComIfGp_getPlayerCameraID(static_cast<int>(playerSlot)));
+    dCamera_c* camBody = &camera->mCamera;
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
     camera_process_class* camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
     dCamera_c* camBody = dCam_getBody();
+#endif
 
     switch (mDemoCamMode) {
         case 0:
@@ -1994,8 +2093,8 @@ void daObj_GrA_c::graThrowDemo() {
 
 void daObj_GrA_c::setCarryStatus() {
 #if TARGET_PC
-    // Co-op: later Gorons expose the native pickup corridor to every active ALINK; the authored
-    // first-Goron event remains P1-only, and the catch producer records the actual later carrier.
+    // Co-op: the first duel exposes its corridor only to the retained subject; later Gorons expose
+    // it to every active ALINK, and the catch producer records the actor that actually carries it.
     bool inCarryRange = false;
     const auto checkCarryRange = [&](fopAc_ac_c* actor) {
         if (inCarryRange) {
@@ -2008,7 +2107,7 @@ void daObj_GrA_c::setCarryStatus() {
         inCarryRange = fabsf(sp38.x) < 100.0f && sp38.z > 0.0f && sp38.z < 800.0f;
     };
     if (isFirstGra()) {
-        checkCarryRange(daPy_getPlayerActorClass());
+        checkCarryRange(coOpFirstGraSubject(this));
     } else {
         dusk::coop::forEachActivePlayer(
             [&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) { checkCarryRange(actor); });
@@ -2279,11 +2378,22 @@ void daObj_GrA_c::initCrazyAttack() {
 #endif
 
         if (isFirstGra()) {
+#if TARGET_PC
+            camera = coOpFirstGraCamera(this);
+#else
             camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
+#endif
             mDemoCamMode = 0;
             camera->mCamera.Start();
             camera->mCamera.SetTrimSize(0);
+#if TARGET_PC
+            coOpEndGraRollDemoPresentation(this);
+#endif
             daNpcF_onEvtBit(0x52);
+#if TARGET_PC
+            // Co-op: the native completion bit is the end of the retained first-Goron duel.
+            coOpReleaseFirstGraTrigger(this);
+#endif
             gravity = -0.7f;
             speedF = 25.0f;
             speed.y = 15.0f;
@@ -2299,10 +2409,17 @@ void daObj_GrA_c::initCrazyAttack() {
 
         if (isFirstGra()) {
             if (mDemoCamMode != 0) {
+#if TARGET_PC
+                camera = coOpFirstGraCamera(this);
+#else
                 camera = dComIfGp_getCamera(dComIfGp_getPlayerCameraID(0));
+#endif
                 camera->mCamera.Start();
                 camera->mCamera.SetTrimSize(0);
                 mDemoCamMode = 0;
+#if TARGET_PC
+                coOpEndGraRollDemoPresentation(this);
+#endif
             }
 
             setProcess(&daObj_GrA_c::rollAttacked);

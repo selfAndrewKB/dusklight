@@ -1450,6 +1450,7 @@ set(DUSK_FILES
         include/dusk/coop/selected_target_state.h
         include/dusk/coop/ui_owner.h
         include/dusk/coop/wolf_catch_owner.h
+        include/dusk/coop/world_trigger.h
         include/dusk/coop/world_switch_probe.h
         include/dusk/coop/young_gohma_state_probe.h
         include/dusk/diagnostics.h
@@ -1492,6 +1493,7 @@ set(DUSK_FILES
         src/dusk/coop/selected_target_state.cpp
         src/dusk/coop/ui_owner.cpp
         src/dusk/coop/wolf_catch_owner.cpp
+        src/dusk/coop/world_trigger.cpp
         src/dusk/coop/world_switch_probe.cpp
         src/dusk/coop/young_gohma_state_probe.cpp
         src/dusk/coop/input.cpp

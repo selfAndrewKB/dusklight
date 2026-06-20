@@ -22,6 +22,7 @@
 #include "dusk/coop/item_awareness.h"
 #include "dusk/coop/player_query.h"
 #include "dusk/coop/selected_target_state.h"
+#include "dusk/coop/world_trigger.h"
 #include <vector>
 #endif
 
@@ -287,6 +288,25 @@ struct CoOpTnOwnerState {
 };
 
 std::vector<CoOpTnOwnerState> s_coOpTnOwnerStates;
+
+static const dusk::coop::world_trigger::TriggerPolicy kTnOpeningTriggerPolicy = {
+    dusk::coop::world_trigger::TriggerFamily::ActorLocal,
+    dusk::coop::world_trigger::ActivationPolicy::AnyActivePlayer,
+    dusk::coop::world_trigger::SubjectPolicy::Primary,
+    dusk::coop::world_trigger::PresentationPolicy::PrimaryFullscreen,
+};
+
+static dusk::coop::PlayerQueryEligibility coOpTnOpeningPredicate(
+    dusk::coop::PlayerSlot, fopAc_ac_c* actor, void*) {
+    dusk::coop::PlayerQueryEligibility eligibility;
+    const cXyz originOffset = actor->current.pos;
+    const cXyz innerCenter(0.0f, -350.0f, 2250.0f);
+    if (originOffset.absXZ() >= 2200.0f || originOffset.absXZ(innerCenter) <= 1300.0f) {
+        eligibility.eligible = false;
+        eligibility.failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Range;
+    }
+    return eligibility;
+}
 
 static CoOpTnOwnerState* coOpFindTnOwnerState(daB_TN_c* i_this, bool create) {
     for (CoOpTnOwnerState& state : s_coOpTnOwnerStates) {
@@ -1989,6 +2009,10 @@ void daB_TN_c::demo_skip(int param_1) {
         cameraClass->mCamera.Reset(mCamCenter, mCamEye);
         cameraClass->mCamera.Start();
         cameraClass->mCamera.SetTrimSize(0);
+#if TARGET_PC
+        dusk::coop::world_trigger::release(
+            this, "b_tn.opening_skip", dusk::coop::world_trigger::ReleaseReason::CameraRestored);
+#endif
         dComIfGp_event_reset();
 
         Z2GetAudioMgr()->bgmStreamStop(0x1e);
@@ -2186,6 +2210,21 @@ void daB_TN_c::executeOpening() {
         // [[fallthrough]]
 
     case ACTION2_1_e:
+#if TARGET_PC
+        {
+            // Co-op: either player may cross the native opening annulus, while the accepted
+            // Darknut choreography continues to place and animate canonical P1.
+            const dusk::coop::world_trigger::TriggerMatch triggerMatch =
+                dusk::coop::world_trigger::evaluate(
+                    this, "b_tn.opening_gate", kTnOpeningTriggerPolicy,
+                    coOpTnOpeningPredicate, NULL);
+            if (triggerMatch.found) {
+                dusk::coop::world_trigger::accept(
+                    this, "b_tn.opening_activate", kTnOpeningTriggerPolicy, triggerMatch);
+                mActionMode2 = ACTION2_2_e;
+            }
+        }
+#else
         sp7c = player->current.pos;
         if (sp7c.absXZ() < 2200.0f) {
             sp34.set(0.0f, -350.0f, 2250.0f);
@@ -2193,6 +2232,7 @@ void daB_TN_c::executeOpening() {
                 mActionMode2 = ACTION2_2_e;
             }
         }
+#endif
 
         return;
 
@@ -2205,6 +2245,9 @@ void daB_TN_c::executeOpening() {
 
         dComIfGs_onOneZoneSwitch(14, fopAcM_GetRoomNo(this));
 
+#if TARGET_PC
+        dusk::coop::world_trigger::beginPresentation(this, "b_tn.opening_demo");
+#endif
         camera->mCamera.Stop();
         camera->mCamera.SetTrimSize(3);
         mTimer1 = 30;
@@ -2351,6 +2394,11 @@ void daB_TN_c::executeOpening() {
             camera->mCamera.Reset(mCamCenter, mCamEye);
             camera->mCamera.Start();
             camera->mCamera.SetTrimSize(0);
+#if TARGET_PC
+            dusk::coop::world_trigger::release(
+                this, "b_tn.opening_end",
+                dusk::coop::world_trigger::ReleaseReason::CameraRestored);
+#endif
             dComIfGp_event_reset();
 
             Z2GetAudioMgr()->subBgmStart(Z2BGM_TN_MBOSS);
@@ -5488,6 +5536,7 @@ int daB_TN_c::_delete() {
 #if TARGET_PC
     dusk::coop::clearAllEnemyTargets(this);
     coOpClearTnOwnerState(this);
+    dusk::coop::world_trigger::clearSource(this, "b_tn.delete");
 #endif
     dComIfG_resDelete(&mPhaseReq1, "B_tn");
     dComIfG_resDelete(&mPhaseReq2, mArcName);

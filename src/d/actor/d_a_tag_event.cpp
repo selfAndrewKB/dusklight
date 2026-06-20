@@ -6,6 +6,57 @@
 #include "d/d_debug_viewer.h"
 #include "d/d_s_play.h"
 
+#if TARGET_PC
+#include "dusk/coop/world_trigger.h"
+#endif
+
+#if TARGET_PC
+namespace {
+
+static const dusk::coop::world_trigger::TriggerPolicy kTagEventTriggerPolicy = {
+    dusk::coop::world_trigger::TriggerFamily::TagEvent,
+    dusk::coop::world_trigger::ActivationPolicy::AnyActivePlayer,
+    dusk::coop::world_trigger::SubjectPolicy::Primary,
+    dusk::coop::world_trigger::PresentationPolicy::Split,
+};
+
+static dusk::coop::PlayerQueryEligibility coOpTagEventAreaPredicate(
+    dusk::coop::PlayerSlot, fopAc_ac_c* actor, void* userData) {
+    dusk::coop::PlayerQueryEligibility eligibility;
+    daTag_Event_c* tag = static_cast<daTag_Event_c*>(userData);
+    cXyz pos;
+
+    if (tag->getAreaType() == 0x8000) {
+        pos = actor->current.pos;
+        const cXyz start(tag->current.pos.x - tag->scale.x * 0.5f, tag->current.pos.y,
+                         tag->current.pos.z - tag->scale.z * 0.5f);
+        const cXyz end(tag->current.pos.x + tag->scale.x * 0.5f,
+                       tag->current.pos.y + tag->scale.y,
+                       tag->current.pos.z + tag->scale.z * 0.5f);
+        if (start.x <= pos.x && pos.x <= end.x && start.y <= pos.y && pos.y <= end.y &&
+            start.z <= pos.z && pos.z <= end.z)
+        {
+            return eligibility;
+        }
+    } else {
+        pos = actor->current.pos - tag->current.pos;
+        if (pos.y < 0.0f) {
+            pos.y = -pos.y;
+        }
+        if (pos.abs2XZ() < tag->scale.x * tag->scale.x && pos.y <= tag->scale.y) {
+            return eligibility;
+        }
+    }
+
+    eligibility.eligible = false;
+    eligibility.failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Range |
+                               dusk::coop::PlayerQueryEligibilityFailure_Vertical;
+    return eligibility;
+}
+
+}  // namespace
+#endif
+
 static fopAc_ac_c* daTag_getBk(u32 param_0) {
     return fopAcM_searchFromName("Bk", 0xF, param_0);
 }
@@ -161,6 +212,11 @@ int daTag_Event_c::actionEvent() {
             setActio(ACTION_WAIT);
             demoEndProc();
             mMapToolId = -1;
+#if TARGET_PC
+            dusk::coop::world_trigger::release(
+                this, "tag_event.event_end",
+                dusk::coop::world_trigger::ReleaseReason::EventEnded);
+#endif
         }
     } else {
         demoProc();
@@ -187,6 +243,11 @@ int daTag_Event_c::actionReady() {
     } else {
         if (swbit != 0xFF && dComIfGs_isSwitch(swbit, fopAcM_GetRoomNo(this))) {
             setActio(ACTION_WAIT);
+#if TARGET_PC
+            dusk::coop::world_trigger::release(
+                this, "tag_event.switch_complete",
+                dusk::coop::world_trigger::ReleaseReason::Cleared);
+#endif
         } else {
             fopAcM_orderOtherEventId(this, mEventIdx, getEventNo(), 0xFFFF, 0, 1);
         }
@@ -231,7 +292,25 @@ int daTag_Event_c::actionHunt() {
 
     if (swbit != 0xFF && dComIfGs_isSwitch(swbit, fopAcM_GetRoomNo(this))) {
         setActio(ACTION_WAIT);
-    } else if (arrivalTerms() && checkArea()) {
+    } else if (arrivalTerms()) {
+#if TARGET_PC
+        // Co-op: broaden only the native area predicate; P1 remains the authored event subject.
+        const dusk::coop::world_trigger::TriggerMatch triggerMatch =
+            dusk::coop::world_trigger::evaluate(
+                this, "tag_event.area", kTagEventTriggerPolicy, coOpTagEventAreaPredicate, this);
+        if (!triggerMatch.found) {
+            return 1;
+        }
+        dusk::coop::world_trigger::TriggerMetadata metadata;
+        metadata.eventId = getEventNo();
+        metadata.switchNo = swbit;
+        dusk::coop::world_trigger::accept(
+            this, "tag_event.activate", kTagEventTriggerPolicy, triggerMatch, metadata);
+#else
+        if (!checkArea()) {
+            return 1;
+        }
+#endif
 #if DEBUG
         mEventIdx = dComIfGp_getEventManager().getEventIdx(this, getEventNo());
 #endif
@@ -352,6 +431,9 @@ static int daTag_Event_IsDelete(daTag_Event_c* i_this) {
 
 static int daTag_Event_Delete(daTag_Event_c* i_this) {
     u32 actorId = fopAcM_GetID(i_this);
+#if TARGET_PC
+    dusk::coop::world_trigger::clearSource(i_this, "tag_event.delete");
+#endif
     i_this->~daTag_Event_c();
     return 1;
 }

@@ -4,6 +4,7 @@
 #include "dusk/coop/horse_owner.h"
 #include "dusk/coop/midna_owner.h"
 #include "dusk/coop/player_item_selection.h"
+#include "dusk/coop/world_trigger.h"
 #include "dusk/diagnostics.h"
 #include "dusk/logging.h"
 #include "d/actor/d_a_alink.h"
@@ -97,6 +98,8 @@ void unregisterPlayer(PlayerSlot slot, const fopAc_ac_c* actor) {
     const int index = slotIndex(slot);
     fopAc_ac_c*& registered_actor = s_players[index];
     if (registered_actor == actor) {
+        // Co-op: trigger sidecars must release stale player identity before slot teardown.
+        world_trigger::clearPlayer(actor);
         if (slot != PlayerSlot::Primary) {
             horse_owner::releaseHorseForSlot(slot);
             midna_owner::releaseMidnaForSlot(slot);

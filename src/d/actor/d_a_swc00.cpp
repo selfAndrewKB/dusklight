@@ -15,7 +15,7 @@
 
 #if TARGET_PC
 #include "dusk/coop/horse_owner.h"
-#include "dusk/coop/player_query.h"
+#include "dusk/coop/world_trigger.h"
 #endif
 
 static BOOL hitCheckActor(daSwc00_c* i_swc, fopAc_ac_c* player) {
@@ -51,62 +51,79 @@ static BOOL hitCheckActor(daSwc00_c* i_swc, fopAc_ac_c* player) {
     return FALSE;
 }
 
-static BOOL hitCheck(daSwc00_c* i_swc) {
-    if (daSwc00_getCondition(i_swc) == 2) {
 #if TARGET_PC
-        BOOL hit = FALSE;
-        // Co-op: horse-only switch volumes are any-active-horse world rules.
-        dusk::coop::horse_owner::forEachRegisteredHorse(
-            [&](dusk::coop::PlayerSlot, daHorse_c* horse) {
-                if (!hit && hitCheckActor(i_swc, horse)) {
-                    hit = TRUE;
-                }
-            });
-        return hit;
-#else
-        return hitCheckActor(i_swc, dComIfGp_getHorseActor());
-#endif
+namespace {
+
+static const dusk::coop::world_trigger::TriggerPolicy kSwAreaTriggerPolicy = {
+    dusk::coop::world_trigger::TriggerFamily::SwitchArea,
+    dusk::coop::world_trigger::ActivationPolicy::AnyActivePlayer,
+    dusk::coop::world_trigger::SubjectPolicy::Primary,
+    dusk::coop::world_trigger::PresentationPolicy::Split,
+};
+
+static dusk::coop::PlayerQueryEligibility coOpSwAreaPredicate(
+    dusk::coop::PlayerSlot slot, fopAc_ac_c* actor, void* userData) {
+    dusk::coop::PlayerQueryEligibility eligibility;
+    daSwc00_c* swc = static_cast<daSwc00_c*>(userData);
+    fopAc_ac_c* testedActor = actor;
+    daPy_py_c* player = static_cast<daPy_py_c*>(actor);
+
+    switch (daSwc00_getCondition(swc)) {
+    case 1:
+        if (!player->checkHorseRide()) {
+            eligibility.eligible = false;
+            eligibility.failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Status;
+            return eligibility;
+        }
+        break;
+    case 2:
+        testedActor = dusk::coop::horse_owner::getHorse(slot);
+        if (testedActor == NULL) {
+            eligibility.eligible = false;
+            eligibility.failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Status;
+            return eligibility;
+        }
+        break;
+    case 3:
+        if (player->checkWolf() || player->checkHorseRide()) {
+            eligibility.eligible = false;
+            eligibility.failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Form |
+                                       dusk::coop::PlayerQueryEligibilityFailure_Status;
+            return eligibility;
+        }
+        break;
+    case 4:
+        if (player->getKandelaarFlamePos() == NULL) {
+            eligibility.eligible = false;
+            eligibility.failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Status;
+            return eligibility;
+        }
+        break;
     }
 
-#if TARGET_PC
-    BOOL hit = FALSE;
-    // Co-op: SwAreaC/SwAreaS actors produce authored world switches before their consumers can
-    // run. Test each active player's native condition and volume membership together so P2+
-    // receives the same wake/event lifecycle as P1.
-    dusk::coop::forEachActivePlayer(
-        [&](dusk::coop::PlayerSlot, fopAc_ac_c* actor) {
-            if (hit) {
-                return;
-            }
-
-            daPy_py_c* player = static_cast<daPy_py_c*>(actor);
-            switch (daSwc00_getCondition(i_swc)) {
-            case 1:
-                if (!player->checkHorseRide()) {
-                    return;
-                }
-                break;
-            case 3:
-                if (player->checkWolf() || player->checkHorseRide()) {
-                    return;
-                }
-                break;
-            case 4:
-                if (player->getKandelaarFlamePos() == NULL) {
-                    return;
-                }
-                break;
-            }
-
-            if (hitCheckActor(i_swc, actor)) {
-                hit = TRUE;
-            }
-        });
-    return hit;
-#else
-    return hitCheckActor(i_swc, daPy_getPlayerActorClass());
-#endif
+    if (!hitCheckActor(swc, testedActor)) {
+        eligibility.eligible = false;
+        eligibility.failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Range;
+    }
+    return eligibility;
 }
+
+static dusk::coop::world_trigger::TriggerMatch coOpSwAreaHitCheck(daSwc00_c* i_swc) {
+    // Co-op: switch volumes broaden only native participant eligibility; switch type and event
+    // flow remain owned by the original actor state machine.
+    return dusk::coop::world_trigger::evaluate(
+        i_swc, "sw_area.volume", kSwAreaTriggerPolicy, coOpSwAreaPredicate, i_swc);
+}
+
+}  // namespace
+#else
+static BOOL hitCheck(daSwc00_c* i_swc) {
+    if (daSwc00_getCondition(i_swc) == 2) {
+        return hitCheckActor(i_swc, dComIfGp_getHorseActor());
+    }
+    return hitCheckActor(i_swc, daPy_getPlayerActorClass());
+}
+#endif
 
 #if DEBUG
 
@@ -202,10 +219,22 @@ int daSwc00_c::execute() {
     }
     
     int sw1 = daSwc00_getSw1No(this);
+#if TARGET_PC
+    const dusk::coop::world_trigger::TriggerMatch triggerMatch = coOpSwAreaHitCheck(this);
+    const BOOL triggerHit = triggerMatch.found;
+    if (triggerHit && field_0x584 == 0) {
+        dusk::coop::world_trigger::TriggerMetadata metadata;
+        metadata.switchNo = sw1;
+        dusk::coop::world_trigger::accept(
+            this, "sw_area.activate", kSwAreaTriggerPolicy, triggerMatch, metadata);
+    }
+#else
+    const BOOL triggerHit = hitCheck(this);
+#endif
     switch (daSwc00_getType(this)) {
     case 3:
     case 15:
-        if (hitCheck(this)) {
+        if (triggerHit) {
             dComIfGs_onSwitch(sw1, fopAcM_GetRoomNo(this));
             field_0x583 = 1;
             field_0x584 = 1;
@@ -213,7 +242,7 @@ int daSwc00_c::execute() {
         break;
     case 0:
     case 4:
-        if (hitCheck(this)) {
+        if (triggerHit) {
             dComIfGs_onSwitch(sw1, fopAcM_GetRoomNo(this));
             field_0x584 = 1;
         } else {
@@ -222,14 +251,14 @@ int daSwc00_c::execute() {
         break;
     case 1:
     case 5:
-        if (hitCheck(this)) {
+        if (triggerHit) {
             dComIfGs_onSwitch(sw1, fopAcM_GetRoomNo(this));
             field_0x584 = 1;
         }
         break;
     case 2:
     case 6:
-        if (hitCheck(this)) {
+        if (triggerHit) {
             dComIfGs_offSwitch(sw1, fopAcM_GetRoomNo(this));
             field_0x584 = 1;
         }
@@ -237,7 +266,7 @@ int daSwc00_c::execute() {
     
     case 7:
     case 8:
-        if (hitCheck(this)) {
+        if (triggerHit) {
             dComIfGs_offSwitch(sw1, fopAcM_GetRoomNo(this));
             field_0x584 = 1;
             field_0x583 = 1;
@@ -270,6 +299,11 @@ void daSwc00_c::actionWait() {
             eventInfo.onCondition(dEvtCnd_CANDEMO_e);
         } else {
             setAction(ACTION_DEAD);
+#if TARGET_PC
+            dusk::coop::world_trigger::release(
+                this, "sw_area.switch_complete",
+                dusk::coop::world_trigger::ReleaseReason::EventEnded);
+#endif
         }
     }
 }
@@ -287,6 +321,10 @@ void daSwc00_c::actionEvent() {
     if (dComIfGp_evmng_endCheck(mEventID)) {
         setAction(ACTION_DEAD);
         dComIfGp_event_reset();
+#if TARGET_PC
+        dusk::coop::world_trigger::release(
+            this, "sw_area.event_end", dusk::coop::world_trigger::ReleaseReason::EventEnded);
+#endif
     }
 }
 
@@ -302,6 +340,9 @@ static int daSwc00_IsDelete(daSwc00_c* i_this) {
 
 static int daSwc00_Delete(daSwc00_c* i_this) {
     fpc_ProcID id = fopAcM_GetID(i_this);
+#if TARGET_PC
+    dusk::coop::world_trigger::clearSource(i_this, "sw_area.delete");
+#endif
     return 1;
 }
 

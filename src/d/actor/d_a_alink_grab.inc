@@ -2162,17 +2162,6 @@ int daAlink_c::procGoatMove() {
 }
 
 int daAlink_c::procGoatCatchInit(fopAc_ac_c* i_actor, f32 param_1) {
-#if TARGET_PC
-    if (fopAcM_GetName(i_actor) == fpcNm_OBJ_GRA_e &&
-        static_cast<daObj_GrA_c*>(i_actor)->isFirstGra() &&
-        dusk::coop::isAdditionalPlayer(this))
-    {
-        // Co-op: the first Goron catch enters a P1-authored compulsory event and camera.
-        setDoStatus(BUTTON_STATUS_NONE);
-        return 0;
-    }
-#endif
-
     s16 temp_r28 = cLib_targetAngleY(&current.pos, &i_actor->current.pos);
 
     if (!checkGoatStopGame()) {
