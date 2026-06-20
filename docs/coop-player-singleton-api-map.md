@@ -428,6 +428,12 @@ player who owns the accepted catch event, so it routes through `event_owner`.
   fullscreen surface draws one window but still needs camera-1 viewport-owned world refresh; do not
   equate “not presenting both split windows” with “camera-0 render state is sufficient.” Do not
   scatter actor-specific render fixes when a central PC split-screen policy can answer the question.
+- **Per-viewport effects:** `render_effects` retains the active slot/window/camera/view context,
+  Base/Sense environment and bloom snapshots, slot-local Sense fade/emitter state, and slot-local
+  Twilight camera lights. `render_materials` owns submitted J3D `viewCalc()` and projected-material
+  replay. These are presentation lifecycles, not simulation or frame interpolation. Bloom is
+  viewport-safe; motion blur, depth of field, indirect-screen passes, generic fullscreen 2D, and
+  fades remain global/gated.
 - **Primary/global state:** story protagonist, demo/cutscene, save/restart, HUD, passive message, or
   single-camera state. Keep P1/global until a dedicated milestone proves otherwise.
 

@@ -12,7 +12,17 @@
 #include "f_op/f_op_camera_mng.h"
 
 #include "dusk/frame_interpolation.h"
+#include "dusk/coop/render_effects.h"
 #include "dusk/coop/render_visibility.h"
+
+static bool grassSensePresentationActive() {
+#if TARGET_PC
+    // Co-op: shared grass/flower packets derive Sense color from the viewport drawing them.
+    return dusk::coop::render_effects::isCurrentViewportSenseActive();
+#else
+    return daPy_py_c::checkNowWolfPowerUp();
+#endif
+}
 
 const u16 l_M_Hijiki00TEX__width = 31;
 const u16 l_M_Hijiki00TEX__height = 31;
@@ -567,7 +577,7 @@ static GXColor blade_amb_color(const dGrass_data_c* blade, const dKy_tevstr_c* t
     amb.g = ((blade->m_addCol >> 5) & 0x1F) * 2;
     amb.b = ((blade->m_addCol >> 0xA) & 0x1F) * 2;
 
-    if (daPy_py_c::checkNowWolfPowerUp()) {
+    if (grassSensePresentationActive()) {
         f32 ambRate = g_env_light.bg_amb_col[0].r / 255.0f;
         f32 col = (((blade->m_addCol & 0x1F) * 2 + 0x10));
         amb.r = col * (ambRate * 4.0f);
@@ -1069,7 +1079,7 @@ void dGrass_packet_c::draw() {
                     sp38.g = ((var_r29->m_addCol >> 5) & 0x1F) * 2;
                     sp38.b = ((var_r29->m_addCol >> 0xA) & 0x1F) * 2;
 
-                    if (daPy_py_c::checkNowWolfPowerUp()) {
+                    if (grassSensePresentationActive()) {
                         f32 var_f26 = g_env_light.bg_amb_col[0].r / 255.0f;
                         f32 var_f1 = (((var_r29->m_addCol & 0x1F) * 2 + 0x10));
                         sp38.r = var_f1 * (var_f26 * 4.0f);

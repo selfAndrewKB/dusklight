@@ -10,6 +10,10 @@
 
 #include "tracy/Tracy.hpp"
 
+#if TARGET_PC
+#include "dusk/coop/render_effects.h"
+#endif
+
 JPAEmitterManager::JPAEmitterManager(u32 i_ptclNum, u32 i_emtrNum, JKRHeap* pHeap, u8 i_gidMax,
                                      u8 i_ridMax) {
     emtrNum = i_emtrNum;
@@ -116,6 +120,12 @@ void JPAEmitterManager::draw(JPADrawInfo const* drawInfo, u8 group_id) {
     for (JSULink<JPABaseEmitter>* pLink = pEmtrUseList[group_id].getFirst();
          pLink != pEmtrUseList[group_id].getEnd(); pLink = pLink->getNext()) {
         JPABaseEmitter* emtr = pLink->getObject();
+#if TARGET_PC
+        // Co-op: viewport-owned Sense emitters retain one simulation but draw only for their slot.
+        if (!dusk::coop::render_effects::shouldDrawEmitter(emtr)) {
+            continue;
+        }
+#endif
         if (!emtr->checkStatus(0x04)) {
             pWd->mpResMgr = pResMgrAry[emtr->mResMgrID];
             emtr->pRes->draw(pWd, emtr);
@@ -135,6 +145,10 @@ void JPAEmitterManager::forceDeleteGroupEmitter(u8 group_id) {
 }
 
 void JPAEmitterManager::forceDeleteEmitter(JPABaseEmitter* emtr) {
+#if TARGET_PC
+    // Co-op: pooled emitter addresses must lose stale viewport ownership before reuse.
+    dusk::coop::render_effects::unregisterEmitter(emtr);
+#endif
     emtr->deleteAllParticle();
     emtr->setStatus(0x300);
     pEmtrUseList[emtr->getGroupID()].remove(&emtr->mLink);

@@ -27,6 +27,8 @@
 #include "dusk/coop/player_camera_status.h"
 #include "dusk/coop/player_query.h"
 #include "dusk/coop/player_slots.h"
+#include "dusk/coop/render_effects.h"
+#include "dusk/coop/render_materials.h"
 #include "dusk/coop/selected_target_state.h"
 #include "dusk/coop/wolf_catch_owner.h"
 #include "dusk/coop/world_trigger.h"
@@ -41,6 +43,7 @@
 #include "f_op/f_op_actor_mng.h"
 #include "f_op/f_op_camera_mng.h"
 #include "fmt/format.h"
+#include "m_Do/m_Do_graphic.h"
 #include "m_Do/m_Do_controller_pad.h"
 #include "nlohmann/json.hpp"
 
@@ -1235,6 +1238,28 @@ json eventKeyForProvider(const char* provider, const json& data) {
             {"windows", data.value("windows", json::array())},
         };
     }
+    if (name == "render.effects") {
+        json sense = json::array();
+        for (const json& slot : data.value("sense", json::array())) {
+            sense.push_back({
+                {"slot", slot.value("slot", -1)},
+                {"active", slot.value("active", false)},
+                {"emitter_count", slot.value("emitter_count", 0)},
+            });
+        }
+        return {
+            {"schema_version", data.value("schema_version", 1)},
+            {"viewport_slot", data.value("viewport_slot", 0)},
+            {"window_index", data.value("window_index", 0)},
+            {"camera_id", data.value("camera_id", 0)},
+            {"bloom_mode", data.value("bloom_mode", 0)},
+            {"sense", sense},
+            {"twilight", data.value("twilight", json::array())},
+            {"view_dependent_models", data.value("view_dependent_models", json::array())},
+            {"projected_material_models",
+             data.value("projected_material_models", json::array())},
+        };
+    }
     if (name == "camera.state") {
         const json camera0 = data.value("camera0", json::object());
         const json camera1 = data.value("camera1", json::object());
@@ -2115,6 +2140,105 @@ json playerQueryCandidateSummary(const coop::PlayerQueryCandidateDebug& candidat
         {"eligible", candidate.eligible},
         {"eligibility_failure_flags", static_cast<unsigned int>(flags)},
         {"eligibility_failures", eligibilityFailures},
+    };
+}
+
+json collectRenderEffects() {
+    const coop::render_effects::DebugState effects = coop::render_effects::getDebugState();
+    const coop::render_materials::DebugState materials =
+        coop::render_materials::getDebugState();
+
+    json sense = json::array();
+    json twilight = json::array();
+    for (int i = 0; i < coop::kPlayerSlotCount; i++) {
+        sense.push_back({
+            {"slot", i},
+            {"active", effects.sense[i].active},
+            {"now_effect", effects.sense[i].nowEffect},
+            {"strength", effects.sense[i].strength},
+            {"emitter_count", effects.sense[i].emitterCount},
+        });
+        twilight.push_back({
+            {"slot", i},
+            {"valid", effects.twilight[i].valid},
+            {"camera_id", effects.twilight[i].cameraId},
+            {"player", ptrString(reinterpret_cast<uintptr_t>(effects.twilight[i].player))},
+            {"active_light_mask", effects.twilight[i].activeMask},
+        });
+    }
+
+    json viewModels = json::array();
+    for (int i = 0; i < materials.viewDependentModelCount; i++) {
+        viewModels.push_back(
+            ptrString(reinterpret_cast<uintptr_t>(materials.viewDependentModels[i])));
+    }
+    json projectedModels = json::array();
+    for (int i = 0; i < materials.lightProjectionModelCount; i++) {
+        projectedModels.push_back({
+            {"model", ptrString(reinterpret_cast<uintptr_t>(materials.lightProjectionModels[i]))},
+            {"material_mask", materials.lightProjectionMaterialMasks[i]},
+        });
+    }
+
+    json viewport = {
+        {"available", effects.viewport.viewport != nullptr},
+    };
+    if (effects.viewport.viewport != nullptr) {
+        const view_port_class* vp = effects.viewport.viewport;
+        viewport["x"] = vp->x_orig;
+        viewport["y"] = vp->y_orig;
+        viewport["width"] = vp->width;
+        viewport["height"] = vp->height;
+        viewport["scissor"] = {
+            {"x", vp->scissor.x_orig},
+            {"y", vp->scissor.y_orig},
+            {"width", vp->scissor.width},
+            {"height", vp->scissor.height},
+        };
+    }
+
+    mDoGph_gInf_c::bloom_c* bloom = mDoGph_gInf_c::getBloom();
+    return {
+        {"schema_version", 1},
+        {"viewport_active", effects.viewportActive},
+        {"viewport_slot", static_cast<int>(effects.viewport.slot)},
+        {"window_index", effects.viewport.windowIndex},
+        {"camera_id", effects.viewport.cameraId},
+        {"viewport", viewport},
+        {"policy",
+         {
+             {"viewport_bloom", coop::render_effects::shouldRunViewportBloom()},
+             {"global_framebuffer_effects",
+              coop::render_effects::shouldRunFullscreenFramebufferEffects()},
+             {"motion_blur", coop::render_effects::shouldRunMotionBlur()},
+             {"depth_of_field", coop::render_effects::shouldRunDepthOfField()},
+             {"indirect_screen", coop::render_effects::shouldRunIndirectScreenPasses()},
+             {"fullscreen_2d", coop::render_effects::shouldRunFullscreen2DOverlays()},
+             {"fades", coop::render_effects::shouldRunFades()},
+         }},
+        {"environment",
+         {
+             {"base_valid", effects.baseEnvironmentValid},
+             {"sense_valid", effects.senseEnvironmentValid},
+         }},
+        {"bloom_mode", effects.bloomMode},
+        {"bloom",
+         {
+             {"enabled", bloom->getEnable() != 0},
+             {"point", bloom->getPoint()},
+             {"blur_size", bloom->getBlureSize()},
+             {"blur_ratio", bloom->getBlureRatio()},
+             {"source_width", effects.bloomSourceWidth},
+             {"source_height", effects.bloomSourceHeight},
+             {"composite_x", effects.bloomCompositeX},
+             {"composite_y", effects.bloomCompositeY},
+             {"composite_width", effects.bloomCompositeWidth},
+             {"composite_height", effects.bloomCompositeHeight},
+         }},
+        {"sense", sense},
+        {"twilight", twilight},
+        {"view_dependent_models", viewModels},
+        {"projected_material_models", projectedModels},
     };
 }
 
@@ -3296,6 +3420,7 @@ Provider s_providers[] = {
     {"scene.current", 1, "cheap", 30, true, 20, 4096, collectSceneCurrent},
     {"render.stats", 1, "cheap", 30, true, 20, 4096, collectRenderStats},
     {"render.windows", 2, "cheap", 1, true, 20, 8192, collectRenderWindows},
+    {"render.effects", 1, "cheap", 1, true, 120, 12288, collectRenderEffects},
     {"camera.state", 2, "cheap", 1, true, 20, 8192, collectCameraState},
     {"camera.area_load", 1, "cheap", 1, true, 120, 32768, collectCameraAreaLoad},
     {"player.slots", 2, "cheap", 1, true, 120, 8192, collectPlayerSlots},

@@ -14,6 +14,7 @@
 #include <cstring>
 #if TARGET_PC
 #include "dusk/frame_interpolation.h"
+#include "dusk/coop/render_effects.h"
 #endif
 
 static void vectle_calc(DOUBLE_POS* i_pos, cXyz* o_out) {
@@ -28,6 +29,15 @@ static void vectle_calc(DOUBLE_POS* i_pos, cXyz* o_out) {
         o_out->y = 0.0;
         o_out->z = 0.0;
     }
+}
+
+static bool dKyr_isSensePresentationActive() {
+#if TARGET_PC
+    // Co-op: weather/effect draw replay follows the current viewport's live ALINK form state.
+    return dusk::coop::render_effects::isCurrentViewportSenseActive();
+#else
+    return daPy_py_c::checkNowWolfPowerUp();
+#endif
 }
 
 static void get_vectle_calc(cXyz* i_vecA, cXyz* i_vecB, cXyz* o_out) {
@@ -5521,7 +5531,11 @@ void dKyr_odour_draw(Mtx drawMtx, u8** tex) {
     ZoneScoped;
     dScnKy_env_light_c* envlight = dKy_getEnvlight();
     dKankyo_odour_Packet* odour_packet = envlight->mOdourData.mpOdourPacket;
-    camera_class* camera = (camera_class*)dComIfGp_getCamera(0);
+    view_class* active_view = dComIfGd_getView();
+    if (active_view == NULL) {
+        camera_class* camera = (camera_class*)dComIfGp_getCamera(0);
+        active_view = camera != NULL ? &camera->view : NULL;
+    }
 
     static f32 rot = 0.0f;
 
@@ -5533,14 +5547,21 @@ void dKyr_odour_draw(Mtx drawMtx, u8** tex) {
 
     j3dSys.reinitGX();
 
-    if (dComIfGd_getView() != NULL) {
-        MTXInverse(dComIfGd_getView()->viewMtxNoTrans, camMtx);
-    } else {
+    if (active_view == NULL) {
         OS_REPORT("\nodour_draw return!!");
         return;
     }
 
-    if (envlight->senses_effect_strength <= 0.0f || envlight->now_senses_effect != 1) {
+    // Co-op: rebuild camera-facing odour geometry from the viewport currently drawing it.
+    MTXInverse(active_view->viewMtxNoTrans, camMtx);
+
+    #if TARGET_PC
+    // Co-op: odour presentation follows the current viewport's native Sense fade.
+    const f32 sense_strength = dusk::coop::render_effects::currentViewportSenseStrength();
+    #else
+    const f32 sense_strength = envlight->senses_effect_strength;
+    #endif
+    if (sense_strength <= 0.0f) {
         return;
     }
 
@@ -5617,15 +5638,23 @@ void dKyr_odour_draw(Mtx drawMtx, u8** tex) {
 #endif
 
     ResTIMG* fb_timg = mDoGph_gInf_c::getFrameBufferTimg();
-    dDlst_window_c* window = dComIfGp_getWindow(0);
-    camera_process_class* window_cam = dComIfGp_getCamera(window->getCameraID());
     dKyr_set_btitex_common(&fb_texobj, fb_timg, GX_TEXMAP0);
 
     f32 scale = 0.49f;
-    C_MTXLightPerspective(sp120, window_cam->view.fovy, window_cam->view.aspect, scale, -scale, 0.5f, 0.5f);
+    C_MTXLightPerspective(sp120, active_view->fovy, active_view->aspect, scale, -scale, 0.5f,
+                          0.5f);
     cMtx_concat(sp120, j3dSys.getViewMtx(), spF0);
 
+    #if TARGET_PC
+    // Co-op: shared odour simulation advances once while each viewport rebuilds its matrices.
+    static int last_rot_frame = -1;
+    if (last_rot_frame != g_Counter.mCounter0) {
+        rot += 2.0f;
+        last_rot_frame = g_Counter.mCounter0;
+    }
+    #else
     rot += 2.0f;
+    #endif
     MTXRotRad(rotMtx, 'Z', DEG_TO_RAD(rot));
     MTXConcat(camMtx, rotMtx, camMtx);
 
@@ -5672,7 +5701,6 @@ void dKyr_odour_draw(Mtx drawMtx, u8** tex) {
 
     for (int i = 0; i < 2000; i++) {
         EF_ODOUR_EFF* effect = &odour_packet->mOdourEff[i];
-        camera_class* camera = (camera_class*)dComIfGp_getCamera(0);
         cXyz pos[4];
         Vec sp64, sp58;
         cXyz sp4C;
@@ -5681,7 +5709,7 @@ void dKyr_odour_draw(Mtx drawMtx, u8** tex) {
         if (effect->mStatus != 0 && effect->mStatus != 1 && effect->mStatus != 11) {
             sp4C = effect->mBasePos + effect->mPosition;
 
-            f32 var_f31 = camera->view.lookat.eye.abs(sp4C);
+            f32 var_f31 = active_view->lookat.eye.abs(sp4C);
             if (var_f31 < 250.0f) {
                 if (var_f31 < 150.0f) {
                     var_f31 = 0.0f;
@@ -5697,7 +5725,10 @@ void dKyr_odour_draw(Mtx drawMtx, u8** tex) {
                 var_f31 = 1.0f;
             }
 
-            f32 temp_f29 = var_f31 * (effect->field_0x28 * (effect->field_0x24 * (envlight->senses_effect_strength * envlight->senses_effect_strength * envlight->senses_effect_strength)));
+            f32 temp_f29 = var_f31 *
+                (effect->field_0x28 *
+                 (effect->field_0x24 *
+                  (sense_strength * sense_strength * sense_strength)));
 
             if (effect->mStatus != 0) {
                 if (!(temp_f29 <= 0.000001f)) {
@@ -6155,7 +6186,7 @@ static void dKyr_evil_draw2(Mtx drawMtx, u8** tex) {
     ZoneScoped;
     dScnKy_env_light_c* envlight = dKy_getEnvlight();
     dKankyo_evil_Packet* evil_packet = envlight->mpEvilPacket;
-    camera_class* camera = (camera_class*)dComIfGp_getCamera(0);
+    view_class* active_view = dComIfGd_getView();
 
     static f32 rot = 0.0f;
 
@@ -6169,8 +6200,8 @@ static void dKyr_evil_draw2(Mtx drawMtx, u8** tex) {
         IF_DUSK(GXPushDebugGroup("dKyr_evil_draw2"));
 
         j3dSys.reinitGX();
-        if (dComIfGd_getView() != NULL) {
-            MTXInverse(dComIfGd_getView()->viewMtxNoTrans, camMtx);
+        if (active_view != NULL) {
+            MTXInverse(active_view->viewMtxNoTrans, camMtx);
         } else {
             OS_REPORT("\nevil_draw return!!");
             return;
@@ -6198,11 +6229,15 @@ static void dKyr_evil_draw2(Mtx drawMtx, u8** tex) {
 #endif
 
 #if TARGET_PC
-        if (dusk::frame_interp::get_ui_tick_pending())
-#endif
-        {
+        // Co-op: the shared Twilight effect animates once while geometry rebuilds per viewport.
+        static int last_rot_frame = -1;
+        if (last_rot_frame != g_Counter.mCounter0) {
             rot += 0.7f;
+            last_rot_frame = g_Counter.mCounter0;
         }
+#else
+        rot += 0.7f;
+#endif
         MTXRotRad(rotMtx, 'Z', DEG_TO_RAD(rot));
         MTXConcat(camMtx, rotMtx, camMtx);
 
@@ -6234,7 +6269,6 @@ static void dKyr_evil_draw2(Mtx drawMtx, u8** tex) {
 
         for (int i = 0; i < g_env_light.field_0x1054; i++) {
             EF_EVIL_EFF* effect = &evil_packet->mEffect[i];
-            camera_class* camera = (camera_class*)dComIfGp_getCamera(0);
 
             cXyz pos[4];
             Vec sp94, sp88;
@@ -6245,8 +6279,8 @@ static void dKyr_evil_draw2(Mtx drawMtx, u8** tex) {
                 f32 temp_f30 = 0.2f + (0.8f * fabsf(cM_ssin(effect->field_0x3c)));
                 sp7C = effect->mBasePos + effect->mPosition;
 
-                if ((strcmp(dComIfGp_getStartStageName(), "D_MN08") != 0 || dComIfGp_roomControl_getStayNo() != 1 || i < 1600 || !(camera->view.lookat.eye.x >= -5000.0f)) && !(var_f31 > 9000.0f)) {
-                    if (dComIfGd_getView()->fovy > 40.0f) {
+                if ((strcmp(dComIfGp_getStartStageName(), "D_MN08") != 0 || dComIfGp_roomControl_getStayNo() != 1 || i < 1600 || !(active_view->lookat.eye.x >= -5000.0f)) && !(var_f31 > 9000.0f)) {
+                    if (active_view->fovy > 40.0f) {
                         cXyz proj;
                         Vec sp34;
                         sp34.x = 80.0f;
@@ -6272,7 +6306,7 @@ static void dKyr_evil_draw2(Mtx drawMtx, u8** tex) {
                     f32 sp3C = 150.0f;
                     f32 sp38 = 250.0f;
 
-                    f32 var_f29 = camera->view.lookat.eye.abs(sp7C);
+                    f32 var_f29 = active_view->lookat.eye.abs(sp7C);
                     if (var_f29 < sp38) {
                         if (var_f29 < sp3C) {
                             var_f29 = 0.0f;
@@ -6298,7 +6332,7 @@ static void dKyr_evil_draw2(Mtx drawMtx, u8** tex) {
                     if (!(sp40 <= 0.000001f)) {
                         color_reg0.a = 255.0f * sp40;
 
-                        if (daPy_py_c::checkNowWolfPowerUp()) {
+                        if (dKyr_isSensePresentationActive()) {
                             color_reg0.r = 80.0f * temp_f30;
                             color_reg0.g = 0;
                             color_reg0.b = 0;
@@ -6399,7 +6433,7 @@ void dKyr_evil_draw(Mtx drawMtx, u8** tex) {
     ZoneScoped;
     dScnKy_env_light_c* envlight = dKy_getEnvlight();
     dKankyo_evil_Packet* evil_packet = envlight->mpEvilPacket;
-    camera_class* camera = (camera_class*)dComIfGp_getCamera(0);
+    view_class* active_view = dComIfGd_getView();
 
     static f32 rot = 0.0f;
 
@@ -6416,8 +6450,8 @@ void dKyr_evil_draw(Mtx drawMtx, u8** tex) {
         IF_DUSK(GXPushDebugGroup("dKyr_evil_draw"));
 
         j3dSys.reinitGX();
-        if (dComIfGd_getView() != NULL) {
-            MTXInverse(dComIfGd_getView()->viewMtxNoTrans, camMtx);
+        if (active_view != NULL) {
+            MTXInverse(active_view->viewMtxNoTrans, camMtx);
         } else {
             OS_REPORT("\nevil_draw return!!");
             return;
@@ -6442,11 +6476,15 @@ void dKyr_evil_draw(Mtx drawMtx, u8** tex) {
 #endif
 
 #if TARGET_PC
-        if (dusk::frame_interp::get_ui_tick_pending())
-#endif
-        {
+        // Co-op: the shared Twilight effect animates once while geometry rebuilds per viewport.
+        static int last_rot_frame = -1;
+        if (last_rot_frame != g_Counter.mCounter0) {
             rot += 1.0f;
+            last_rot_frame = g_Counter.mCounter0;
         }
+#else
+        rot += 1.0f;
+#endif
         MTXRotRad(rotMtx, 'Z', DEG_TO_RAD(rot));
         MTXConcat(camMtx, rotMtx, camMtx);
 
@@ -6493,7 +6531,6 @@ void dKyr_evil_draw(Mtx drawMtx, u8** tex) {
 
         for (int i = 0; i < g_env_light.field_0x1054; i++) {
             EF_EVIL_EFF* effect = &evil_packet->mEffect[i];
-            camera_class* camera = (camera_class*)dComIfGp_getCamera(0);
 
             cXyz pos[4];
             Vec spBC, spB0;
@@ -6505,7 +6542,7 @@ void dKyr_evil_draw(Mtx drawMtx, u8** tex) {
                 spA4 = effect->mBasePos + effect->mPosition;
 
                 if (!(temp_f30 > 9000.0f)) {
-                    if (dComIfGd_getView()->fovy > 40.0f) {
+                    if (active_view->fovy > 40.0f) {
                         cXyz proj;
                         Vec sp44;
                         sp44.x = 80.0f;
@@ -6531,7 +6568,7 @@ void dKyr_evil_draw(Mtx drawMtx, u8** tex) {
                     f32 sp50 = 50.0f;
                     f32 sp4C = 800.0f;
 
-                    f32 var_f31 = camera->view.lookat.eye.abs(spA4);
+                    f32 var_f31 = active_view->lookat.eye.abs(spA4);
                     if (var_f31 < sp4C) {
                         if (var_f31 < sp50) {
                             var_f31 = 0.0f;
@@ -6566,7 +6603,12 @@ void dKyr_evil_draw(Mtx drawMtx, u8** tex) {
                         }
                         cLib_addCalc(&effect->field_0x2c, sp5C, 0.5f, 0.1f, 0.01f);
 
+                        #if TARGET_PC
+                        daPy_py_c* player = static_cast<daPy_py_c*>(dusk::coop::getPlayer(
+                            dusk::coop::render_effects::currentViewportSlot()));
+                        #else
                         daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+                        #endif
                         if (player != NULL && player->getKandelaarFlamePos() != NULL) {
                             color_reg1.r = 120.0f * effect->field_0x2c;
                             color_reg1.g = 140.0f * effect->field_0x2c;
@@ -6591,7 +6633,7 @@ void dKyr_evil_draw(Mtx drawMtx, u8** tex) {
                         f32 sp2C = (f32)i / (f32)g_env_light.field_0x1054;
                         sp2C = (i & 15) / 15.0f;
 
-                        if (daPy_py_c::checkNowWolfPowerUp()) {
+                        if (dKyr_isSensePresentationActive()) {
                             color_reg0.r = (int)(127.0f * fabsf(sp2C - sp64)) + 0x80;
                             color_reg0.g = 0x80;
                             color_reg0.b = (int)(127.0f * fabsf(sp2C - sp64)) + 0x80;
@@ -6668,7 +6710,7 @@ void dKyr_evil_draw(Mtx drawMtx, u8** tex) {
         J3DShape::resetVcdVatCache();
         GXSetClipMode(GX_CLIP_ENABLE);
 
-        if (!daPy_py_c::checkNowWolfPowerUp()) {
+        if (!dKyr_isSensePresentationActive()) {
             dKyr_evil_draw2(drawMtx, tex);
         }
     }

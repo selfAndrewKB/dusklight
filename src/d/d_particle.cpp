@@ -224,7 +224,12 @@ static void initiateLighting8(GXColor& param_0, s16 param_1) {
     color0.r = (param_1 & 0x1F) << 1;
     color0.g = ((param_1 >> 5) & 0x1F) << 1;
     color0.b = ((param_1 >> 10) & 0x1F) << 1;
+#if TARGET_PC
+    // Co-op: particle lighting is rebuilt while a viewport owns the shared draw replay.
+    if (dusk::coop::render_effects::isCurrentViewportSenseActive()) {
+#else
     if (daPy_py_c::checkNowWolfPowerUp()) {
+#endif
         f32 fVar1 = (g_env_light.bg_amb_col[0].r / 255.0f);
         color0.r = (((param_1 & 0x1F) << 1) + 0x10) * (4.0f * (fVar1));
 
@@ -1940,6 +1945,17 @@ void dPa_wbPcallBack_c::execute(JPABaseEmitter* i_emitter, JPABaseParticle* para
 
 void dPa_fsenthPcallBack::execute(JPABaseEmitter* i_emitter, JPABaseParticle* param_1) {
     UNUSED(param_1);
+#if TARGET_PC
+    // Co-op: each persistent Sense emitter follows its owning ALINK's native fade.
+    const f32 strength = dusk::coop::render_effects::senseStrengthForEmitter(i_emitter);
+    if (strength > 0.0f) {
+        i_emitter->setGlobalAlpha(255.0f * strength);
+        i_emitter->playDrawParticle();
+    } else {
+        i_emitter->setGlobalAlpha(0);
+        i_emitter->stopDrawParticle();
+    }
+#else
     dScnKy_env_light_c* envLight = dKy_getEnvlight();
     if (envLight->now_senses_effect == 1 && envLight->senses_effect_strength > 0.0f) {
         i_emitter->setGlobalAlpha(255.0f * envLight->senses_effect_strength);
@@ -1948,6 +1964,7 @@ void dPa_fsenthPcallBack::execute(JPABaseEmitter* i_emitter, JPABaseParticle* pa
         i_emitter->setGlobalAlpha(0);
         i_emitter->stopDrawParticle();
     }
+#endif
 }
 
 void dPa_fsenthPcallBack::draw(JPABaseEmitter* i_emitter, JPABaseParticle* param_1) {

@@ -332,4 +332,28 @@ void refreshKankyoMaterialsForCurrentView() {
 #endif
 }
 
+DebugState getDebugState() {
+    DebugState state = {};
+    const unsigned int frame = currentFrame();
+    for (const ViewDependentModelEntry& entry : s_viewDependentModels) {
+        if (state.viewDependentModelCount >= kDebugRegistrationCapacity ||
+            !isCurrentRefreshFrame(entry.lastSeenFrame, frame))
+        {
+            continue;
+        }
+        state.viewDependentModels[state.viewDependentModelCount++] = entry.model;
+    }
+    for (const LightProjectionModelEntry& entry : s_lightProjectionModels) {
+        if (state.lightProjectionModelCount >= kDebugRegistrationCapacity ||
+            !isCurrentRefreshFrame(entry.lastSeenFrame, frame))
+        {
+            continue;
+        }
+        const int index = state.lightProjectionModelCount++;
+        state.lightProjectionModels[index] = entry.model;
+        state.lightProjectionMaterialMasks[index] = entry.materialMask;
+    }
+    return state;
+}
+
 }  // namespace dusk::coop::render_materials

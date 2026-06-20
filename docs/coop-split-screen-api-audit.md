@@ -16,8 +16,8 @@ families, and which systems are intentionally deferred.
 | Which player owns this camera, render window, or camera decision? | `camera_owner` / existing `dusk::coop::camera` | Partially implemented as the camera/window/player sidecar |
 | Which viewport is being rendered right now? | `viewport_owner` / render-window context | Partially implemented in the painter loop |
 | Which player-status bits should a camera or camera tag read? | `player_camera_status` | First pass implemented for slot-local camera/action bits, attention bits, item aim, and climb/hang hints |
-| Which render state must be installed per viewport? | `viewport_render_state` / `dusk::coop::render_materials` | Partially implemented through painter-level per-viewport environment/material refresh and line-material refresh |
-| Which fullscreen effect owns this viewport/framebuffer? | `viewport_effect_owner` | Partially implemented through `dusk::coop::render_effects` policy helpers and the central per-window painter replay |
+| Which render state must be installed per viewport? | `dusk::coop::render_materials` / `dusk::coop::render_effects` | Implemented for kankyo/J3D material refresh, camera-facing `viewCalc()`, projected texture matrices, Base/Sense environment snapshots, and Twilight camera lights |
+| Which fullscreen effect owns this viewport/framebuffer? | `dusk::coop::render_effects` | Viewport context and Dusk/Classic bloom are implemented; motion blur, depth of field, fades, indirect-screen passes, and generic fullscreen 2D remain explicitly global/gated |
 | Which viewport owns real-shadow submission culling and baked shadow matrices? | `render_shadows` | Partially implemented through `dusk::coop::render_shadows` for shared-list culling bypass and per-viewport real-shadow refresh |
 | Which viewport should camera-facing 3D line/ribbon geometry use? | shared 3D-line material refresh | Implemented for `mDoExt_3DlineMat0_c` and `mDoExt_3DlineMat1_c` during the per-window painter pass |
 | Which player owns HUD, reticles, prompts, and message UI? | `hud_owner` / `ui_owner` / `message_owner` | `hud_owner` presents slot-local prompts and assigned items; `ui_owner` owns transient overlay viewport context and the singular item wheel; `message_owner` retains the active interactive dialogue slot/pad/listener/speaker. Full inventory/menu and passive message UI remain deferred |
@@ -383,7 +383,8 @@ Follow-up investigation:
    actor draw culling and the known world/background clipper paths.
 3. Add diagnostics or overlay evidence only if objects still disappear or shift in P2's view.
 4. Start `player_camera_status` for camera 1 item/lock-on/special mode correctness.
-5. Start `viewport_render_state` with environment lighting/fog ownership.
+5. Done: install Base/Sense environment snapshots, slot-local Twilight camera lights, and
+   viewport-sized bloom through `render_effects`.
 6. Revisit HUD/reticles after camera/render correctness is stable.
 
 ## Acceptance Targets

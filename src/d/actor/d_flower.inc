@@ -651,7 +651,7 @@ static GXColor hana00_amb_color(const dFlower_data_c* flower, const dKy_tevstr_c
         amb.b = ((flower->field_0x04 >> 0xA) & 0x1F) * 2;
     }
 
-    if (daPy_py_c::checkNowWolfPowerUp()) {
+    if (grassSensePresentationActive()) {
         f32 ambRate = g_env_light.bg_amb_col[0].r / 255.0f;
         f32 col = (((flower->field_0x04 & 0x1F) * 2 + 0x10));
         amb.r = col * (ambRate * 4.0f);
@@ -743,7 +743,7 @@ static GXColor hana01_amb_color(int idx, const dKy_tevstr_c* tevstr) {
         break;
     }
 
-    if (daPy_py_c::checkNowWolfPowerUp()) {
+    if (grassSensePresentationActive()) {
         f32 ambRate = g_env_light.bg_amb_col[0].r / 255.0f;
         amb.r = (amb.r + 8) * (6.0f * ambRate);
 
@@ -1046,7 +1046,7 @@ void dFlower_packet_c::draw() {
                     sp64.b = ((sp44->field_0x04 >> 0xA) & 0x1F) * 2;
                 }
 
-                if (daPy_py_c::checkNowWolfPowerUp()) {
+                if (grassSensePresentationActive()) {
                     f32 var_f31 = g_env_light.bg_amb_col[0].r / 255.0f;
                     f32 var_f1 = (((sp44->field_0x04 & 0x1F) * 2 + 0x10));
                     sp64.r = var_f1 * (var_f31 * 4.0f);
@@ -1223,7 +1223,7 @@ void dFlower_packet_c::draw() {
                     break;
                 }
 
-                if (daPy_py_c::checkNowWolfPowerUp()) {
+                if (grassSensePresentationActive()) {
                     f32 var_f30 = g_env_light.bg_amb_col[0].r / 255.0f;
                     sp28.r = (sp28.r + 8) * (6.0f * var_f30);
 

@@ -1482,14 +1482,41 @@ void mDoGph_gInf_c::bloom_c::remove() {
 }
 
 #if TARGET_PC
-void mDoGph_gInf_c::bloom_c::draw2() {
+static void get_bloom_source_size(view_port_class* viewport, f32* width, f32* height) {
+    const f32 render_width = JUTVideo::getManager()->getRenderWidth();
+    const f32 render_height = JUTVideo::getManager()->getRenderHeight();
+    if (viewport != NULL) {
+        *width = viewport->width * (render_width / FB_WIDTH);
+        *height = viewport->height * (render_height / FB_HEIGHT);
+    } else {
+        *width = render_width;
+        *height = render_height;
+    }
+}
+
+static void set_bloom_viewport(view_port_class* viewport) {
+    if (viewport != NULL) {
+        GXSetViewport(viewport->x_orig, viewport->y_orig, viewport->width, viewport->height,
+                      viewport->near_z, viewport->far_z);
+        GXSetScissor(viewport->scissor.x_orig, viewport->scissor.y_orig,
+                     viewport->scissor.width, viewport->scissor.height);
+    } else {
+        GXSetViewport(0.0f, 0.0f, FB_WIDTH, FB_HEIGHT, 0.0f, 1.0f);
+        GXSetScissor(0, 0, FB_WIDTH, FB_HEIGHT);
+    }
+}
+
+void mDoGph_gInf_c::bloom_c::draw2(view_port_class* viewport) {
     ZoneScoped;
     bool enabled = mEnable;
     if (mMonoColor.a == 0 && !enabled)
         return;
 
-    f32 width = JUTVideo::getManager()->getRenderWidth();
-    f32 height = JUTVideo::getManager()->getRenderHeight();
+    f32 width;
+    f32 height;
+    get_bloom_source_size(viewport, &width, &height);
+
+    set_bloom_viewport(viewport);
 
     GXLoadTexObj(getFrameBufferTexObj(), GX_TEXMAP0);
     GXSetNumChans(0);
@@ -1607,7 +1634,9 @@ void mDoGph_gInf_c::bloom_c::draw2() {
 
     if (enabled) {
         GXCreateFrameBuffer(divRects[2].x + divRects[2].w, divRects[1].y + divRects[1].h);
+        // Co-op: the bloom pyramid occupies a viewport-sized private target.
         GXSetViewportRender(0.0f, 0.0f, width, height, 0.0f, 1.0f); // use oversized viewport to make the math easier
+        GXSetScissorRender(0, 0, width, height);
 
         GXSetNumTevStages(3);
         GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
@@ -1720,6 +1749,7 @@ void mDoGph_gInf_c::bloom_c::draw2() {
         GXLoadTexObj(texFinal, GX_TEXMAP0);
 
         GXRestoreFrameBuffer();
+        set_bloom_viewport(viewport);
 
         // Now blend our bloom into the real FB.
         GXSetTevColor(GX_TEVREG0, mBlendColor);
@@ -1738,10 +1768,24 @@ void mDoGph_gInf_c::bloom_c::draw2() {
 }
 #endif
 
-void mDoGph_gInf_c::bloom_c::draw() {
+void mDoGph_gInf_c::bloom_c::draw(view_port_class* viewport) {
     ZoneScoped;
+#if TARGET_PC
+    // Co-op: retain viewport-sized bloom source/composite bounds for structured diagnostics.
+    f32 source_width_f;
+    f32 source_height_f;
+    get_bloom_source_size(viewport, &source_width_f, &source_height_f);
+    const int source_width = static_cast<int>(source_width_f);
+    const int source_height = static_cast<int>(source_height_f);
+    dusk::coop::render_effects::recordBloomPresentation(
+        static_cast<int>(dusk::getSettings().game.bloomMode.getValue()), source_width,
+        source_height, viewport != NULL ? viewport->x_orig : 0.0f,
+        viewport != NULL ? viewport->y_orig : 0.0f,
+        viewport != NULL ? viewport->width : static_cast<f32>(source_width),
+        viewport != NULL ? viewport->height : static_cast<f32>(source_height));
+#endif
     if (dusk::getSettings().game.bloomMode.getValue() == dusk::BloomMode::Dusk) {
-        draw2();
+        draw2(viewport);
         return;
     }
     if (dusk::getSettings().game.bloomMode.getValue() != dusk::BloomMode::Classic) {
@@ -1750,10 +1794,20 @@ void mDoGph_gInf_c::bloom_c::draw() {
 
     bool enabled = mEnable && m_buffer != NULL;
     if (mMonoColor.a != 0 || enabled) {
-        f32 width = FB_WIDTH;
-        f32 height = FB_HEIGHT;
+        #if TARGET_PC
+        f32 width;
+        f32 height;
+        get_bloom_source_size(viewport, &width, &height);
+        #else
+        f32 width = viewport != NULL ? viewport->width : FB_WIDTH;
+        f32 height = viewport != NULL ? viewport->height : FB_HEIGHT;
+        #endif
+#if TARGET_PC
+        set_bloom_viewport(viewport);
+#else
         GXSetViewport(0.0f, 0.0f, width, height, 0.0f, 1.0f);
         GXSetScissor(0, 0, width, height);
+#endif
 
         GXLoadTexObj(getFrameBufferTexObj(), GX_TEXMAP0);
         GXSetNumChans(0);
@@ -1798,7 +1852,10 @@ void mDoGph_gInf_c::bloom_c::draw() {
         }
         if (enabled) {
 #ifdef TARGET_PC
+            // Co-op: Classic bloom filters only the active native viewport offscreen.
             GXCreateFrameBuffer(width, height);
+            GXSetViewportRender(0.0f, 0.0f, width, height, 0.0f, 1.0f);
+            GXSetScissorRender(0, 0, width, height);
 #else
             // Store off m_buffer to copy over again at the end.
             GXSetTexCopySrc(0, 0, width / 2, height / 2);
@@ -1941,6 +1998,7 @@ void mDoGph_gInf_c::bloom_c::draw() {
 
 #ifdef TARGET_PC
             GXRestoreFrameBuffer();
+            set_bloom_viewport(viewport);
 #else
             // Copy back m_buffer to screen.
             GXInitTexObj(&tmp_tex2, m_buffer, width / 2, height / 2, GX_TF_RGBA8, GX_CLAMP, GX_CLAMP,
@@ -2012,6 +2070,18 @@ static void retry_captue_frame(view_class* param_0, view_port_class* param_1, in
         GXSetTexCopyDst(var_r24, var_r23, (GXTexFmt)mDoGph_gInf_c::getFrameBufferTimg()->format, GX_TRUE);
 #endif
         GXCopyTex(tex, GX_FALSE);
+#ifdef TARGET_PC
+        mDoGph_gInf_c::getFrameBufferTexObj()->reset();
+        f32 source_width;
+        f32 source_height;
+        get_bloom_source_size(param_1, &source_width, &source_height);
+        GXInitTexObj(mDoGph_gInf_c::getFrameBufferTexObj(), tex,
+                     static_cast<u16>(source_width), static_cast<u16>(source_height),
+                     (GXTexFmt)mDoGph_gInf_c::getFrameBufferTimg()->format, GX_CLAMP, GX_CLAMP,
+                     GX_FALSE);
+        GXInitTexObjLOD(mDoGph_gInf_c::getFrameBufferTexObj(), GX_LINEAR, GX_LINEAR, 0.0f, 0.0f,
+                        0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
+#endif
         GXPixModeSync();
         GXInvalidateTexAll();
     }
@@ -2300,6 +2370,10 @@ int mDoGph_Painter() {
 
         if (camera_p != NULL) {
 #if TARGET_PC
+            dusk::coop::render_effects::beginViewport(window_idx, camera_id, &camera_p->view,
+                                                       window_p->getViewPort());
+#endif
+#if TARGET_PC
             const bool split_screen_active =
                 dusk::coop::event_presentation::shouldPresentSplitViewports();
             const bool refresh_viewport_world_state =
@@ -2317,6 +2391,10 @@ int mDoGph_Painter() {
                 dComIfGd_setView(&camera_p->view);
                 dComIfGd_setViewport(shadow_view_port);
                 j3dSys.setViewMtx(camera_p->view.viewMtx);
+                // Co-op: shadow and material refresh consume this viewport owner's palette
+                // and camera-derived Twilight lights without advancing environment simulation.
+                dusk::coop::render_effects::applyEnvironmentForCurrentViewport();
+                dusk::coop::render_effects::applyTwilightLightsForCurrentViewport();
                 dKy_setLight();
                 dKy_setLight_again();
                 dusk::coop::render_materials::refreshKankyoMaterialsForCurrentView();
@@ -2428,6 +2506,11 @@ int mDoGph_Painter() {
 
 #ifndef TARGET_PC
             j3dSys.setViewMtx(camera_p->view.viewMtx);
+#endif
+#if TARGET_PC
+            // Co-op: install the Base/Sense and Twilight snapshots retained for this camera.
+            dusk::coop::render_effects::applyEnvironmentForCurrentViewport();
+            dusk::coop::render_effects::applyTwilightLightsForCurrentViewport();
 #endif
             dKy_setLight();
 #if TARGET_PC
@@ -2565,12 +2648,24 @@ int mDoGph_Painter() {
                 dusk::coop::render_effects::shouldReplayLateWorldEffectTail();
             const bool run_fullscreen_effects =
                 dusk::coop::render_effects::shouldRunFullscreenFramebufferEffects();
+            const bool run_viewport_bloom =
+                dusk::coop::render_effects::shouldRunViewportBloom();
+            // Co-op: keep each still-global framebuffer family independently gated while
+            // viewport-safe bloom runs for every presented camera.
+            const bool run_motion_blur = dusk::coop::render_effects::shouldRunMotionBlur();
+            const bool run_depth_of_field =
+                dusk::coop::render_effects::shouldRunDepthOfField();
+            const bool run_indirect_screen =
+                dusk::coop::render_effects::shouldRunIndirectScreenPasses();
+            const bool run_fullscreen_2d =
+                dusk::coop::render_effects::shouldRunFullscreen2DOverlays();
+            const bool run_fades = dusk::coop::render_effects::shouldRunFades();
             if (!dComIfGp_isPauseFlag() && replay_late_world_effects) {
                 #if DEBUG
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                if (run_fullscreen_effects) {
+                if (run_motion_blur) {
                     GX_DEBUG_GROUP(motionBlure, &camera_p->view);
                 }
 
@@ -2581,7 +2676,7 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                if (run_fullscreen_effects) {
+                if (run_depth_of_field) {
                     GX_DEBUG_GROUP(drawDepth2, &camera_p->view, view_port,
                                    dComIfGp_getCameraZoomForcus(camera_id));
                     GXInvalidateTexAll();
@@ -2723,11 +2818,11 @@ int mDoGph_Painter() {
 
                 GXSetClipMode(GX_CLIP_ENABLE);
 
-                if (run_fullscreen_effects) {
+                if (run_indirect_screen) {
                     GX_DEBUG_GROUP(dComIfGd_drawIndScreen);
                 }
 
-                if (run_fullscreen_effects &&
+                if (run_indirect_screen &&
                     strcmp(dComIfGp_getStartStageName(), "F_SP124") == 0) {
                     retry_captue_frame(&camera_p->view, view_port,
                                        dComIfGp_getCameraZoomForcus(camera_id));
@@ -2751,7 +2846,7 @@ int mDoGph_Painter() {
 
                 cMtx_lookAt(m2, &sp38c, &cXyz::Zero, &sp398, 0);
                 j3dSys.setViewMtx(m2);
-                if (run_fullscreen_effects) {
+                if (run_fullscreen_2d) {
                     GX_DEBUG_GROUP(dComIfGd_drawXluList2DScreen);
                 }
 
@@ -2767,8 +2862,9 @@ int mDoGph_Painter() {
 
                 j3dSys.reinitGX();
 
-                if (run_fullscreen_effects &&
-                    (g_env_light.camera_water_in_status || !strcmp(dComIfGp_getStartStageName(), "D_MN08")))
+                if (run_viewport_bloom &&
+                    (!run_fullscreen_effects || g_env_light.camera_water_in_status ||
+                     !strcmp(dComIfGp_getStartStageName(), "D_MN08")))
                 {
                     u8 enable = mDoGph_gInf_c::getBloom()->getEnable();
                     GXColor color = *mDoGph_gInf_c::getBloom()->getMonoColor();
@@ -2785,13 +2881,17 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                if (run_fullscreen_effects) {
-                    GX_DEBUG_GROUP(mDoGph_gInf_c::getBloom()->draw);
+                if (run_viewport_bloom) {
+#if TARGET_PC
+                    mDoGph_gInf_c::getBloom()->draw(view_port);
                     // Co-op: bloom helpers can restore fullscreen GX state; return to this
                     // window before tail overlays.
                     set_window_viewport();
                     j3dSys.setViewMtx(camera_p->view.viewMtx);
                     GXSetProjection(camera_p->view.projMtx, GX_PERSPECTIVE);
+#else
+                    GX_DEBUG_GROUP(mDoGph_gInf_c::getBloom()->draw);
+#endif
                 }
 
                 #if DEBUG
@@ -2821,7 +2921,7 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                if (run_fullscreen_effects && fapGmHIO_getParticle()) {
+                if (run_fullscreen_2d && fapGmHIO_getParticle()) {
                     #if WIDESCREEN_SUPPORT
                     if (mDoGph_gInf_c::isWideZoom()) {
                         ortho.setOrtho(0.0f, 0.0f, FB_WIDTH_BASE, FB_HEIGHT_BASE, 100000.0f, -100000.0f);
@@ -2851,7 +2951,7 @@ int mDoGph_Painter() {
                     trimming(&camera_p->view, view_port);
                 }
 
-                if (run_fullscreen_effects &&
+                if (run_fades &&
                     strcmp(dComIfGp_getStartStageName(), "F_SP127") != 0 &&
                     (mDoGph_gInf_c::isFade() & 0x80) == 0)
                 {
@@ -2863,6 +2963,10 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::stopCpuTimer("カラーフェード描画（レンダリング）");
                 #endif
             }
+#if TARGET_PC
+            // Co-op: viewport ownership ends with this window's complete painter replay.
+            dusk::coop::render_effects::endViewport();
+#endif
         }
         };
 
@@ -2888,6 +2992,11 @@ int mDoGph_Painter() {
                 dComIfGd_setView(&primary_camera->view);
                 dComIfGd_setViewport(primary_window->getViewPort());
                 j3dSys.setViewMtx(primary_camera->view.viewMtx);
+                // Co-op: shared render globals leave the replay loop in canonical P1 state.
+                dusk::coop::render_effects::applyEnvironmentForSlot(
+                    dusk::coop::PlayerSlot::Primary);
+                dusk::coop::render_effects::applyTwilightLightsForSlot(
+                    dusk::coop::PlayerSlot::Primary);
                 dKy_setLight();
                 dKy_setLight_again();
                 dusk::coop::render_materials::refreshKankyoMaterialsForCurrentView();

@@ -122,6 +122,10 @@ The hooks are guardrails, not a replacement for judgment. They exist to preserve
   - Also reminds interaction/event edits to classify singular authored sequences separately, keep howling stones P1/global, opt authored fullscreen sequences, interactive dialogue, and captured menu surfaces into `event_presentation` individually, keep fullscreen menu input ownership in `ui_owner`, and keep dialogue input ownership in `message_owner`.
   - Also distinguishes P1-authored `EnemyAuthoredDemo` collapse from retained-player `EnemyRetainedInteraction`, including native acceptance, camera-reset, and actor-deletion lifecycle requirements.
   - Also reminds Camera-1 fullscreen edits to preserve viewport-owned kankyo/light/shadow/culling refresh even when only the P2 presenter window is drawn.
+  - Also reminds viewport-effect edits to advance environment, Sense fades/emitters, Twilight
+    lights, and animation only in their native simulation lifecycle; painter replay may install
+    snapshots, rebuild camera-derived matrices, filter owned emitters, and restore P1, but must not
+    advance those systems again or tie them to frame interpolation.
   - Also reminds ItemGet edits to retain the producer owner before `DEFAULT_GETITEM`, preserve one owner across staff/item/message/status/presentation consumers, and release only at the post-camera painter boundary.
   - Also watches plan-map edits and reminds Codex to retire completed plans cleanly instead of leaving stale active-plan breadcrumbs.
 

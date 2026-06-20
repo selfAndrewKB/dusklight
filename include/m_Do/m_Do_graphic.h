@@ -22,6 +22,7 @@ int mDoGph_Create();
 void mDoGph_drawFilterQuad(s8 param_0, s8 param_1);
 
 struct ResTIMG;
+class view_port_class;
 class JKRSolidHeap;
 class mDoGph_gInf_c {
 public:
@@ -30,9 +31,9 @@ public:
         bloom_c() { m_buffer = NULL; }
         void create();
         void remove();
-        void draw();
+        void draw(view_port_class* viewport = NULL);
 #if TARGET_PC
-        void draw2();
+        void draw2(view_port_class* viewport);
 #endif
 
         u8 getEnable() { return mEnable; }
