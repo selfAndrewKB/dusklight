@@ -15,6 +15,16 @@
 #include "f_op/f_op_actor_enemy.h"
 #include "f_op/f_op_camera_mng.h"
 
+#if TARGET_PC
+#include "dusk/coop/damage_owner.h"
+#include "dusk/coop/defender_owner.h"
+#include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/item_awareness.h"
+#include "dusk/coop/player_query.h"
+#include "dusk/coop/selected_target_state.h"
+#include <vector>
+#endif
+
 class daB_TN_HIO_c {
 public:
     daB_TN_HIO_c();
@@ -260,6 +270,214 @@ static f32 ground_y_part[16] = {
 };
 }  // namespace
 
+#if TARGET_PC
+namespace {
+
+struct CoOpTnTargetState {
+    dusk::coop::selected_target_state::SelectedTargetState state;
+    f32 distance = 0.0f;
+    f32 distanceXZ = 0.0f;
+    s16 angleY = 0;
+};
+
+struct CoOpTnOwnerState {
+    daB_TN_c* enemy = NULL;
+    dusk::coop::PlayerSlot damageSlot = dusk::coop::PlayerSlot::Invalid;
+    dusk::coop::PlayerSlot defenderSlot = dusk::coop::PlayerSlot::Invalid;
+};
+
+std::vector<CoOpTnOwnerState> s_coOpTnOwnerStates;
+
+static CoOpTnOwnerState* coOpFindTnOwnerState(daB_TN_c* i_this, bool create) {
+    for (CoOpTnOwnerState& state : s_coOpTnOwnerStates) {
+        if (state.enemy == i_this) {
+            return &state;
+        }
+    }
+
+    if (!create) {
+        return NULL;
+    }
+
+    CoOpTnOwnerState state;
+    state.enemy = i_this;
+    s_coOpTnOwnerStates.push_back(state);
+    return &s_coOpTnOwnerStates.back();
+}
+
+// Co-op: armored and unarmored combat share one behavior-owned opponent. Damage and defender
+// identity are retained separately below so a second player can interrupt or block independently.
+static void coOpSelectTnTarget(daB_TN_c* i_this, const char* label,
+                               dusk::coop::EnemyTargetMode mode, bool committed) {
+    dusk::coop::EnemyTargetContext context;
+    context.observer = i_this;
+    context.scope = dusk::coop::EnemyTargetScope::Combat;
+    context.mode = mode;
+    context.label = label;
+    context.committed = committed;
+    dusk::coop::selectEnemyTarget(context);
+}
+
+static CoOpTnTargetState coOpTnTargetState(daB_TN_c* i_this, const char* label) {
+    CoOpTnTargetState result;
+    const dusk::coop::EnemyTargetResult target =
+        dusk::coop::getEnemyTarget(i_this, dusk::coop::EnemyTargetScope::Combat);
+    result.state = dusk::coop::selected_target_state::stateForEnemyTarget(target);
+    if (result.state.available) {
+        result.distance = target.distance;
+        result.distanceXZ = target.distanceXZ;
+        result.angleY = target.angleY;
+        dusk::coop::selected_target_state::recordSelectedTargetState(
+            i_this, label, result.state,
+            dusk::coop::selected_target_state::SelectedTargetStateReason::EnemyTarget);
+        return result;
+    }
+
+    daPy_py_c* player = daPy_getPlayerActorClass();
+    if (player != NULL) {
+        result.state.actor = player;
+        result.state.player = player;
+        result.state.pos = player->current.pos;
+        result.state.shapeAngleY = player->shape_angle.y;
+        result.state.speedF = player->getSpeedF();
+        result.state.damageWaitTimer = player->getDamageWaitTimer();
+        result.state.cutType = player->getCutType();
+        result.state.cutCount = player->getCutCount();
+        result.state.cutActive = player->getCutType() != daPy_py_c::CUT_TYPE_NONE;
+        result.state.wolf = player->checkWolf();
+        result.state.available = true;
+        result.distance = fopAcM_searchPlayerDistance(i_this);
+        result.distanceXZ = fopAcM_searchPlayerDistanceXZ(i_this);
+        result.angleY = fopAcM_searchPlayerAngleY(i_this);
+    }
+    dusk::coop::selected_target_state::recordSelectedTargetState(
+        i_this, label, result.state,
+        dusk::coop::selected_target_state::SelectedTargetStateReason::InvalidTarget);
+    return result;
+}
+
+static void coOpRememberTnDamageOwner(
+    daB_TN_c* i_this, const dusk::coop::damage_owner::DamageOwnerResult& owner) {
+    if (!owner.found || owner.slot == dusk::coop::PlayerSlot::Invalid) {
+        return;
+    }
+
+    CoOpTnOwnerState* state = coOpFindTnOwnerState(i_this, true);
+    state->damageSlot = owner.slot;
+}
+
+static dusk::coop::damage_owner::DamageOwnerResult coOpTnDamageOwner(
+    daB_TN_c* i_this, cCcD_Obj* collider) {
+    const dusk::coop::damage_owner::DamageOwnerResult owner =
+        dusk::coop::damage_owner::resolveDamageOwner(i_this, collider);
+    coOpRememberTnDamageOwner(i_this, owner);
+    return owner;
+}
+
+static daPy_py_c* coOpTnDamagePlayer(daB_TN_c* i_this) {
+    CoOpTnOwnerState* state = coOpFindTnOwnerState(i_this, false);
+    if (state != NULL && state->damageSlot != dusk::coop::PlayerSlot::Invalid) {
+        fopAc_ac_c* actor = dusk::coop::getPlayer(state->damageSlot);
+        if (actor != NULL) {
+            return static_cast<daPy_py_c*>(actor);
+        }
+    }
+    return daPy_getPlayerActorClass();
+}
+
+static s16 coOpTnDamageAngleY(daB_TN_c* i_this) {
+    daPy_py_c* player = coOpTnDamagePlayer(i_this);
+    return player != NULL ? fopAcM_searchActorAngleY(i_this, player)
+                          : fopAcM_searchPlayerAngleY(i_this);
+}
+
+static dusk::coop::defender_owner::DefenderOwnerResult coOpRecordTnDefender(
+    daB_TN_c* i_this, dCcD_GObjInf* collider, const char* label) {
+    const dusk::coop::defender_owner::DefenderOwnerResult defender =
+        dusk::coop::defender_owner::resolveDefenderOwner(i_this, collider);
+    dusk::coop::defender_owner::recordDefenderOwnerContact(label, i_this, defender);
+    if (defender.found && defender.slot != dusk::coop::PlayerSlot::Invalid) {
+        CoOpTnOwnerState* state = coOpFindTnOwnerState(i_this, true);
+        state->defenderSlot = defender.slot;
+    }
+    return defender;
+}
+
+static daPy_py_c* coOpTnDefenderPlayer(daB_TN_c* i_this) {
+    CoOpTnOwnerState* state = coOpFindTnOwnerState(i_this, false);
+    if (state != NULL && state->defenderSlot != dusk::coop::PlayerSlot::Invalid) {
+        fopAc_ac_c* actor = dusk::coop::getPlayer(state->defenderSlot);
+        if (actor != NULL) {
+            return static_cast<daPy_py_c*>(actor);
+        }
+    }
+    return daPy_getPlayerActorClass();
+}
+
+static bool coOpTnClosestHookshot(daB_TN_c* i_this, s16* angleY) {
+    bool found = false;
+    f32 closest = 0.0f;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot slot, fopAc_ac_c* actor) {
+        const dusk::coop::selected_target_state::SelectedTargetState state =
+            dusk::coop::selected_target_state::stateForSlot(slot, actor);
+        if (!state.available || state.player == NULL || !state.status0_0x4000) {
+            return;
+        }
+
+        cXyz* pos = state.player->getHookshotTopPos();
+        if (pos == NULL) {
+            return;
+        }
+
+        const f32 distance = pos->absXZ(i_this->current.pos);
+        if (distance < 300.0f && (!found || distance < closest)) {
+            found = true;
+            closest = distance;
+            *angleY = cLib_targetAngleY(&i_this->current.pos, pos);
+        }
+    });
+    return found;
+}
+
+static bool coOpTnClosestIronBall(daB_TN_c* i_this, s16* angleY) {
+    bool found = false;
+    f32 closest = 0.0f;
+    dusk::coop::forEachActivePlayer([&](dusk::coop::PlayerSlot slot, fopAc_ac_c* actor) {
+        const dusk::coop::selected_target_state::SelectedTargetState state =
+            dusk::coop::selected_target_state::stateForSlot(slot, actor);
+        if (!state.available || state.player == NULL || state.player->checkIronBallGroundStop()) {
+            return;
+        }
+
+        cXyz* pos = state.player->getIronBallCenterPos();
+        if (pos == NULL) {
+            return;
+        }
+
+        const f32 distance = pos->absXZ(i_this->current.pos);
+        if (distance < 300.0f && (!found || distance < closest)) {
+            found = true;
+            closest = distance;
+            *angleY = cLib_targetAngleY(&i_this->current.pos, pos);
+        }
+    });
+    return found;
+}
+
+static void coOpClearTnOwnerState(daB_TN_c* i_this) {
+    for (std::vector<CoOpTnOwnerState>::iterator it = s_coOpTnOwnerStates.begin();
+         it != s_coOpTnOwnerStates.end(); ++it)
+    {
+        if (it->enemy == i_this) {
+            s_coOpTnOwnerStates.erase(it);
+            return;
+        }
+    }
+}
+
+}  // namespace
+#endif
+
 daB_TN_HIO_c::daB_TN_HIO_c() {
     mUnk1 = -1;
     mScale = 1.3f;
@@ -309,7 +527,12 @@ void daB_TN_c::calcNeckAngle() {
         mDoMtx_stack_c::copy(mpModelMorf2->getModel()->getAnmMtx(5));
         mDoMtx_MtxToRot(mDoMtx_stack_c::get(), &acStack_18);
 
+#if TARGET_PC
+        // Co-op: joint tracking consumes the existing Combat owner without acquiring from draw/model code.
+        sVar1 = coOpTnTargetState(this, "b_tn.neck").angleY - (acStack_18.y + 0x4000);
+#else
         sVar1 = fopAcM_searchPlayerAngleY(this) - (acStack_18.y + 0x4000);
+#endif
         if (sVar1 > 0x3000) {
             sVar1 = 0x3000;
         }
@@ -330,7 +553,12 @@ void daB_TN_c::calcWaistAngle() {
         mDoMtx_stack_c::copy(mpModelMorf2->getModel()->getAnmMtx(1));
         mDoMtx_MtxToRot(mDoMtx_stack_c::get(), &acStack_18);
 
+#if TARGET_PC
+        // Co-op: waist tracking follows the retained opponent chosen by simulation.
+        sVar1 = coOpTnTargetState(this, "b_tn.waist").angleY - shape_angle.y;
+#else
         sVar1 = fopAcM_searchPlayerAngleY(this) - shape_angle.y;
+#endif
         if (sVar1 > 0x3000) {
             sVar1 = 0x3000;
         }
@@ -619,7 +847,14 @@ void daB_TN_c::calcSwordMoveA() {
         if (mType == 0) {
             field_0x8dc[idx].set(0.0f, 0.0f, 70.0f);
         } else {
+#if TARGET_PC
+            // Co-op: the discarded weapon flies away from the player whose hit broke the armor.
+            daPy_py_c* damagePlayer = coOpTnDamagePlayer(this);
+            cXyz sp20 = damagePlayer != NULL ? damagePlayer->current.pos
+                                             : daPy_getPlayerActorClass()->current.pos;
+#else
             cXyz sp20 = daPy_getPlayerActorClass()->current.pos;
+#endif
             sp20.y += 200.0f;
             s16 sVar5 = cLib_targetAngleY(&mPositions[idx], &sp20);
             s16 sVar6 = cLib_targetAngleX(&mPositions[idx], &sp20);
@@ -754,7 +989,17 @@ void daB_TN_c::calcOtherPartMove(int i_idx) {
         mPositionsCopy[i_idx] = mPositions[i_idx];
         mDoMtx_MtxToRot(mDoMtx_stack_c::get(), &field_0x99c[i_idx]);
 
+#if TARGET_PC
+        // Co-op: ordinary armor debris responds to the hitter; the authored type-0 change demo
+        // keeps its original protagonist composition.
+        daPy_py_c* damagePlayer = mType == 0 && mActionMode1 == ACT_CHANGEDEMO
+                                      ? daPy_getPlayerActorClass()
+                                      : coOpTnDamagePlayer(this);
+        sp7c = damagePlayer != NULL ? damagePlayer->current.pos
+                                    : daPy_getPlayerActorClass()->current.pos;
+#else
         sp7c = daPy_getPlayerActorClass()->current.pos;
+#endif
 
         if (i_idx == 14) {
             sVar1 = shape_angle.y + 0x4000;
@@ -963,7 +1208,13 @@ void daB_TN_c::setBodyShield() {
     daPy_py_c* player;
     bool check = true;
 
+#if TARGET_PC
+    // Co-op: proactive shield posture reads the selected opponent, not the most recent hitter.
+    const CoOpTnTargetState target = coOpTnTargetState(this, "b_tn.body_shield");
+    player = target.state.player != NULL ? target.state.player : daPy_getPlayerActorClass();
+#else
     player = (daPy_py_c*)daPy_getPlayerActorClass();
+#endif
     if (mActionMode1 <= 1) {
         for (int i = 0; i < 3; i++) {
             mSphA[i].OnTgShield();
@@ -973,7 +1224,11 @@ void daB_TN_c::setBodyShield() {
         mSphC.OnTgSetBit();
 
     } else if (mActionMode1 < 8) {
+#if TARGET_PC
+        if (!(target.state.wolf || player->getCutType() == daPy_py_c::CUT_TYPE_TWIRL) &&
+#else
         if (!(daPy_py_c::checkNowWolf() || player->getCutType() == daPy_py_c::CUT_TYPE_TWIRL) &&
+#endif
             player->getCutCount() >= 4)
         {
             mCutFlag = true;
@@ -981,7 +1236,11 @@ void daB_TN_c::setBodyShield() {
             mCutFlag = false;
         }
 
+#if TARGET_PC
+        if (!field_0xa91 || abs((s16)(target.angleY - shape_angle.y)) > 0x3000) {
+#else
         if (!field_0xa91 || abs((s16)(fopAcM_searchPlayerAngleY(this) - shape_angle.y)) > 0x3000) {
+#endif
             check = false;
         }
 
@@ -999,7 +1258,11 @@ void daB_TN_c::setBodyShield() {
             mTimer10 = 0;
         }
 
+#if TARGET_PC
+        if (!(check || target.state.wolf || mTimer10 != 0)) {
+#else
         if (!(check || daPy_py_c::checkNowWolf() || mTimer10 != 0)) {
+#endif
             for (int i = 0; i < 3; i++) {
                 mSphA[i].OffTgShield();
             }
@@ -1024,7 +1287,11 @@ void daB_TN_c::setBodyShield() {
     } else {
         mCutFlag = false;
 
+#if TARGET_PC
+        if (!(target.state.wolf || player->getCutType() == daPy_py_c::CUT_TYPE_TWIRL ||
+#else
         if (!(daPy_py_c::checkNowWolf() || player->getCutType() == daPy_py_c::CUT_TYPE_TWIRL ||
+#endif
               player->getCutType() == daPy_py_c::CUT_TYPE_MORTAL_DRAW_B ||
               player->getCutType() == daPy_py_c::CUT_TYPE_MORTAL_DRAW_A ||
               player->getCutCount() < 4))
@@ -1039,7 +1306,11 @@ void daB_TN_c::setBodyShield() {
 
         int chck = false;
         if (player->getCutType() != daPy_py_c::CUT_TYPE_HEAD_JUMP &&
+#if TARGET_PC
+            ((field_0xa91 == true && mCutFlag) || mTimer10 != 0 || target.state.wolf))
+#else
             ((field_0xa91 == true && mCutFlag) || mTimer10 != 0 || daPy_py_c::checkNowWolf()))
+#endif
         {
             chck = true;
         }
@@ -1064,7 +1335,11 @@ static int m_attack_timer;
 
 bool daB_TN_c::checkNormalAttackAble() {
     if (mType == 1) {
+#if TARGET_PC
+        if (coOpTnTargetState(this, "b_tn.attack_able").state.cutCount != 0) {
+#else
         if (daPy_getPlayerActorClass()->getCutCount() != 0) {
+#endif
             mTimer3 = cM_rndF(60.0f) + 30.0f;
             return 0;
         }
@@ -1087,9 +1362,17 @@ bool daB_TN_c::checkNormalAttackAble() {
 
 u32 daB_TN_c::getCutType() {
     u32 rv = 0;
+#if TARGET_PC
+    // Co-op: blocked and damaging sword reactions use the player who produced the current hit.
+    daPy_py_c* damagePlayer = coOpTnDamagePlayer(this);
+#endif
 
     if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_NORMAL_SWORD)) {
+#if TARGET_PC
+        if (damagePlayer != NULL && damagePlayer->getCutCount() >= 4) {
+#else
         if (daPy_getPlayerActorClass()->getCutCount() >= 4) {
+#endif
             rv = 4;
         }
 
@@ -1098,7 +1381,11 @@ u32 daB_TN_c::getCutType() {
         }
     }
 
+#if TARGET_PC
+    switch (damagePlayer != NULL ? damagePlayer->getCutType() : daPy_py_c::CUT_TYPE_NONE) {
+#else
     switch (daPy_getPlayerActorClass()->getCutType()) {
+#endif
     case daPy_py_c::CUT_TYPE_TURN_LEFT:
     case daPy_py_c::CUT_TYPE_TURN_RIGHT:
         if (mTimer13 == 0) {
@@ -1144,8 +1431,16 @@ u32 daB_TN_c::getCutType() {
 void daB_TN_c::setDamage(dCcD_Sph* i_sph, int param_2) {
     u8 uVar5;
 
+#if TARGET_PC
+    const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+        coOpTnDamageOwner(this, mAtInfo.mpCollider);
+#endif
     health = 100;
     cc_at_check(this, &mAtInfo);
+#if TARGET_PC
+    dusk::coop::damage_owner::recordDamageOwnerHit("b_tn.damage", this, damageOwner, &mAtInfo,
+                                                   mActionMode1);
+#endif
     if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_UNK)) {
         mInvincibilityTimer = 20;
     } else if (mAtInfo.mpCollider->ChkAtType(AT_TYPE_BOMB)) {
@@ -1169,7 +1464,11 @@ void daB_TN_c::setDamage(dCcD_Sph* i_sph, int param_2) {
         }
 
         if ((uVar4 & 3) != 0) {
+#if TARGET_PC
+            if (abs((s16)(coOpTnDamageAngleY(this) - shape_angle.y)) > 0x4000) {
+#else
             if (abs((s16)(fopAcM_searchPlayerAngleY(this) - shape_angle.y)) > 0x4000) {
+#endif
                 if ((uVar4 & 1) != 0) {
                     uVar5 = ACTION2_1_e;
                 } else {
@@ -1232,6 +1531,10 @@ void daB_TN_c::damage_check() {
 
     for (int i = 0; i < 4; i++) {
         if (mSwordSphs[i].ChkAtHit()) {
+#if TARGET_PC
+            // Co-op: sword contact retains the player who actually blocked or received this swing.
+            coOpRecordTnDefender(this, &mSwordSphs[i], "b_tn.sword_contact");
+#endif
             field_0xa9a = true;
             if (mSwordSphs[i].ChkAtShieldHit() && mSwordSphs[i].GetAtSpl() == 10) {
                 setSwordAtBit(0);
@@ -1242,6 +1545,9 @@ void daB_TN_c::damage_check() {
     }
 
     if (mCps.ChkAtHit()) {
+#if TARGET_PC
+        coOpRecordTnDefender(this, &mCps, "b_tn.sword_capsule_contact");
+#endif
         field_0xa9a = true;
         if (mCps.ChkAtShieldHit() && mCps.GetAtSpl() == 10) {
             setSwordAtBit(0);
@@ -1250,6 +1556,9 @@ void daB_TN_c::damage_check() {
     }
 
     if (mSphC.ChkAtHit() && !mSphC.ChkAtShieldHit()) {
+#if TARGET_PC
+        coOpRecordTnDefender(this, &mSphC, "b_tn.shield_attack_contact");
+#endif
         field_0xa9a = true;
         mSound.startCreatureSound(Z2SE_EN_TN_ATK_NO_DMG, 0, -1);
         mSphC.ClrAtHit();
@@ -1294,6 +1603,9 @@ void daB_TN_c::damage_check() {
         }
 
         if (mAtInfo.mpCollider != NULL) {
+#if TARGET_PC
+            coOpTnDamageOwner(this, mAtInfo.mpCollider);
+#endif
             setShieldEffect(&dStack_160);
             setActionMode(ACT_OPENING, ACTION2_2_e);
 
@@ -1308,7 +1620,16 @@ void daB_TN_c::damage_check() {
         return;
     }
 
+#if TARGET_PC
+    if (mSphC.ChkTgHit()) {
+        coOpTnDamageOwner(this, mSphC.GetTgHitObj());
+    }
+    daPy_py_c* damagePlayer = coOpTnDamagePlayer(this);
+    int cut_type =
+        damagePlayer != NULL ? damagePlayer->getCutType() : daPy_py_c::CUT_TYPE_NONE;
+#else
     int cut_type = daPy_getPlayerActorClass()->getCutType();
+#endif
     if (mActionMode1 < 8 && mSphC.ChkTgHit() && mSphC.GetTgHitObj()->ChkAtType(18) &&
         cut_type != daPy_py_c::CUT_TYPE_HEAD_JUMP &&
         cut_type != daPy_py_c::CUT_TYPE_MORTAL_DRAW_B &&
@@ -1342,6 +1663,11 @@ void daB_TN_c::damage_check() {
     }
 
     if (mAtInfo.mpCollider != NULL) {
+#if TARGET_PC
+        coOpTnDamageOwner(this, mAtInfo.mpCollider);
+        damagePlayer = coOpTnDamagePlayer(this);
+        cut_type = damagePlayer != NULL ? damagePlayer->getCutType() : daPy_py_c::CUT_TYPE_NONE;
+#endif
         if (cut_type == daPy_py_c::CUT_TYPE_LARGE_JUMP_FINISH) {
             return;
         } else if (mActionMode1 < 8) {
@@ -1403,7 +1729,11 @@ void daB_TN_c::damage_check() {
                 }
 
                 if (mTimer10 != 0 ||
+#if TARGET_PC
+                    abs((s16)(coOpTnDamageAngleY(this) - shape_angle.y)) < 0x3000 ||
+#else
                     abs((s16)(fopAcM_searchPlayerAngleY(this) - shape_angle.y)) < 0x3000 ||
+#endif
                     cut_type == daPy_py_c::CUT_TYPE_DASH_LEFT ||
                     cut_type == daPy_py_c::CUT_TYPE_DASH_RIGHT)
                 {
@@ -1423,12 +1753,19 @@ void daB_TN_c::damage_check() {
         if (mSphB[i].ChkTgHit()) {
             mAtInfo.mpCollider = mSphB[i].GetTgHitObj();
             dStack_160 = mSphB[i];
+#if TARGET_PC
+            coOpTnDamageOwner(this, mAtInfo.mpCollider);
+#endif
             break;
         }
     }
 
     int bVar1 = false;
+#if TARGET_PC
+    if (abs((s16)(coOpTnDamageAngleY(this) - shape_angle.y)) > 0x3000) {
+#else
     if (abs((s16)(fopAcM_searchPlayerAngleY(this) - shape_angle.y)) > 0x3000) {
+#endif
         bVar1 = true;
     };
 
@@ -1490,8 +1827,16 @@ void daB_TN_c::damage_check() {
                 setShieldEffect(&dStack_160);
                 setActionMode(ACT_GUARDL, ACTION2_0_e);
             } else {
+#if TARGET_PC
+                const dusk::coop::damage_owner::DamageOwnerResult damageOwner =
+                    coOpTnDamageOwner(this, mAtInfo.mpCollider);
+#endif
                 health = 100;
                 cc_at_check(this, &mAtInfo);
+#if TARGET_PC
+                dusk::coop::damage_owner::recordDamageOwnerHit(
+                    "b_tn.hookshot_damage", this, damageOwner, &mAtInfo, mActionMode1);
+#endif
                 mNextActionMode2 = ACTION2_0_e;
                 if (cM_rnd() < 0.5f) {
                     mNextActionMode2 = ACTION2_1_e;
@@ -1549,7 +1894,11 @@ int daB_TN_c::checkMoveArea() {
 
 bool daB_TN_c::checkMoveAngle() {
     s16 sVar1 = cM_atan2s(-current.pos.x, -current.pos.z);
+#if TARGET_PC
+    return abs((s16)(coOpTnTargetState(this, "b_tn.move_angle").angleY - sVar1)) < 0x4000;
+#else
     return abs((s16)(fopAcM_searchPlayerAngleY(this) - sVar1)) < 0x4000;
+#endif
 }
 
 void daB_TN_c::setAttackBlurEffect(int i_data) {
@@ -2020,8 +2369,13 @@ void daB_TN_c::executeOpening() {
 }
 
 void daB_TN_c::executeWaitH() {
+#if TARGET_PC
+    const CoOpTnTargetState target = coOpTnTargetState(this, "b_tn.wait");
+    f32 mPlayerDistance = target.distance;
+#else
     fopAcM_searchPlayerAngleY(this);
     f32 mPlayerDistance = fopAcM_searchPlayerDistance(this);
+#endif
 
     switch (mActionMode2) {
     case ACTION2_0_e:
@@ -2052,9 +2406,16 @@ void daB_TN_c::setAwaitSound() {
 }
 
 void daB_TN_c::executeChaseH() {
+#if TARGET_PC
+    const CoOpTnTargetState target = coOpTnTargetState(this, "b_tn.chase_h");
+    f32 mPlayerDistance = target.distance;
+    s16 sVar4 = target.angleY;
+    s16 sVar5 = target.angleY - cM_atan2s(-current.pos.x, -current.pos.z);
+#else
     f32 mPlayerDistance = fopAcM_searchPlayerDistance(this);
     s16 sVar4 = fopAcM_searchPlayerAngleY(this);
     s16 sVar5 = fopAcM_searchPlayerAngleY(this) - cM_atan2s(-current.pos.x, -current.pos.z);
+#endif
     int mMoveArea = checkMoveArea();
 
     switch (mActionMode2) {
@@ -2361,9 +2722,15 @@ void daB_TN_c::executeChaseH() {
 }
 
 void daB_TN_c::checkStartAttackH() {
+#if TARGET_PC
+    const CoOpTnTargetState target = coOpTnTargetState(this, "b_tn.start_attack_h");
+    f32 mPlayerDistance = target.distance;
+    s16 sVar1 = target.angleY - shape_angle.y;
+#else
     f32 mPlayerDistance = fopAcM_searchPlayerDistance(this);
     fopAcM_searchPlayerAngleY(this);
     s16 sVar1 = fopAcM_searchPlayerAngleY(this) - shape_angle.y;
+#endif
 
     if (mPlayerDistance < 400.0f && abs(sVar1) < 0x3000) {
         if (mNextBreakPart >= 11) {
@@ -2412,8 +2779,14 @@ void daB_TN_c::checkStartAttackH() {
 
 void daB_TN_c::executeAttackH() {
     f32 frame;
+#if TARGET_PC
+    const CoOpTnTargetState target = coOpTnTargetState(this, "b_tn.attack_h");
+    s16 playerAngleY = target.angleY;
+    f32 playerDistance = target.distance;
+#else
     s16 playerAngleY = fopAcM_searchPlayerAngleY(this);
     f32 playerDistance = fopAcM_searchPlayerDistance(this);
+#endif
 
     switch (mActionMode2) {
     case ACTION2_0_e:
@@ -2562,6 +2935,10 @@ void daB_TN_c::executeAttackShieldH() {
 
 void daB_TN_c::executeGuardH() {
     cXyz sp18;
+#if TARGET_PC
+    daPy_py_c* damagePlayer = coOpTnDamagePlayer(this);
+    const s16 damageAngleY = coOpTnDamageAngleY(this);
+#endif
     switch (mActionMode2) {
     case ACTION2_0_e:
         setSwordAtBit(0);
@@ -2576,10 +2953,18 @@ void daB_TN_c::executeGuardH() {
         speedF = 0.0f;
 
         if (field_0xaa8) {
+#if TARGET_PC
+            shape_angle.y = damageAngleY;
+#else
             shape_angle.y = fopAcM_searchPlayerAngleY(this);
+#endif
             setBck(BCK_TNA_GUARD_DAMAGE, 0, 0.0f, 1.0f);
         } else {
+#if TARGET_PC
+            cLib_chaseAngleS(&shape_angle.y, damageAngleY, 0x2000);
+#else
             cLib_chaseAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 0x2000);
+#endif
             setBck(BCK_TNA_GUARD, 0, 0.0f, 1.0f);
         }
         break;
@@ -2595,7 +2980,12 @@ void daB_TN_c::executeGuardH() {
         }
 
         if (mpModelMorf2->isStop() &&
+#if TARGET_PC
+            (damagePlayer == NULL ||
+             damagePlayer->getCutType() != daPy_py_c::CUT_TYPE_HEAD_JUMP))
+#else
             daPy_getPlayerActorClass()->getCutType() != daPy_py_c::CUT_TYPE_HEAD_JUMP)
+#endif
         {
             setActionMode(ACT_CHASEH, ACTION2_0_e);
         }
@@ -2603,8 +2993,13 @@ void daB_TN_c::executeGuardH() {
 }
 
 void daB_TN_c::executeDamageH() {
+#if TARGET_PC
+    s16 mPlayerAngleY = coOpTnDamageAngleY(this);
+    daPy_py_c* player = coOpTnDamagePlayer(this);
+#else
     s16 mPlayerAngleY = fopAcM_searchPlayerAngleY(this);
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
     field_0xa91 = false;
 
     if (mTimer5 == 0) {
@@ -2929,7 +3324,12 @@ void daB_TN_c::executeChangeDemo() {
 }
 
 void daB_TN_c::executeZakoChangeDemo() {
+#if TARGET_PC
+    // Co-op: the regular Darknut's armor-loss transition remains combat, facing the hitter.
+    s16 mPlayerAngleY = coOpTnDamageAngleY(this);
+#else
     s16 mPlayerAngleY = fopAcM_searchPlayerAngleY(this);
+#endif
 
     switch (mActionMode2) {
     case ACTION2_0_e:
@@ -3052,11 +3452,20 @@ void daB_TN_c::executeZakoChangeDemo() {
 }
 
 void daB_TN_c::setWalkDir() {
+#if TARGET_PC
+    const CoOpTnTargetState target = coOpTnTargetState(this, "b_tn.walk_dir");
+    f32 mPlayerDistance = target.distance;
+#else
     f32 mPlayerDistance = fopAcM_searchPlayerDistance(this);
+#endif
 
     if (checkMoveArea()) {
         s16 sVar1 = cM_atan2s(-current.pos.x, -current.pos.z);
+#if TARGET_PC
+        s16 mPlayerAngleY = target.angleY - sVar1;
+#else
         s16 mPlayerAngleY = fopAcM_searchPlayerAngleY(this) - sVar1;
+#endif
         if (abs(mPlayerAngleY) < 0x2000) {
             mWalkDir = 0;
         } else if (abs(mPlayerAngleY) > 0x6000) {
@@ -3193,9 +3602,14 @@ void daB_TN_c::initChaseL(int param_1) {
 }
 
 bool daB_TN_c::checkAttackAble() {
+#if TARGET_PC
+    const CoOpTnTargetState target = coOpTnTargetState(this, "b_tn.attack_range");
+    if (target.distance < 500.0f && abs((s16)(target.angleY - shape_angle.y)) < 0x3000) {
+#else
     if (fopAcM_searchPlayerDistance(this) < 500.0f &&
         abs((s16)(fopAcM_searchPlayerAngleY(this) - shape_angle.y)) < 0x3000)
     {
+#endif
         return true;
     }
 
@@ -3203,9 +3617,17 @@ bool daB_TN_c::checkAttackAble() {
 }
 
 bool daB_TN_c::checkNextMove() {
+#if TARGET_PC
+    const CoOpTnTargetState target = coOpTnTargetState(this, "b_tn.next_move");
+    daPy_py_c* player =
+        target.state.player != NULL ? target.state.player : daPy_getPlayerActorClass();
+    f32 mPlayerDistance = target.distance;
+    s16 mPlayerAngleY = target.angleY - shape_angle.y;
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
     f32 mPlayerDistance = fopAcM_searchPlayerDistance(this);
     s16 mPlayerAngleY = fopAcM_searchPlayerAngleY(this) - shape_angle.y;
+#endif
     s16 isAttackAble = checkAttackAble();
     int iVar1 = 0;
     s16 sVar7 = current.angle.y;
@@ -3216,24 +3638,47 @@ bool daB_TN_c::checkNextMove() {
         iVar1 = 1;
     }
 
+#if TARGET_PC
+    // Co-op: immediate tool dodges scan all active players independently of the sticky opponent.
+    if (coOpTnClosestHookshot(this, &sVar7))
+#else
     if (dComIfGp_checkPlayerStatus0(0, 0x4000) && player->getHookshotTopPos() &&
         player->getHookshotTopPos()->absXZ(current.pos) < 300.0f)
+#endif
     {
+#if !TARGET_PC
         sVar7 = cLib_targetAngleY(&current.pos, player->getHookshotTopPos());
+#endif
         iVar1 = 1;
     }
 
+#if TARGET_PC
+    if (coOpTnClosestIronBall(this, &sVar7))
+#else
     if (player->getIronBallCenterPos() && !player->checkIronBallGroundStop() &&
         player->getIronBallCenterPos()->absXZ(current.pos) < 300.0f)
+#endif
     {
+#if !TARGET_PC
         sVar7 = cLib_targetAngleY(&current.pos, player->getIronBallCenterPos());
+#endif
         iVar1 = 1;
     }
 
+#if TARGET_PC
+    const dusk::coop::item_awareness::ItemAwarenessResult boomerang =
+        dusk::coop::item_awareness::findActiveBoomerang(this, "b_tn.boomerang_dodge");
+    if (boomerang.found && boomerang.itemActor != NULL && boomerang.distanceXZ < 300.0f)
+#else
     if (daPy_py_c::getThrowBoomerangActor() &&
         daPy_py_c::getThrowBoomerangActor()->current.pos.absXZ(current.pos) < 300.0f)
+#endif
     {
+#if TARGET_PC
+        sVar7 = cLib_targetAngleY(&current.pos, &boomerang.itemActor->current.pos);
+#else
         sVar7 = cLib_targetAngleY(&current.pos, &daPy_py_c::getThrowBoomerangActor()->current.pos);
+#endif
         iVar1 = 1;
     }
 
@@ -3368,9 +3813,17 @@ bool daB_TN_c::checkNextMove() {
 }
 
 void daB_TN_c::executeChaseL() {
+#if TARGET_PC
+    const CoOpTnTargetState target = coOpTnTargetState(this, "b_tn.chase_l");
+    f32 mPlayerDistance = target.distance;
+    s16 mPlayerAngleY = target.angleY;
+    daPy_py_c* player =
+        target.state.player != NULL ? target.state.player : daPy_getPlayerActorClass();
+#else
     f32 mPlayerDistance = fopAcM_searchPlayerDistance(this);
     s16 mPlayerAngleY = fopAcM_searchPlayerAngleY(this);
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
 
     if (player->getCutCount() <= 1) {
         field_0xa9c++;
@@ -3655,8 +4108,14 @@ void daB_TN_c::executeChaseL() {
 }
 
 void daB_TN_c::executeAttackL() {
+#if TARGET_PC
+    const CoOpTnTargetState target = coOpTnTargetState(this, "b_tn.attack_l");
+    s16 mPlayerAngleY = target.angleY;
+    f32 mPlayerDistance = target.distance;
+#else
     s16 mPlayerAngleY = fopAcM_searchPlayerAngleY(this);
     f32 mPlayerDistance = fopAcM_searchPlayerDistance(this);
+#endif
 
     speedF = 0.0f;
     current.angle.y = shape_angle.y;
@@ -3668,7 +4127,11 @@ void daB_TN_c::executeAttackL() {
         mTimer1 = 0;
         mActionMode2Copy = mActionMode2;
 
+#if TARGET_PC
+        if (target.state.wolf) {
+#else
         if (daPy_getPlayerActorClass()->checkNowWolf()) {
+#endif
             mTimer3 = l_HIO.mTimer3Wolf;
         } else if (mType == 0) {
             mTimer3 = l_HIO.mTimer3HumanType0;
@@ -3705,7 +4168,11 @@ void daB_TN_c::executeAttackL() {
 
     case ACTION2_11_e:
         mActionMode2Copy = mActionMode2;
+#if TARGET_PC
+        if (target.state.wolf) {
+#else
         if (daPy_getPlayerActorClass()->checkNowWolf()) {
+#endif
             mTimer3 = l_HIO.mTimer3Wolf;
         } else if (mType == 0) {
             mTimer3 = l_HIO.mTimer3HumanType0;
@@ -3824,7 +4291,11 @@ void daB_TN_c::executeAttackL() {
         }
 
         if (mActionMode2Copy == ACTION2_0_e && mPlayerDistance < 800.0f &&
+#if TARGET_PC
+            target.state.damageWaitTimer == 0)
+#else
             daPy_getPlayerActorClass()->getDamageWaitTimer() == 0)
+#endif
         {
             if (mpModelMorf2->checkFrame(30.0f)) {
                 mWalkDir = 10;
@@ -3875,14 +4346,23 @@ void daB_TN_c::executeAttackL() {
 }
 
 void daB_TN_c::executeAttackShieldL() {
+#if TARGET_PC
+    const CoOpTnTargetState target = coOpTnTargetState(this, "b_tn.attack_shield_l");
+    s16 mPlayerAngleY = target.angleY;
+#else
     s16 mPlayerAngleY = fopAcM_searchPlayerAngleY(this);
     fopAcM_searchPlayerDistance(this);
+#endif
 
     switch (mActionMode2) {
     case ACTION2_10_e:
     case ACTION2_0_e:
         mActionMode2Copy = mActionMode2;
+#if TARGET_PC
+        if (target.state.wolf) {
+#else
         if (daPy_getPlayerActorClass()->checkNowWolf()) {
+#endif
             mTimer3 = l_HIO.mTimer3Wolf;
         } else if (mType == 0) {
             mTimer3 = l_HIO.mTimer3HumanType0;
@@ -3928,9 +4408,18 @@ void daB_TN_c::executeAttackShieldL() {
 }
 
 void daB_TN_c::executeGuardL() {
+#if TARGET_PC
+    daPy_py_c* player = coOpTnDamagePlayer(this);
+    const s16 damageAngleY = coOpTnDamageAngleY(this);
+    const f32 damageDistance =
+        player != NULL ? fopAcM_searchActorDistance(this, player) : fopAcM_searchPlayerDistance(this);
+    s16 mPlayerAngleY = damageAngleY - shape_angle.y;
+    f32 mPlayerDistance = damageDistance;
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
     s16 mPlayerAngleY = fopAcM_searchPlayerAngleY(this) - shape_angle.y;
     f32 mPlayerDistance = fopAcM_searchPlayerDistance(this);
+#endif
 
     switch (mActionMode2) {
     case ACTION2_0_e:
@@ -3970,9 +4459,17 @@ void daB_TN_c::executeGuardL() {
         }
 
         if (mTimer10 != 0) {
+#if TARGET_PC
+            shape_angle.y = damageAngleY;
+#else
             shape_angle.y = fopAcM_searchPlayerAngleY(this);
+#endif
         } else {
+#if TARGET_PC
+            cLib_chaseAngleS(&shape_angle.y, damageAngleY, 0x2000);
+#else
             cLib_chaseAngleS(&shape_angle.y, fopAcM_searchPlayerAngleY(this), 0x2000);
+#endif
         }
 
         current.angle.y = shape_angle.y + 0x8000;
@@ -4040,13 +4537,22 @@ void daB_TN_c::executeGuardL() {
 }
 
 void daB_TN_c::executeDamageL() {
+#if TARGET_PC
+    s16 mPlayerAngleY = coOpTnDamageAngleY(this);
+    daPy_py_c* player = coOpTnDamagePlayer(this);
+#else
     s16 mPlayerAngleY = fopAcM_searchPlayerAngleY(this);
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
 
     field_0xa91 = false;
 
     if (mType == 0) {
+#if TARGET_PC
+        if (player != NULL && player->checkWolf()) {
+#else
         if (daPy_py_c::checkNowWolf()) {
+#endif
             field_0xa91 = true;
         }
 
@@ -4121,7 +4627,14 @@ void daB_TN_c::executeDamageL() {
 }
 
 void daB_TN_c::executeYoroke() {
+#if TARGET_PC
+    daPy_py_c* player = coOpTnDamagePlayer(this);
+    const s16 damageAngleY = coOpTnDamageAngleY(this);
+    const f32 damageDistance =
+        player != NULL ? fopAcM_searchActorDistance(this, player) : fopAcM_searchPlayerDistance(this);
+#else
     daPy_py_c* player = daPy_getPlayerActorClass();
+#endif
 
     switch (mActionMode2) {
     case ACTION2_0_e:
@@ -4151,7 +4664,11 @@ void daB_TN_c::executeYoroke() {
                 mCutJumpStatus = 2;
             }
         } else if (mCutJumpStatus == 2 && player->checkCutJumpMode() &&
+#if TARGET_PC
+                   !player->checkCutJumpCancelTurn() && damageDistance < 350.0f)
+#else
                    !player->checkCutJumpCancelTurn() && fopAcM_searchPlayerDistance(this) < 350.0f)
+#endif
         {
             setActionMode(ACT_CHASEL, ACTION2_0_e);
             if (player->speedF < 28.0f) {
@@ -4159,7 +4676,11 @@ void daB_TN_c::executeYoroke() {
                 break;
             }
 
+#if TARGET_PC
+            if ((s16)(damageAngleY - shape_angle.y) < 0) {
+#else
             if ((s16)(fopAcM_searchPlayerAngleY(this) - shape_angle.y) < 0) {
+#endif
                 initChaseL(14);
             } else {
                 initChaseL(11);
@@ -4433,15 +4954,69 @@ void daB_TN_c::executeZakoEnding() {
 void daB_TN_c::action() {
     daPy_py_c* player = daPy_getPlayerActorClass();
 
+#if TARGET_PC
+    bool useCombatTarget = true;
+    bool committedTarget = false;
+    dusk::coop::EnemyTargetMode targetMode = dusk::coop::EnemyTargetMode::StickyCombat;
+    switch (mActionMode1) {
+    case ACT_ROOMDEMO:
+    case ACT_OPENING:
+    case ACT_ENDING:
+        useCombatTarget = false;
+        break;
+    case ACT_WAITH:
+        targetMode = dusk::coop::EnemyTargetMode::ImmediateAcquire;
+        break;
+    case ACT_ATTACKH:
+    case ACT_ATTACKSHIELDH:
+    case ACT_GUARDH:
+    case ACT_DAMAGEH:
+    case ACT_ATTACKL:
+    case ACT_ATTACKSHIELDL:
+    case ACT_GUARDL:
+    case ACT_DAMAGEL:
+    case ACT_YOROKE:
+        committedTarget = true;
+        break;
+    case ACT_CHANGEDEMO:
+        useCombatTarget = mType == 1;
+        committedTarget = mType == 1;
+        break;
+    }
+
+    if (useCombatTarget) {
+        // Co-op: simulation chooses one opponent before shared combat consumers run this tick.
+        coOpSelectTnTarget(this, "b_tn.combat", targetMode, committedTarget);
+    } else {
+        // Co-op: authored Temple of Time sequences remain protagonist-owned and cannot inherit P2.
+        dusk::coop::clearEnemyTarget(this, dusk::coop::EnemyTargetScope::Combat);
+    }
+    const CoOpTnTargetState combatTarget = coOpTnTargetState(this, "b_tn.action");
+    daPy_py_c* combatPlayer =
+        combatTarget.state.player != NULL ? combatTarget.state.player : player;
+#endif
+
     if (m_attack_timer != 0) {
         m_attack_timer--;
     }
 
+#if TARGET_PC
+    daPy_py_c* attackDefender =
+        m_attack_tn != NULL ? coOpTnDefenderPlayer(m_attack_tn) : daPy_getPlayerActorClass();
+    if (mType == 0 || attackDefender == NULL || !attackDefender->checkGuardBreakMode()) {
+#else
     if (mType == 0 || !player->checkGuardBreakMode()) {
+#endif
         m_attack_tn = 0;
     }
 
-    if (player->getCutType() == daPy_py_c::CUT_TYPE_JUMP && player->checkCutJumpCancelTurn()) {
+#if TARGET_PC
+    if (combatPlayer != NULL && combatPlayer->getCutType() == daPy_py_c::CUT_TYPE_JUMP &&
+        combatPlayer->checkCutJumpCancelTurn())
+#else
+    if (player->getCutType() == daPy_py_c::CUT_TYPE_JUMP && player->checkCutJumpCancelTurn())
+#endif
+    {
         mTimer13 = 30;
     }
 
@@ -4910,6 +5485,10 @@ static int daB_TN_IsDelete(daB_TN_c* i_this) {
 }
 
 int daB_TN_c::_delete() {
+#if TARGET_PC
+    dusk::coop::clearAllEnemyTargets(this);
+    coOpClearTnOwnerState(this);
+#endif
     dComIfG_resDelete(&mPhaseReq1, "B_tn");
     dComIfG_resDelete(&mPhaseReq2, mArcName);
     if (mHioInit) {

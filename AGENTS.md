@@ -96,7 +96,7 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
 - `docs/coop-player-singleton-api-map.md`: central routing guide for `daPy_getPlayerActorClass()`, `dComIfGp_getPlayer(0)`, and which co-op API family should answer each player-identity question.
 - `docs/coop-world-acknowledgement-plan.md`: completed world-acknowledgement proof: player-query helpers, diagnostics, Hanging Helmasaur proof, and Bokoblin raw-query evidence.
 - `docs/coop-player-owner-lookup-audit.md`: reusable audit table for item/weapon actors that still ask global P1 when they should ask the owning ALINK slot.
-- `docs/coop-enemy-audit.md`: current enemy/world acknowledgement map; compact `E_FS`/`E_ZM`/`E_ZH` ownership is first-pass validated, followed by standalone Darknut and Goron soldier passes.
+- `docs/coop-enemy-audit.md`: current enemy/world acknowledgement map; Darknut shared combat is first-pass validated, followed by the Goron soldier/NPC/rolling actor and Aeralfos audits.
 - `docs/coop-enemy-targeting-plan.md`: completed enemy-targeting architecture plan: policy-backed enemy targeting over `player_query`, with validated owner API families and enemy audit follow-up in `docs/coop-enemy-audit.md`.
 - `../.codex/config.toml`: workspace-root Codex hook wiring. Keep hook behavior narrow and documented in `docs/codex-hooks.md`; copy it into the repo only if a future session opens `dusk-coop` directly.
 - `files.cmake`: explicit source-file list. Update it when adding C++ source/header files that must be built.

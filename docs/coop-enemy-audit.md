@@ -26,8 +26,9 @@ surface by default.
 The compact `E_FS` / `E_ZM` / `E_ZH` batch is implemented and first-pass validated. Wooden Puppets
 and Zant Masks now cover their ordinary combat, selected-target, damage-owner, and
 projectile-reflection boundaries. Zant's Hand remains Sol/object-driven and only converts genuine
-player damage ownership. The remaining regular-ish passes are the standalone `B_TN` Darknut combat
-core and the mixed `OBJ_GRA` Goron soldier/NPC/rolling actor.
+player damage ownership. The standalone `B_TN` Darknut combat core is first-pass validated. The
+remaining regular-ish pass is the mixed `OBJ_GRA` Goron soldier/NPC/rolling actor, followed by a
+dedicated `B_GG` Aeralfos audit.
 
 ## Target Policy Requirements
 
@@ -135,6 +136,7 @@ collision-owner, render/visibility culling, or story/demo/global state.
 | Wooden Puppet | Wooden Puppet | `src/d/actor/d_a_e_fs.cpp` | `E_FS` | compact special batch, first-pass validated | Appear/wait/move/attack caches use one Combat owner; selected target speed, form, position, distance, and angle drive ordinary pursuit and attack follow-through; cut/death reactions use `damage_owner`. Skull Kid parent switches/action teardown, monkey `ACT_DEMOWAIT`, and `mDoLib_project()` plus P1-height off-screen deletion remain authored encounter/presentation behavior. |
 | Zant Mask | Zant Mask | `src/d/actor/d_a_e_zm.cpp` | `E_ZM` | compact special batch, first-pass validated | Hidden appearance acquisition filters active players through the native full-distance occurrence radius before selection. Move/attack and projectile launch aim share one Combat owner; visible pitch and death facing read that retained target without reacquiring. Cut count/type uses `damage_owner`, while reflected balls use `defender_owner` so shield/cut state comes from the actual reflector. Search-point marker actors remain helpers, and room-switch/death state remains native. |
 | Zant's Hand | Zant's Hand / Ball Master | `src/d/actor/d_a_e_zh.cpp` | `E_ZH` | compact special batch, first-pass validated | The actor searches and chases the live Sol actor, so its position naturally follows whichever ALINK is carrying it. On catch, the Hand clears the Sol's shared carry flag; the owning ALINK releases its actor-local grab keep, then the Hand marks the Sol carried again and attaches it to its own hand. Player cut reactions use `damage_owner`. Initial Sol placement, room/dungeon switches, the Hand's return-to-entrance objective lifecycle, authored start/return cameras, blur, and P1 `changeOriginalDemo()` remain shared setpiece behavior. |
+| Darknut | Darknut / Temple of Time miniboss | `src/d/actor/d_a_b_tn.cpp` | `B_TN` | standalone shared-combat pass, first-pass validated | Both armored and unarmored phases use one Combat owner for wake, chase, attack choice, commitment, facing, target cut/form/speed/damage state, and joint tracking. Multi-frame guard/damage/armor-loss reactions retain the actual `damage_owner`; enemy sword/shield contact retains the actual `defender_owner`; hookshot, Ball-and-Chain, and boomerang dodges scan active-player tools separately. The regular `mType == 1` armor-loss sequence remains ordinary combat. The Temple of Time `mType == 0` room/opening/change/ending events, camera 0, player placement, boss-room wait, stage middle-boss state, switches, lighting, and authored armor-break presentation remain P1/global and explicitly do not acquire a Combat target. Native loose bomb/arrow/carry-object search and global Darknut group attack throttle remain shared object/group behavior. User field testing accepted both converted combat phases and preserved authored behavior. |
 
 ## Reviewed Evidence
 
@@ -302,7 +304,7 @@ All `d_a_b_*` boss files are treated as protagonist-locked/deferred for now. A t
 - **d_a_b_yo.cpp** — mixed: angle/distance attack-pattern calls could technically be re-targeted, but position-capture logic is tightly coupled to P1 throughout. Protagonist-locked until boss co-op work begins.
 - **d_a_b_zant.cpp** — many targeting-shaped calls (~18) embedded in story-fight state machines. Protagonist-locked/deferred until boss co-op work begins.
 
-Remaining boss files (`d_a_b_bh`, `d_a_b_bq`, `d_a_b_dr`, `d_a_b_ds`, `d_a_b_gg`, `d_a_b_gm`, `d_a_b_go`, `d_a_b_oh`, `d_a_b_oh2`, `d_a_b_tn`) were not read in this pass. `d_a_b_gg` is Aeralfos/Gargoyle and stays in this boss/miniboss bucket, not the regular-enemy batch, until a dedicated boss co-op audit.
+Remaining boss files (`d_a_b_bh`, `d_a_b_bq`, `d_a_b_dr`, `d_a_b_ds`, `d_a_b_gg`, `d_a_b_gm`, `d_a_b_go`, `d_a_b_oh`, `d_a_b_oh2`) were not read in this pass. `d_a_b_tn` is now audited as a mixed regular/miniboss actor: shared Darknut combat is first-pass validated, while the Temple of Time authored encounter lifecycle remains deferred. `d_a_b_gg` is Aeralfos/Gargoyle and is queued for a dedicated co-op audit rather than being folded blindly into a regular-enemy batch.
 
 ### Key findings from this pass
 
@@ -508,9 +510,9 @@ This inventory is generated from `src/d/actor/d_a_e_*.cpp` file names and `g_pro
 
 ## Next Steps
 
-1. Convert `B_TN` Darknut as a standalone combat pass while preserving the Temple of Time miniboss room/demo lifecycle.
-2. Audit and convert `OBJ_GRA` Goron soldiers as a standalone mixed combat/NPC/retained-throw pass.
-3. Before patching, classify singleton reads into targeting, selected-target state, damage-owner, defender/collision-owner, caught/grab-owner, primary/global, and render/culling.
+1. Audit and convert `OBJ_GRA` Goron soldiers as a standalone mixed combat/NPC/retained-throw pass.
+2. Audit `B_GG` Aeralfos separately, preserving any miniboss encounter and camera choreography outside ordinary shared combat.
+3. Before patching either actor, classify singleton reads into targeting, selected-target state, damage-owner, defender/collision-owner, caught/grab-owner, primary/global, and render/culling.
 
 ## Multiplayer AI Notes
 
