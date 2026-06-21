@@ -324,7 +324,7 @@ player who owns the accepted catch event, so it routes through `event_owner`.
 | "Which player requested this accepted event/demo?" | `dusk::coop::event_owner` | Initial implementation derives from event `Pt1`; message input, ALINK door-demo staff consumption, and knob/shutter door demos use it so P2-started scripted interactions do not animate or move P1 |
 | "Which player owns the transient Midna service and manual wolf-transform request?" | `dusk::coop::midna_owner` | P1's Midna remains canonical for story/save/global paths, while active additional slots get runtime Midna service actors; active-service position/no-draw setup, prompt eligibility, message branch reads, transform blocking, accepted transform demo handoff, and the talk/camera status bit follow the service actor's ALINK slot |
 | "Which player owns this active interactive dialogue/message surface?" | `dusk::coop::message_owner` | Retains the dialogue slot, pad, listener, speaker, and presenter actor after the native message controller accepts the message, with `talkStartInit()` as fallback insurance; prefers active `midna_owner` service, otherwise falls back to `event_owner`; A/B and choice input read the retained pad while native global movement/input locking remains intact |
-| "Should this explicitly classified singular event, interactive dialogue, retained enemy interaction, or captured menu surface temporarily present one fullscreen camera and hide non-presenting players?" | `dusk::coop::event_presentation` | Implemented as an opt-in presentation override above the camera sidecar; P1/global howling stones, Midna service, interactive dialogue, retained enemy Link-swallow/Rider-carry presentation, item ring, Start-menu tree, field/dungeon maps, and Agitha's insect screen are classified consumers |
+| "Should this explicitly classified singular event, interactive dialogue, retained enemy interaction, or captured menu surface temporarily present one fullscreen camera and hide non-presenting player visuals?" | `dusk::coop::event_presentation` | Implemented as an opt-in presentation override above the camera sidecar; ALINK, runtime Epona, and runtime Midna actors consult the same slot predicate while continuing simulation. P1/global howling stones, Midna service, interactive dialogue, retained enemy Link-swallow/Rider-carry presentation, item ring, Start-menu tree, field/dungeon maps, and Agitha's insect screen are classified consumers |
 | "Which player is retained by this training sequence?" | future `training_owner` | Deferred unless Hidden Skill / `NPC_KN` playtesting exposes a concrete P2 ownership failure |
 | "Which player owns camera/HUD/message/story/save state?" | camera/HUD/story-specific APIs | Partially implemented for split-screen camera only |
 | "Which viewport owns this render pass, post effect, lighting, fog, or culling decision?" | split-screen viewport/render ownership APIs | Initial audit in `coop-split-screen-api-audit.md`; `render_visibility` implemented for known draw-culling paths |
@@ -425,9 +425,27 @@ player who owns the accepted catch event, so it routes through `event_owner`.
   Use `render_visibility` for shared draw-culling decisions, `render_materials` for viewport-owned
   kankyo/J3D material state, `render_effects` for late world/effect versus fullscreen framebuffer
   ownership, and `render_shadows` for real-shadow culling or baked shadow matrix ownership. A P2
-  fullscreen surface draws one window but still needs camera-1 viewport-owned world refresh; do not
-  equate “not presenting both split windows” with “camera-0 render state is sufficient.” Do not
+  fullscreen surface draws one window but still needs presenter-camera viewport-owned world refresh;
+  do not equate “not presenting both split windows” with “camera-0 render state is sufficient.” Do not
   scatter actor-specific render fixes when a central PC split-screen policy can answer the question.
+- **Per-viewport effects:** `render_effects` retains the active slot/window/camera/view context,
+  Base/Sense environment and bloom snapshots, slot-local Sense fade/emitter state, and slot-local
+  Twilight camera lights. `render_materials` owns submitted J3D `viewCalc()` and projected-material
+  replay. `player_sense` owns per-slot reveal eligibility, while `render_visibility` and
+  `render_effects` filter shared reveal model packets, real shadows, reveal particles, and inverse
+  spirit wisps during viewport replay. Actor draw submission supplies native per-camera culling,
+  and particle replay only overrides/restores draw alpha without mutating emitter simulation.
+  Shared gameplay actors and emitters stay singular. Camera-retained visual packets are a distinct
+  case: if native update consumes a player/camera and stores positions, alpha, room ratio, or other
+  history, additional slots need fixed per-slot visual simulation sidecars with private RNG. P1
+  remains canonical. This now covers both Goron cloud/haze `CLOUD_EFF[50]` and Twilight rising-
+  particle `HOUSI_EFF[300]` history. Pooled simple Sense emitters renew their viewport classification from
+  native reuse, not only allocation. Camera-relative replay uses the exact submitted matrix,
+  independent of frame interpolation enablement. Viewport framebuffer consumers refresh the
+  canonical native capture at
+  the same native phase the consumer expects because water and projection-particle resources retain
+  that address; motion blur, depth of field, mixed indirect-screen passes, generic fullscreen 2D,
+  and fades remain global/gated.
 - **Primary/global state:** story protagonist, demo/cutscene, save/restart, HUD, passive message, or
   single-camera state. Keep P1/global until a dedicated milestone proves otherwise.
 

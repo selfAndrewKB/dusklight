@@ -5,6 +5,11 @@
 #include "d/d_path.h"
 #include "f_op/f_op_actor_mng.h"
 
+#if TARGET_PC
+#include "dusk/coop/render_effects.h"
+#include "dusk/coop/render_visibility.h"
+#endif
+
 static int jntNodeCallBack(J3DJoint* i_jnt, int param_1) {
     if (param_1 == 0) {
         if (j3dSys.getModel()->getUserArea() != 0) {
@@ -719,7 +724,11 @@ void daNpcCd2_c::setAnm(J3DAnmTransformKey* param_1, f32 param_2, f32 param_3, i
 }
 
 int daNpcCd2_c::drawShadow(f32 param_0) {
-    if (mIsDarkWorld && !daPy_py_c::checkNowWolfEyeUp()) {
+    if (mIsDarkWorld &&
+#if TARGET_PC
+        !dusk::coop::render_visibility::shouldUseViewportVisibility() &&
+#endif
+        !daPy_py_c::checkNowWolfEyeUp()) {
         return 1;
     }
     dComIfGd_setSimpleShadow(&current.pos, mAcch.GetGroundH(), param_0, mAcch.m_gnd, 0,
@@ -732,7 +741,13 @@ int daNpcCd2_c::drawObj(int idx, J3DModel* i_model, f32 i_scale) {
     if (i_model == NULL) {
         return 0;
     }
-    if (mIsDarkWorld && !daPy_py_c::checkNowWolfEyeUp()) {
+    const bool viewportSenseVisibility =
+#if TARGET_PC
+        mIsDarkWorld && dusk::coop::render_visibility::shouldUseViewportVisibility();
+#else
+        false;
+#endif
+    if (mIsDarkWorld && !viewportSenseVisibility && !daPy_py_c::checkNowWolfEyeUp()) {
         return 0;
     }
     int x = isM_() ? 0 : 1;
@@ -742,6 +757,12 @@ int daNpcCd2_c::drawObj(int idx, J3DModel* i_model, f32 i_scale) {
     };
     s32 jntNum = a_jntNumTbl[idx][x];
     if (i_model && jntNum >= 0) {
+#if TARGET_PC
+        if (viewportSenseVisibility) {
+            // Co-op: spirit equipment follows the body's owner Sense and native culling.
+            dusk::coop::render_visibility::registerSenseOnlyModel(i_model, this);
+        }
+#endif
         g_env_light.setLightTevColorType_MAJI(i_model, &tevStr);
         mDoMtx_copy(mpMorf->getModel()->getAnmMtx(jntNum), mDoMtx_stack_c::now);
         mDoMtx_stack_c::scaleM(i_scale, i_scale, i_scale);
@@ -757,10 +778,23 @@ int daNpcCd2_c::drawNpc() {
     } else {
         g_env_light.settingTevStruct(0, &current.pos, &tevStr);
     }
-    if (mIsDarkWorld && !daPy_py_c::checkNowWolfEyeUp()) {
+    const bool viewportSenseVisibility =
+#if TARGET_PC
+        mIsDarkWorld && dusk::coop::render_visibility::shouldUseViewportVisibility();
+#else
+        false;
+#endif
+    if (mIsDarkWorld && !viewportSenseVisibility && !daPy_py_c::checkNowWolfEyeUp()) {
         setHitodamaParticle();
         return 1;
     }
+#if TARGET_PC
+    if (viewportSenseVisibility) {
+        // Co-op: create both native presentations once, then cull the body per Sense viewport.
+        dusk::coop::render_visibility::registerSenseOnlyModel(mpMorf->getModel(), this);
+        setHitodamaParticle();
+    }
+#endif
     g_env_light.setLightTevColorType_MAJI(mpMorf->getModel(), &tevStr);
     if (mIsDarkWorld) {
         dComIfGd_setListDark();
@@ -871,14 +905,19 @@ void daNpcCd2_c::setHitodamaParticle() {
             dComIfGp_particle_set(mHitodamaEmitters[i], id[i], &local_28, &shape_angle, 0);
         JPABaseEmitter* pEmitter = dComIfGp_particle_getEmitter(mHitodamaEmitters[i]);
         if (pEmitter != NULL) {
+#if TARGET_PC
+            // Co-op: the unrevealed spirit wisp is the inverse of viewport-local Sense.
+            dusk::coop::render_effects::registerSenseInactiveEmitter(pEmitter);
+#else
             u8 alpha;
             if (daPy_py_c::checkNowWolfEyeUp() == FALSE) {
                 alpha = 0xff;
             } else {
                 alpha = 0;
             }
-            pEmitter->setGlobalTranslation(local_28.x, local_28.y, local_28.z);
             pEmitter->setGlobalAlpha(alpha);
+#endif
+            pEmitter->setGlobalTranslation(local_28.x, local_28.y, local_28.z);
         }
     }
 }

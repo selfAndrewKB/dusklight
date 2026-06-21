@@ -224,7 +224,12 @@ static void initiateLighting8(GXColor& param_0, s16 param_1) {
     color0.r = (param_1 & 0x1F) << 1;
     color0.g = ((param_1 >> 5) & 0x1F) << 1;
     color0.b = ((param_1 >> 10) & 0x1F) << 1;
+#if TARGET_PC
+    // Co-op: particle lighting is rebuilt while a viewport owns the shared draw replay.
+    if (dusk::coop::render_effects::isCurrentViewportSenseActive()) {
+#else
     if (daPy_py_c::checkNowWolfPowerUp()) {
+#endif
         f32 fVar1 = (g_env_light.bg_amb_col[0].r / 255.0f);
         color0.r = (((param_1 & 0x1F) << 1) + 0x10) * (4.0f * (fVar1));
 
@@ -803,6 +808,10 @@ JPABaseEmitter* dPa_simpleEcallBack::createEmitter(JPAEmitterManager* param_0) {
 
         if ((uVar1 & 0x100) != 0) {
             mEmitter->setParticleCallBackPtr(dPa_control_c::getFsenthPcallBack());
+#if TARGET_PC
+            // Co-op: native Sense-reveal particles share simulation but resolve fade per viewport.
+            dusk::coop::render_effects::registerSenseRevealEmitter(mEmitter);
+#endif
         }
 
         mEmitter->setEmitterCallBackPtr(this);
@@ -841,6 +850,13 @@ u32 dPa_simpleEcallBack::set(cXyz const* i_pos, dKy_tevstr_c const* param_2, u8 
     u8 id = dPa_control_c::getRM_ID(mID);
     JPAResourceManager* manager = dPa_control_c::getEmitterManager()->getResourceManager(id);
     u32 uVar5 = manager->getResUserWork(mID);
+#if TARGET_PC
+    if ((uVar5 & 0x100) != 0) {
+        // Co-op: simple Sense emitters persist across scene-sidecar resets, so renew their
+        // viewport reveal classification whenever native code submits another use.
+        dusk::coop::render_effects::registerSenseRevealEmitter(mEmitter);
+    }
+#endif
     if (((uVar5 & 0xEF0000) >> 16) < 100) {
         dVar7 = ((uVar5 & 0xEF0000) >> 16) / 99.0f;
     }
@@ -1535,6 +1551,10 @@ JPABaseEmitter* dPa_control_c::set(u8 param_0, u16 param_1, cXyz const* i_pos,
 
     if ((local_ac & 0x100) != 0) {
         this_00->setParticleCallBackPtr(getFsenthPcallBack());
+#if TARGET_PC
+        // Co-op: preserve the resource-authored Sense reveal flag for viewport replay.
+        dusk::coop::render_effects::registerSenseRevealEmitter(this_00);
+#endif
     }
 
     if ((local_ac & 0x800) != 0) {
@@ -1940,6 +1960,17 @@ void dPa_wbPcallBack_c::execute(JPABaseEmitter* i_emitter, JPABaseParticle* para
 
 void dPa_fsenthPcallBack::execute(JPABaseEmitter* i_emitter, JPABaseParticle* param_1) {
     UNUSED(param_1);
+#if TARGET_PC
+    // Co-op: each persistent Sense emitter follows its owning ALINK's native fade.
+    const f32 strength = dusk::coop::render_effects::senseStrengthForEmitter(i_emitter);
+    if (strength > 0.0f) {
+        i_emitter->setGlobalAlpha(255.0f * strength);
+        i_emitter->playDrawParticle();
+    } else {
+        i_emitter->setGlobalAlpha(0);
+        i_emitter->stopDrawParticle();
+    }
+#else
     dScnKy_env_light_c* envLight = dKy_getEnvlight();
     if (envLight->now_senses_effect == 1 && envLight->senses_effect_strength > 0.0f) {
         i_emitter->setGlobalAlpha(255.0f * envLight->senses_effect_strength);
@@ -1948,6 +1979,7 @@ void dPa_fsenthPcallBack::execute(JPABaseEmitter* i_emitter, JPABaseParticle* pa
         i_emitter->setGlobalAlpha(0);
         i_emitter->stopDrawParticle();
     }
+#endif
 }
 
 void dPa_fsenthPcallBack::draw(JPABaseEmitter* i_emitter, JPABaseParticle* param_1) {

@@ -9320,6 +9320,14 @@ int daAlink_c::procWolfDig() {
             onSceneChangeArea(mProcVar4.mDigExitID, 0xFF, NULL);
 
             if (dig_actor != NULL) {
+#if TARGET_PC
+                // Co-op: retain the exact wolf through the dig actor's delayed item/switch write.
+                dusk::coop::retained_interaction_owner::beginRetainedInteraction(
+                    "digplace.scene_change", dig_actor,
+                    dusk::coop::retained_interaction_owner::RetainedInteractionScope::Dig,
+                    this,
+                    dusk::coop::retained_interaction_owner::RetainedInteractionReason::DirectPlayer);
+#endif
                 ((daObjDigpl_c*)dig_actor)->onDigFlg();
                 field_0x280c.clearData();
             }
@@ -9348,6 +9356,14 @@ int daAlink_c::procWolfDig() {
         }
     } else {
         if (frame_ctrl->checkPass(field_0x3478) && dig_actor != NULL) {
+#if TARGET_PC
+            // Co-op: the dig completion consumer must not rediscover its owner from proximity.
+            dusk::coop::retained_interaction_owner::beginRetainedInteraction(
+                "digplace.complete", dig_actor,
+                dusk::coop::retained_interaction_owner::RetainedInteractionScope::Dig,
+                this,
+                dusk::coop::retained_interaction_owner::RetainedInteractionReason::DirectPlayer);
+#endif
             ((daObjDigpl_c*)dig_actor)->onDigFlg();
             field_0x280c.clearData();
         }

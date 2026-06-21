@@ -13,6 +13,11 @@
 #include "Z2AudioLib/Z2Instances.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/coop/player_slots.h"
+#include "dusk/coop/render_effects.h"
+#endif
+
 struct daYkgr_HIO_c : public mDoHIO_entry_c {
     daYkgr_HIO_c();
     virtual ~daYkgr_HIO_c() {}
@@ -91,37 +96,105 @@ void dPa_YkgrPcallBack::setParam(f32 param_1) {
 
 static daYkgr_HIO_c l_HIO;
 
-f32 daYkgr_c::getPosRate() {
-    if (m_path == NULL) {
-        return 0.0f;
-    }
-    f32 rate = 0.0f;
-    f32 dVar11 = FLT_MAX;
-    cXyz cStack_5c(dComIfGp_getPlayer(0)->current.pos);
-    dPnt* iVar9 = m_path->m_points;
-    int uVar2 = m_path->m_num;
-    for (int iVar8 = 0; iVar8 < uVar2; iVar8++, iVar9++) {
-        cXyz cStack_68(iVar9->m_position.x, iVar9->m_position.y, iVar9->m_position.z);
-        f32 dVar10 = cStack_5c.absXZ(cStack_68);
-        if (dVar10 < dVar11) {
-            dVar11 = dVar10;
+#if TARGET_PC
+// Co-op: keep each actor's path-strength smoothing slot-local without changing its layout.
+constexpr int kSlotStateCapacity = 8;
+
+struct YkgrSlotState {
+    const daYkgr_c* actor = nullptr;
+    f32 posRate[dusk::coop::kPlayerSlotCount] = {};
+};
+
+static YkgrSlotState s_slotStates[kSlotStateCapacity] = {};
+
+static YkgrSlotState* getSlotState(const daYkgr_c* actor) {
+    YkgrSlotState* available = nullptr;
+    for (int i = 0; i < kSlotStateCapacity; i++) {
+        if (s_slotStates[i].actor == actor) {
+            return &s_slotStates[i];
+        }
+        if (available == nullptr && s_slotStates[i].actor == nullptr) {
+            available = &s_slotStates[i];
         }
     }
-    if (dVar11 > l_HIO.field_0x20) {
-        dVar11 = l_HIO.field_0x20;
-    } else if (dVar11 < l_HIO.field_0x24) {
-        dVar11 = l_HIO.field_0x24;
+    if (available != nullptr) {
+        *available = {};
+        available->actor = actor;
     }
-    rate = (dVar11 - l_HIO.field_0x24) / (l_HIO.field_0x20 -l_HIO.field_0x24);
-    rate = 1.0f - rate;
-    return rate;
+    return available;
+}
+
+static void clearSlotState(const daYkgr_c* actor) {
+    for (int i = 0; i < kSlotStateCapacity; i++) {
+        if (s_slotStates[i].actor == actor) {
+            s_slotStates[i] = {};
+            return;
+        }
+    }
+}
+#endif
+
+static f32 getPosRateForPlayer(const fopAc_ac_c* player) {
+    if (daYkgr_c::m_path == NULL || player == NULL) {
+        return 0.0f;
+    }
+
+    f32 distance = FLT_MAX;
+    dPnt* point = daYkgr_c::m_path->m_points;
+    for (int i = 0; i < daYkgr_c::m_path->m_num; i++, point++) {
+        cXyz pointPos(point->m_position.x, point->m_position.y, point->m_position.z);
+        const f32 pointDistance = player->current.pos.absXZ(pointPos);
+        if (pointDistance < distance) {
+            distance = pointDistance;
+        }
+    }
+
+    if (distance > l_HIO.field_0x20) {
+        distance = l_HIO.field_0x20;
+    } else if (distance < l_HIO.field_0x24) {
+        distance = l_HIO.field_0x24;
+    }
+    return 1.0f -
+           ((distance - l_HIO.field_0x24) / (l_HIO.field_0x20 - l_HIO.field_0x24));
+}
+
+f32 daYkgr_c::getPosRate() {
+    return getPosRateForPlayer(dComIfGp_getPlayer(0));
 }
 
 static dPa_YkgrPcallBack YkgrCB;
 
+#if TARGET_PC
+static f32 getPresentationParam(const daYkgr_c* actor, dusk::coop::PlayerSlot slot) {
+    int slotIndex = static_cast<int>(slot);
+    if (slotIndex < 0 || slotIndex >= dusk::coop::kPlayerSlotCount) {
+        slotIndex = 0;
+    }
+    YkgrSlotState* state = getSlotState(actor);
+    const f32 positionRate = slotIndex == 0 || state == nullptr
+                                 ? actor->field_0x5a8
+                                 : state->posRate[slotIndex];
+    const f32 rate = actor->field_0x5a4 * 0.5f + positionRate * 0.5f;
+    return rate * l_HIO.field_0x18 + (1.0f - rate) * l_HIO.field_0x14;
+}
+
+static void prepareViewportEmitter(JPABaseEmitter*, dusk::coop::PlayerSlot slot,
+                                   void* context) {
+    YkgrCB.setParam(getPresentationParam(static_cast<daYkgr_c*>(context), slot));
+}
+
+static void restoreViewportEmitter(JPABaseEmitter*, void* context) {
+    YkgrCB.setParam(getPresentationParam(static_cast<daYkgr_c*>(context),
+                                        dusk::coop::PlayerSlot::Primary));
+}
+#endif
+
 inline int daYkgr_c::_create() {
     int uVar1 = u8((fopAcM_GetParam(this) & 0x00F00000) >> 0x14);
     fopAcM_ct(this, daYkgr_c);
+#if TARGET_PC
+    (void)getSlotState(this);
+#endif
     u8 uVar4 = (fopAcM_GetParam(this) & 0x0000FF00) >> 8;
     OS_REPORT("pathNo = %d\n", uVar4);
     if (uVar4 != 0xff) {
@@ -178,6 +251,9 @@ static int daYkgrCreate(void* i_this) {
 }
 
 inline int daYkgr_c::_delete() {
+#if TARGET_PC
+    clearSlotState(this);
+#endif
 #if DEBUG
     l_HIO.removeHIO();
 #endif
@@ -192,6 +268,18 @@ inline int daYkgr_c::_execute() {
     cLib_addCalc2(&field_0x5a4, m_aim_rate, 0.25f, 0.05f);
     cLib_addCalc2(&m_aim_rate, l_HIO.field_0x1c, 0.25f, 0.05f);
     cLib_addCalc2(&field_0x5a8, getPosRate(), 0.25f, 0.05f);
+#if TARGET_PC
+    YkgrSlotState* state = getSlotState(this);
+    if (state != nullptr) {
+        state->posRate[0] = field_0x5a8;
+        for (int i = 1; i < dusk::coop::kPlayerSlotCount; i++) {
+            fopAc_ac_c* player =
+                dusk::coop::getPlayer(static_cast<dusk::coop::PlayerSlot>(i));
+            const f32 target = getPosRateForPlayer(player);
+            cLib_addCalc2(&state->posRate[i], target, 0.25f, 0.05f);
+        }
+    }
+#endif
     f32 fVar4 = field_0x5a4 * 0.5f + field_0x5a8 * 0.5f;
     f32 tmp = fVar4 * l_HIO.field_0x18 + (1.0f - fVar4) * l_HIO.field_0x14;
     YkgrCB.setParam(tmp);
@@ -269,6 +357,14 @@ inline bool daYkgr_c::_draw() {
             } else {
                 m_emitter->setGlobalAlpha(m_alpha);
             }
+#if TARGET_PC
+            // Co-op: reinterpret this Camera-0-simulated screen effect for each viewport and
+            // apply the presenting player's native path-distance strength before particle draw.
+            dusk::coop::render_effects::registerCameraRelativeEmitter(
+                m_emitter, dusk::coop::render_effects::cameraIdForSlot(
+                               dusk::coop::PlayerSlot::Primary),
+                this, prepareViewportEmitter, restoreViewportEmitter);
+#endif
         }
         return true;
     }

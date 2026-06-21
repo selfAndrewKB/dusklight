@@ -12,6 +12,10 @@
 #include "global.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/coop/render_visibility.h"
+#endif
+
 struct daNpc_GetParam1 {  // name unknown
     /* 0x0 */ int fileIdx;
     /* 0x4 */ int arcIdx;
@@ -748,7 +752,15 @@ public:
     virtual void changeBtk(int*, int*) {}
     virtual bool setMotionAnm(int, f32, BOOL);
 
-    bool checkHide() { return mHide || (!dComIfGs_wolfeye_effect_check() && mTwilight); }
+    bool checkHide() {
+#if TARGET_PC
+        // Co-op: submit shared Twilight NPCs once; viewport replay owns Sense visibility.
+        if (mTwilight && dusk::coop::render_visibility::shouldUseViewportVisibility()) {
+            return mHide;
+        }
+#endif
+        return mHide || (!dComIfGs_wolfeye_effect_check() && mTwilight);
+    }
     BOOL checkStep() { return mStepMode == 1; }
     void setCommander(fopAc_ac_c* param_0) { field_0xba0.entry(param_0); }
     void setCutType(int i_cutType) { mCutType = i_cutType; }

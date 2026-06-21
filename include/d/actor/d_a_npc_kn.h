@@ -194,6 +194,12 @@ public:
     }
 
     bool checkHide() {
+#if TARGET_PC
+        // Co-op: submit shared Twilight NPCs once; viewport replay owns Sense visibility.
+        if (mTwilight && dusk::coop::render_visibility::shouldUseViewportVisibility()) {
+            return field_0xe2c != 0;
+        }
+#endif
         return field_0xe2c != 0 || (!dComIfGs_wolfeye_effect_check() && mTwilight != 0);
     }
 

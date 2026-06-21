@@ -49,7 +49,7 @@ public:
     static int createHeapCallBack(fopAc_ac_c*);
     void reset();
     inline int setAction(bool (daNpcDrSol_c::*)(void*));
-    bool chkFindPlayer();
+    bool chkFindPlayer(fopAc_ac_c* player);
     bool wait(void*);
     bool talk(void*);
 

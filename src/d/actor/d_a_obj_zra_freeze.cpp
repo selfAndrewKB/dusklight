@@ -12,6 +12,11 @@
 #include "d/actor/d_a_player.h"
 #include "f_pc/f_pc_name.h"
 
+#if TARGET_PC
+#include "dusk/coop/render_effects.h"
+#include "dusk/coop/render_visibility.h"
+#endif
+
 static DUSK_CONSTEXPR char DUSK_CONST* l_arcName = "zrF";
 
 static f32 const l_DATA[2] = { 800.0f, 0.0f };
@@ -109,9 +114,14 @@ void daZraFreeze_c::setHitodamaPrtcl() {
         mParticleKey[i] = dComIfGp_particle_set(mParticleKey[i], id[i], &pos, &shape_angle, NULL);
         JPABaseEmitter* emitter = dComIfGp_particle_getEmitter(mParticleKey[i]);
         if (emitter != NULL) {
+#if TARGET_PC
+            // Co-op: the unrevealed Frozen Zora wisp is selected per Sense viewport.
+            dusk::coop::render_effects::registerSenseInactiveEmitter(emitter);
+#else
             u8 alpha = dComIfGs_wolfeye_effect_check() == false ? 0xff : 0;
-            emitter->setGlobalTranslation(pos.x, pos.y, pos.z);
             emitter->setGlobalAlpha(alpha);
+#endif
+            emitter->setGlobalTranslation(pos.x, pos.y, pos.z);
         }
     }
 }
@@ -157,7 +167,20 @@ int daZraFreeze_c::Execute() {
 
 int daZraFreeze_c::Draw() {
     if (field_0x5b0 == 0xff || dComIfGs_isSwitch(field_0x5b0, fopAcM_GetRoomNo(this))) {
-        if (mTwilight != 0 && dComIfGs_wolfeye_effect_check() == true) {
+        if (mTwilight != 0 &&
+#if TARGET_PC
+            (dusk::coop::render_visibility::shouldUseViewportVisibility() ||
+             dComIfGs_wolfeye_effect_check() == true)
+#else
+            dComIfGs_wolfeye_effect_check() == true
+#endif
+        ) {
+#if TARGET_PC
+            if (dusk::coop::render_visibility::shouldUseViewportVisibility()) {
+                // Co-op: submit once, then apply owner Sense and native culling per viewport.
+                dusk::coop::render_visibility::registerSenseOnlyModel(mpModel, this);
+            }
+#endif
             g_env_light.settingTevStruct(4, &current.pos, &tevStr);
             g_env_light.setLightTevColorType_MAJI(mpModel, &tevStr);
             mDoExt_modelUpdateDL(mpModel);

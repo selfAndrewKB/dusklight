@@ -11,6 +11,10 @@
 #include "global.h"
 #include "tracy/Tracy.hpp"
 
+#if TARGET_PC
+#include "dusk/coop/render_visibility.h"
+#endif
+
 J3DError J3DDisplayListObj::newDisplayList(u32 maxSize) {
     mMaxSize = ALIGN_NEXT(maxSize, 0x20);
     mpDisplayList[0] = JKR_NEW_ARRAY_ARGS(char, mMaxSize, 0x20);
@@ -231,6 +235,14 @@ void J3DMatPacket::draw() {
     packet->getShape()->loadPreDrawSetting();
 
     while (packet != NULL) {
+#if TARGET_PC
+        // Co-op: material packets may contain shapes from several models. Resolve Sense and
+        // camera culling per submitted model instead of trusting the packet's first shape.
+        if (!dusk::coop::render_visibility::shouldDrawModel(packet->getModel())) {
+            packet = (J3DShapePacket*)packet->getNextPacket();
+            continue;
+        }
+#endif
         if (packet->getDisplayListObj() != NULL) {
             packet->getDisplayListObj()->callDL();
         }

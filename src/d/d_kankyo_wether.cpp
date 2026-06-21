@@ -312,6 +312,9 @@ void dKyw_wether_init() {
 void dKyw_wether_init2() {
     g_env_light.mVrkumoStatus = 0;
     g_env_light.mVrkumoCount = 0;
+#if TARGET_PC
+    dKyr_resetHousiViewportState();
+#endif
 }
 
 void dKyw_wether_delete() {
@@ -339,11 +342,19 @@ void dKyw_wether_delete() {
     }
 
     if (g_env_light.mHousiInitialized) {
+#if TARGET_PC
+        // Co-op: added-camera particle history cannot outlive the native weather packet.
+        dKyr_resetHousiViewportState();
+#endif
         JKR_DELETE(g_env_light.mpHousiPacket);
         g_env_light.mpHousiPacket = NULL;
     }
 
     if (g_env_light.mCloudInitialized) {
+#if TARGET_PC
+        // Co-op: additional camera packets cannot retain weather state past the native packet.
+        dKyr_resetCloudViewportState();
+#endif
         JKR_DELETE(g_env_light.mpCloudPacket);
         g_env_light.mpCloudPacket = NULL;
     }
@@ -708,6 +719,9 @@ static void wether_move_housi() {
             g_env_light.mpHousiPacket = JKR_NEW_ARGS (32) dKankyo_housi_Packet;
 
             if (g_env_light.mpHousiPacket != NULL) {
+#if TARGET_PC
+                dKyr_resetHousiViewportState();
+#endif
                 if (dKy_darkworld_check() == true) {
                     g_env_light.mpHousiPacket->mpResTex = (u8*)dComIfG_getObjectRes("Always", 0x5E);
                 } else {
@@ -748,6 +762,9 @@ static void wether_move_housi() {
             g_env_light.mpHousiPacket->field_0x5de8 <= 0.0f)
         {
             g_env_light.mHousiInitialized = false;
+#if TARGET_PC
+            dKyr_resetHousiViewportState();
+#endif
             JKR_DELETE(g_env_light.mpHousiPacket);
             g_env_light.mpHousiPacket = NULL;
         } else {
@@ -807,6 +824,10 @@ static void wether_move_moya() {
                     g_env_light.mpCloudPacket->mCloudEff[i].mStatus = 0;
                 }
                 g_env_light.mpCloudPacket->mCount = 0;
+#if TARGET_PC
+                // Co-op: initialize per-camera cloud simulations from this new native packet.
+                dKyr_resetCloudViewportState();
+#endif
                 cloud_shadow_move();
                 g_env_light.mCloudInitialized++;
             }
@@ -822,6 +843,10 @@ static void wether_move_moya() {
         if (g_env_light.mMoyaCount == 0 && g_env_light.mpCloudPacket->mCount == 0) {
             g_env_light.mCloudInitialized = 0;
 
+#if TARGET_PC
+            // Co-op: release sidecar ownership with the canonical packet lifecycle.
+            dKyr_resetCloudViewportState();
+#endif
             JKR_DELETE(g_env_light.mpCloudPacket);
             g_env_light.mpCloudPacket = NULL;
         }

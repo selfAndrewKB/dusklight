@@ -13,6 +13,7 @@ enum class RetainedInteractionScope : u8 {
     Carry,
     Hang,
     Collect,
+    Dig,
 };
 
 enum class RetainedInteractionReason : u8 {

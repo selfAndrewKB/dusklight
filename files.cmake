@@ -1481,6 +1481,7 @@ set(DUSK_FILES
         src/dusk/coop/message_owner.cpp
         src/dusk/coop/midna_owner.cpp
         src/dusk/coop/player_query.cpp
+        src/dusk/coop/player_sense.cpp
         src/dusk/coop/player_slots.cpp
         src/dusk/coop/player_button_status.cpp
         src/dusk/coop/player_camera_status.cpp

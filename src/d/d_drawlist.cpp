@@ -9,6 +9,7 @@
 #include "d/d_com_inf_game.h"
 #include "d/d_drawlist.h"
 #include "d/d_s_play.h"
+#include "dusk/coop/render_visibility.h"
 #include "dusk/coop/render_shadows.h"
 #include "m_Do/m_Do_graphic.h"
 #include "m_Do/m_Do_lib.h"
@@ -1131,6 +1132,13 @@ void dDlst_shadowReal_c::imageDraw(Mtx param_0) {
     J3DShapePacket* shape_pkt;
 
     for (u8 i = 0; i < mModelNum; i++) {
+#if TARGET_PC
+        // Co-op: real-shadow replay follows the same viewport-local Sense visibility as its model.
+        if (!dusk::coop::render_visibility::shouldDrawModel(*models)) {
+            models++;
+            continue;
+        }
+#endif
         model_data = (*models)->getModelData();
         model_data->getShapeNodePointer(0)->loadPreDrawSetting();
 

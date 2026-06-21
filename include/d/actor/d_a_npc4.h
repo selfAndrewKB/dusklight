@@ -11,6 +11,10 @@
 #include "m_Do/m_Do_ext.h"
 #include "JSystem/J3DGraphAnimator/J3DMaterialAnm.h"
 
+#if TARGET_PC
+#include "dusk/coop/render_visibility.h"
+#endif
+
 class daNpcF_ActorMngr_c {
 private:
     /* 0x0 */ fpc_ProcID mActorID;
@@ -386,7 +390,15 @@ public:
     BOOL chkPlayerInTalkArea(fopAc_ac_c* i_actor) {
         return chkActorInTalkArea(daPy_getPlayerActorClass(), i_actor);
     }
-    BOOL checkHide() { return mHide || (mTwilight && !dComIfGs_wolfeye_effect_check()); }
+    BOOL checkHide() {
+#if TARGET_PC
+        // Co-op: submit shared Twilight NPCs once; viewport replay owns Sense visibility.
+        if (mTwilight && dusk::coop::render_visibility::shouldUseViewportVisibility()) {
+            return mHide;
+        }
+#endif
+        return mHide || (mTwilight && !dComIfGs_wolfeye_effect_check());
+    }
     void setIntDemander(fopAc_ac_c* i_actor) { field_0x824.entry(i_actor); }
     void setIntFlowNodeNo(s32 i_flowNodeNo) { mFlowNodeNo = i_flowNodeNo; }
     void setCutType(int i_cutType) { mCutType = i_cutType; }

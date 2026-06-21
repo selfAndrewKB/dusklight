@@ -5,6 +5,7 @@
 #include "d/d_com_inf_game.h"
 #include "JSystem/J3DGraphBase/J3DDrawBuffer.h"
 #include "dusk/coop/player_slots.h"
+#include "dusk/coop/player_sense.h"
 
 #include <new>
 
@@ -210,6 +211,11 @@ bool canSelectActor(dAttention_c* attention, const fopAc_ac_c* actor) {
     }
 
     const PlayerSlot ownerSlot = getSlotForActor(attention->mpPlayer);
+    // Co-op: Sense-reveal actors stay in the shared attention list, but each scanner applies
+    // the same owner-local reveal threshold that controls its viewport presentation.
+    if (!player_sense::canReveal(ownerSlot, actor)) {
+        return false;
+    }
     if (ownerSlot == PlayerSlot::Invalid || ownerSlot == PlayerSlot::Primary) {
         return true;
     }

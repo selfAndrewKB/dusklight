@@ -21,6 +21,12 @@
 #include "dusk/frame_interpolation.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/coop/player_sense.h"
+#include "dusk/coop/render_effects.h"
+#include "dusk/coop/render_visibility.h"
+#endif
+
 static home_path_pnt home_path[38] = {
     {0, {561.0f, 87.0f, -1110.0f}},
     {1, {306.0f, 87.0f, -849.0f}},
@@ -143,9 +149,19 @@ static int daNpc_Ne_Draw(npc_ne_class* i_this) {
 #else
     if (i_this->mResName == "Npc_net") {
 #endif
-        if (!dComIfGs_wolfeye_effect_check()) {
+        const bool viewportSenseVisibility =
+#if TARGET_PC
+            dusk::coop::render_visibility::shouldUseViewportVisibility();
+#else
+            false;
+#endif
+        if (!viewportSenseVisibility && !dComIfGs_wolfeye_effect_check()) {
             return 1;
         }
+#if TARGET_PC
+        // Co-op: submit once, then apply owner Sense and native camera culling per viewport.
+        dusk::coop::render_visibility::registerSenseOnlyModel(model, i_this);
+#endif
         g_env_light.settingTevStruct(4, &i_this->current.pos, &i_this->tevStr);
     } else {
         g_env_light.settingTevStruct(0, &i_this->current.pos, &i_this->tevStr);
@@ -2893,7 +2909,14 @@ static int message(npc_ne_class* i_this) {
 #else
     if (i_this->mResName == "Npc_net") {
 #endif
-        if (!dComIfGs_wolfeye_effect_check()) {
+        if (
+#if TARGET_PC
+            !dusk::coop::player_sense::anyRevealReady()
+#else
+            !dComIfGs_wolfeye_effect_check()
+#endif
+        ) {
+            // Co-op: special spirit dialogue stays open while an active owner can reveal it.
             i_this->mMessageState = 0;
         }
     }
@@ -3036,14 +3059,26 @@ static int daNpc_Ne_Execute(npc_ne_class* i_this) {
 #else
     if (i_this->mResName == "Npc_net") {
 #endif
-        if (!dComIfGs_wolfeye_effect_check()) {
+#if TARGET_PC
+        // Co-op: owner-local attention and viewport filters share one reveal registration.
+        dusk::coop::player_sense::registerRevealActor(i_this);
+#endif
+        if (
+#if TARGET_PC
+            dusk::coop::render_visibility::shouldUseViewportVisibility() ||
+#endif
+            !dComIfGs_wolfeye_effect_check()) {
             static u16 e_name[2] = {0x8497, 0x8498};
             for (int i = 0; i < 2; i++) {
                 i_this->mParticle[i] = dComIfGp_particle_set(i_this->mParticle[i], e_name[i],
                                                             &i_this->eyePos, NULL, NULL);
                 JPABaseEmitter* emitter = dComIfGp_particle_getEmitter(i_this->mParticle[i]);
                 if (emitter != NULL) {
+#if TARGET_PC
+                    dusk::coop::render_effects::registerSenseInactiveEmitter(emitter);
+#else
                     emitter->setGlobalAlpha(!dComIfGs_wolfeye_effect_check() ? 0xff : 0);
+#endif
                 }
             }
         }

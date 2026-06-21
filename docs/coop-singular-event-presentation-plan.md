@@ -95,8 +95,8 @@ While a singular fullscreen presentation is active:
 - additional ALINK actors continue executing and retain their player-slot identity;
 - the painter presents the selected owner's camera in a fullscreen viewport while other cameras
   remain alive;
-- non-presenting ALINK models, ALINK-submitted equipment and shadows, and slot-owned runtime Epona
-  are hidden through one centralized slot policy;
+- non-presenting ALINK models, ALINK-submitted equipment and shadows, slot-owned runtime Epona,
+  and slot-owned runtime Midna service actors are hidden through one centralized slot policy;
 - shared world simulation, event progression, room state, and save state continue normally;
 - ending the sequence restores the previous split layout and player presentation immediately.
 
@@ -342,8 +342,11 @@ or demo; those still require explicit classification.
 - Camera layout, painter replay, framebuffer-effect policy, split-only framebuffer refresh,
   secondary HUD replay, material refresh, shadow refresh, and draw-culling bypass distinguish
   active split presentation from the underlying split-screen capability.
-- ALINK and runtime-Epona draw wrappers hide non-presenting slots without changing execution or
-  persistent actor flags.
+- ALINK, runtime-Epona, and runtime-Midna draw wrappers hide non-presenting slots without changing
+  execution or persistent actor flags. Shadow Kargarok exposed why companions belong to the same
+  visual group even when their native actors are separate: canonical Midna inherits P1's native
+  `PLAYER_NODRAW`, while an additional Midna must follow her registered slot through the central
+  presentation predicate.
 - `event.presentation` diagnostics record source depths, transition, split capability, presenter
   slot/window, active presentation layout, hiding policy, and hidden slots.
 - Interactive dialogue begins a `Dialogue` presentation through `message_owner` after the native

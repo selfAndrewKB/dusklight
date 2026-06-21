@@ -39,6 +39,7 @@
 #include "dusk/game_clock.h"
 #include "dusk/coop/camera.h"
 #include "dusk/coop/player_slots.h"
+#include "dusk/coop/render_effects.h"
 #include "dusk/coop/render_materials.h"
 #endif
 
@@ -47,6 +48,10 @@ static void GxXFog_set();
 struct sub_kankyo__class : public kankyo_class {};
 
 #if TARGET_PC
+static bool dKy_isSensePresentationActive() {
+    return dusk::coop::render_effects::isCurrentViewportSenseActive();
+}
+
 static view_class* dKy_getActiveDrawView() {
     // Co-op: environment lighting can be recomputed while split-screen is replaying a
     // shared draw list. Use the active draw view so camera-relative room lights are not
@@ -155,6 +160,10 @@ static cXyz* dKy_getActiveDrawPlayerFlamePos(const cXyz& camera_eye) {
     }
 
     return nearest_flame;
+}
+#else
+static bool dKy_isSensePresentationActive() {
+    return daPy_py_c::checkNowWolfPowerUp();
 }
 #endif
 
@@ -615,23 +624,21 @@ void dKy_pos2_get_angle(cXyz* pos1_p, cXyz* pos2_p, s16* pitch_p, s16* yaw_p) {
     *yaw_p = cM_atan2s(vec.x, vec.z);
 }
 
-void dKy_twi_wolflight_set(int light_id) {
-    dScnKy_env_light_c* kankyo = dKy_getEnvlight();
-    camera_process_class* camera_p = dComIfGp_getCamera(0);
+static void dKy_twi_wolflight_calc(BOSS_LIGHT& light, view_class* view) {
     cXyz vectle;
 
-    if (camera_p == NULL) {
+    if (view == NULL) {
         return;
     }
 
     s16 angle_x;
     s16 angle_y;
-    dKy_pos2_get_angle(&camera_p->view.lookat.center, &camera_p->view.lookat.eye, &angle_x, &angle_y);
-    dKyr_get_vectle_calc(&camera_p->view.lookat.center, &camera_p->view.lookat.eye, &vectle);
+    dKy_pos2_get_angle(&view->lookat.center, &view->lookat.eye, &angle_x, &angle_y);
+    dKyr_get_vectle_calc(&view->lookat.center, &view->lookat.eye, &vectle);
 
-    kankyo->field_0x0c18[light_id].mPos.x = camera_p->view.lookat.eye.x + vectle.x * 300.0f;
-    kankyo->field_0x0c18[light_id].mPos.y = camera_p->view.lookat.eye.y + vectle.y * 300.0f;
-    kankyo->field_0x0c18[light_id].mPos.z = camera_p->view.lookat.eye.z + vectle.z * 300.0f;
+    light.mPos.x = view->lookat.eye.x + vectle.x * 300.0f;
+    light.mPos.y = view->lookat.eye.y + vectle.y * 300.0f;
+    light.mPos.z = view->lookat.eye.z + vectle.z * 300.0f;
 
     int size = g_env_light.light_size;
     #if DEBUG
@@ -646,31 +653,47 @@ void dKy_twi_wolflight_set(int light_id) {
     {
         switch (size) {
         case LIGHT_SIZE_S:
-            kankyo->field_0x0c18[light_id].mPos.y += 1500.0f;
+            light.mPos.y += 1500.0f;
             break;
         case LIGHT_SIZE_M:
-            kankyo->field_0x0c18[light_id].mPos.y += 500.0f;
+            light.mPos.y += 500.0f;
             break;
         case LIGHT_SIZE_L:
-            kankyo->field_0x0c18[light_id].mPos.y += 1000.0f;
+            light.mPos.y += 1000.0f;
             break;
         case LIGHT_SIZE_LL:
-            kankyo->field_0x0c18[light_id].mPos.y += 1500.0f;
+            light.mPos.y += 1500.0f;
             break;
         default:
-            kankyo->field_0x0c18[light_id].mPos.y += 500.0f;
+            light.mPos.y += 500.0f;
             break;
         }
     }
     #if DEBUG
     else {
-        kankyo->field_0x0c18[light_id].mPos.y += g_kankyoHIO.navy.camera_light_y_shift;
+        light.mPos.y += g_kankyoHIO.navy.camera_light_y_shift;
     }
     #endif
 
     ANGLE_ADD(angle_x, 6000);
-    kankyo->field_0x0c18[light_id].mAngleX = cM_sht2d(-angle_x);
-    kankyo->field_0x0c18[light_id].mAngleY = cM_sht2d(-angle_y) + 90.0f;
+    light.mAngleX = cM_sht2d(-angle_x);
+    light.mAngleY = cM_sht2d(-angle_y) + 90.0f;
+}
+
+void dKy_twi_wolflight_set(int light_id) {
+    #if TARGET_PC
+    // Co-op: camera-facing Twilight lights rebuild from the viewport currently consuming them.
+    view_class* view = dusk::coop::render_effects::hasViewport()
+                           ? dusk::coop::render_effects::currentViewport().view
+                           : NULL;
+    #else
+    view_class* view = NULL;
+    #endif
+    if (view == NULL) {
+        camera_process_class* camera_p = dComIfGp_getCamera(0);
+        view = camera_p != NULL ? &camera_p->view : NULL;
+    }
+    dKy_twi_wolflight_calc(dKy_getEnvlight()->field_0x0c18[light_id], view);
 }
 
 void dKy_lightdir_set(f32 angle_x, f32 angle_y, Vec* out_dir_p) {
@@ -880,6 +903,12 @@ f32 dKy_get_parcent(f32 max, f32 min, f32 value) {
 }
 
 static void dKy_FiveSenses_fullthrottle_dark_static1() {
+#if TARGET_PC
+    // Co-op: each live ALINK advances the native Sense fade and emitter lifecycle once.
+    dusk::coop::render_effects::updateSense();
+    return;
+#endif
+
     dScnKy_env_light_c* kankyo = dKy_getEnvlight();
     BOOL init_mode_change = FALSE;
 
@@ -898,7 +927,7 @@ static void dKy_FiveSenses_fullthrottle_dark_static1() {
     particle_size.x *= mDoGph_gInf_c::getScale();
     #endif
 
-    if (daPy_py_c::checkNowWolfPowerUp()) {
+    if (dKy_isSensePresentationActive()) {
         kankyo->now_senses_effect = 1;
         init_mode_change = TRUE;
 
@@ -2384,6 +2413,58 @@ void dKy_calc_color_set(GXColorS10* out_color_p, color_RGB_class* color_a_start_
                                color_b_start_p->b, color_b_end_p->b, blend_ratio, add_col.b, scale);
 }
 
+#if TARGET_PC
+static void dKy_applySenseBloom(f32 effect_ratio, f32 mono_ratio, f32 pulse_scale) {
+    const u8 sense_id = 3;
+    const u8 end_id = g_env_light.field_0x12fc >= 0 ? g_env_light.field_0x12fc : sense_id;
+    dKydata_BloomInfo_c* start = dKyd_BloomInf_tbl_getp(sense_id);
+    dKydata_BloomInfo_c* end = dKyd_BloomInf_tbl_getp(end_id);
+    if (start == NULL || end == NULL) {
+        return;
+    }
+
+    mDoGph_gInf_c::bloom_c* bloom = mDoGph_gInf_c::getBloom();
+    const f32 ratio = g_env_light.field_0x12fc >= 0 ? effect_ratio : 0.0f;
+    const f32 mono_blend = g_env_light.field_0x12fc >= 0 ? mono_ratio : 0.0f;
+    bloom->setPoint(u8_data_ratio_set(start->info.mThreshold, end->info.mThreshold, ratio));
+
+    u8 blur_size = u8_data_ratio_set(start->info.mBlurAmount, end->info.mBlurAmount, ratio);
+    blur_size += static_cast<u8>(pulse_scale * blur_size);
+    bloom->setBlureSize(blur_size);
+    bloom->setBlureRatio(u8_data_ratio_set(start->info.mDensity, end->info.mDensity, ratio));
+
+    GXColor blend = {
+        static_cast<u8>(u8_data_ratio_set(start->info.mColorR, end->info.mColorR, ratio)),
+        static_cast<u8>(u8_data_ratio_set(start->info.mColorG, end->info.mColorG, ratio)),
+        static_cast<u8>(u8_data_ratio_set(start->info.mColorB, end->info.mColorB, ratio)),
+        static_cast<u8>(u8_data_ratio_set(start->info.mOrigDensity, end->info.mOrigDensity, ratio)),
+    };
+    bloom->setBlendColor(blend);
+
+    GXColor mono = {
+        static_cast<u8>(u8_data_ratio_set(start->info.mSaturateSubtractR,
+                                          end->info.mSaturateSubtractR, mono_blend)),
+        static_cast<u8>(u8_data_ratio_set(start->info.mSaturateSubtractG,
+                                          end->info.mSaturateSubtractG, mono_blend)),
+        static_cast<u8>(u8_data_ratio_set(start->info.mSaturateSubtractB,
+                                          end->info.mSaturateSubtractB, mono_blend)),
+        static_cast<u8>(u8_data_ratio_set(start->info.mSaturateSubtractA,
+                                          end->info.mSaturateSubtractA, mono_blend)),
+    };
+    bloom->setMonoColor(mono);
+    if (bloom->getPoint() >= 0xFF) {
+        bloom->setEnable(0);
+    } else {
+        bloom->setEnable(1);
+        bloom->setMode(((sense_id != 0 && start->info.mType != 0) ||
+                        (end_id != 0 && end->info.mType != 0))
+                           ? 1
+                           : 0);
+    }
+    dusk::ApplyBloomOverride();
+}
+#endif
+
 
 void dScnKy_env_light_c::setLight() {
     f32 color_ratio;
@@ -2403,6 +2484,8 @@ void dScnKy_env_light_c::setLight() {
     u8* init_timer = &g_env_light.light_init_timer;
     int i;
     f32 sp8C;
+    f32 sense_bloom_pulse = 0.0f;
+    bool has_presentation_palette = false;
     camera_process_class* camera_p = dComIfGp_getCamera(0);
 
     GXColorS10 add_col;
@@ -2440,6 +2523,7 @@ void dScnKy_env_light_c::setLight() {
 
             cLib_addCalc(&g_env_light.field_0x1258, 1.0f, 0.25f, 0.01f, 0.0000000000001f);
         } else {
+            has_presentation_palette = true;
             g_env_light.field_0x1258 = 0.0f;
         }
 
@@ -2492,11 +2576,6 @@ void dScnKy_env_light_c::setLight() {
                 }
             }
 
-            if (daPy_py_c::checkNowWolfPowerUp()) {
-                dKy_WolfPowerup_AmbCol(&actor_amb_col);
-                dKy_WolfPowerup_BgAmbCol(&bg_amb_col[0]);
-            }
-
             bg_amb_col[1].a = (u8)kankyo_color_ratio_set(
                 prev_pal_start_p->BG1_amb_alpha, prev_pal_end_p->BG1_amb_alpha, color_ratio,
                 next_pal_start_p->BG1_amb_alpha, next_pal_end_p->BG1_amb_alpha,
@@ -2523,21 +2602,11 @@ void dScnKy_env_light_c::setLight() {
                 prev_pal_start_p->cloud_shadow_density, prev_pal_end_p->cloud_shadow_density,
                 color_ratio, next_pal_start_p->cloud_shadow_density,
                 next_pal_end_p->cloud_shadow_density, g_env_light.pat_ratio, 0, 1.0f);
-            if (daPy_py_c::checkNowWolfPowerUp()) {
-                mFogDensity = -1;
-            }
-
             for (i = 0; i < 6; i++) {
                 dKy_calc_color_set(&dungeonlight_col[i], &prev_pal_start_p->plight_col[i],
                                    &next_pal_start_p->plight_col[i], &prev_pal_end_p->plight_col[i],
                                    &next_pal_end_p->plight_col[i], color_ratio,
                                    g_env_light.pat_ratio, add_col, g_env_light.now_bgcol_ratio);
-
-                if (daPy_py_c::checkNowWolfPowerUp()) {
-                    dungeonlight_col[i].r = 0;
-                    dungeonlight_col[i].g = 0;
-                    dungeonlight_col[i].b = 0;
-                }
 
                 g_env_light.dungeonlight[i].mColor.r = dungeonlight_col[i].r;
                 g_env_light.dungeonlight[i].mColor.g = dungeonlight_col[i].g;
@@ -2556,12 +2625,6 @@ void dScnKy_env_light_c::setLight() {
                 next_pal_start_p->fog_end_z, next_pal_end_p->fog_end_z, g_env_light.pat_ratio,
                 g_env_light.field_0x11f0, g_env_light.field_0x11f4);
 
-            if (daPy_py_c::checkNowWolfPowerUp()) {
-                fog_col.r = 0;
-                fog_col.g = 0;
-                fog_col.b = 0;
-                dKy_WolfPowerup_FogNearFar(&mFogNear, &mFogFar);
-            }
             }
 
             u8 sp2B;
@@ -2581,14 +2644,7 @@ void dScnKy_env_light_c::setLight() {
                 g_kankyoHIO.bloom.m_saturationPattern = prev_pal_end_p->bloom_tbl_id;
             }
 
-            if (g_kankyoHIO.navy.twilight_sense_saturation_mode && daPy_py_c::checkNowWolfPowerUp()) {
-                prev_bloom_start_id = next_bloom_start_id = prev_bloom_end_id = next_bloom_end_id = g_kankyoHIO.navy.twilight_sense_saturation_mode;
-            }
             #endif
-
-            if (daPy_py_c::checkNowWolfPowerUp()) {
-                prev_bloom_start_id = next_bloom_start_id = prev_bloom_end_id = next_bloom_end_id = 3;
-            }
 
             if (g_env_light.field_0x12fc >= 0) {
                 prev_bloom_end_id = g_env_light.field_0x12fc;
@@ -2630,6 +2686,7 @@ void dScnKy_env_light_c::setLight() {
                 static s16 S_fuwan_sin;
 
                 f32 sin = cM_ssin(S_fuwan_sin);
+                sense_bloom_pulse = sin * 0.2f;
 
                 #if TARGET_PC
                     const f32 deltaTime = dusk::game_clock::consume_interval(this);
@@ -2639,7 +2696,7 @@ void dScnKy_env_light_c::setLight() {
                     S_fuwan_sin += (s16)cM_rndF(2000.0f) + 500;
                 #endif
 
-                blure_size += (u8)(sin * (0.2f * blure_size));
+                blure_size += (u8)(sense_bloom_pulse * blure_size);
             }
 
             mDoGph_gInf_c::getBloom()->setBlureSize(blure_size);
@@ -2895,31 +2952,6 @@ void dScnKy_env_light_c::setLight() {
                 color_ratio, next_vrboxcol_start_p->kasumi_inner_col.a,
                 next_vrboxcol_end_p->kasumi_inner_col.a, g_env_light.pat_ratio, 0, 1.0f);
 
-            if (daPy_py_c::checkNowWolfPowerUp()) {
-                vrbox_sky_col.r = 0;
-                vrbox_sky_col.g = 0;
-                vrbox_sky_col.b = 0;
-
-                vrbox_kumo_top_col.r = 0;
-                vrbox_kumo_top_col.g = 0;
-                vrbox_kumo_top_col.b = 0;
-
-                vrbox_kumo_bottom_col.r = 0;
-                vrbox_kumo_bottom_col.g = 0;
-                vrbox_kumo_bottom_col.b = 0;
-
-                vrbox_kumo_shadow_col.r = 0;
-                vrbox_kumo_shadow_col.g = 0;
-                vrbox_kumo_shadow_col.b = 0;
-
-                vrbox_kasumi_outer_col.r = 0;
-                vrbox_kasumi_outer_col.g = 0;
-                vrbox_kasumi_outer_col.b = 0;
-
-                vrbox_kasumi_inner_col.r = 0;
-                vrbox_kasumi_inner_col.g = 0;
-                vrbox_kasumi_inner_col.b = 0;
-            }
             }
 
             #if DEBUG
@@ -2927,6 +2959,40 @@ void dScnKy_env_light_c::setLight() {
             #endif
         }
     }
+
+#if TARGET_PC
+    // Co-op: derive both presentation variants from the one native environment update.
+    dusk::coop::render_effects::captureEnvironmentVariant(false);
+    if (has_presentation_palette) {
+        dKy_WolfPowerup_AmbCol(&actor_amb_col);
+        dKy_WolfPowerup_BgAmbCol(&bg_amb_col[0]);
+        mFogDensity = 0xFF;
+        for (i = 0; i < 6; i++) {
+            dungeonlight_col[i].r = 0;
+            dungeonlight_col[i].g = 0;
+            dungeonlight_col[i].b = 0;
+            dungeonlight[i].mColor.r = 0;
+            dungeonlight[i].mColor.g = 0;
+            dungeonlight[i].mColor.b = 0;
+        }
+        fog_col.r = 0;
+        fog_col.g = 0;
+        fog_col.b = 0;
+        dKy_WolfPowerup_FogNearFar(&mFogNear, &mFogFar);
+
+        vrbox_sky_col.r = vrbox_sky_col.g = vrbox_sky_col.b = 0;
+        vrbox_kumo_top_col.r = vrbox_kumo_top_col.g = vrbox_kumo_top_col.b = 0;
+        vrbox_kumo_bottom_col.r = vrbox_kumo_bottom_col.g = vrbox_kumo_bottom_col.b = 0;
+        vrbox_kumo_shadow_col.r = vrbox_kumo_shadow_col.g = vrbox_kumo_shadow_col.b = 0;
+        vrbox_kasumi_outer_col.r = vrbox_kasumi_outer_col.g = vrbox_kasumi_outer_col.b = 0;
+        vrbox_kasumi_inner_col.r = vrbox_kasumi_inner_col.g = vrbox_kasumi_inner_col.b = 0;
+
+        const f32 effect_ratio = field_0x12fc >= 0 ? field_0x1278 : 0.0f;
+        dKy_applySenseBloom(effect_ratio, color_ratio, sense_bloom_pulse);
+    }
+    dusk::coop::render_effects::captureEnvironmentVariant(true);
+    dusk::coop::render_effects::applyEnvironmentForSlot(dusk::coop::PlayerSlot::Primary);
+#endif
 }
 
 void dScnKy_env_light_c::setLight_bg(dKy_tevstr_c* tevstr_p, GXColorS10* bg_col_p,
@@ -2970,7 +3036,7 @@ void dScnKy_env_light_c::setLight_bg(dKy_tevstr_c* tevstr_p, GXColorS10* bg_col_
                                bg_addcol_amb, g_env_light.now_bgcol_ratio);
         }
 
-        if (daPy_py_c::checkNowWolfPowerUp()) {
+        if (dKy_isSensePresentationActive()) {
             dKy_WolfPowerup_BgAmbCol(bg_col_p);
         }
 
@@ -2992,7 +3058,7 @@ void dScnKy_env_light_c::setLight_bg(dKy_tevstr_c* tevstr_p, GXColorS10* bg_col_
                                &next_pal_end_p->plight_col[i], color_ratio, tevstr_p->pat_ratio,
                                bg_addcol_amb, g_env_light.now_bgcol_ratio);
 
-            if (daPy_py_c::checkNowWolfPowerUp()) {
+            if (dKy_isSensePresentationActive()) {
                 plight_colors[i].r = 0;
                 plight_colors[i].g = 0;
                 plight_colors[i].b = 0;
@@ -3021,7 +3087,7 @@ void dScnKy_env_light_c::setLight_bg(dKy_tevstr_c* tevstr_p, GXColorS10* bg_col_
             next_pal_start_p->fog_end_z, next_pal_end_p->fog_end_z, tevstr_p->pat_ratio,
             g_env_light.field_0x11f0, g_env_light.field_0x11f4);
 
-        if (daPy_py_c::checkNowWolfPowerUp()) {
+        if (dKy_isSensePresentationActive()) {
             fog_col_p->r = 0;
             fog_col_p->g = 0;
             fog_col_p->b = 0;
@@ -3082,7 +3148,7 @@ void dScnKy_env_light_c::setLight_actor(dKy_tevstr_c* tevstr_p, GXColorS10* fog_
                                    (g_env_light.field_0x1210 * (g_env_light.now_actcol_ratio * g_env_light.now_actcol_ratio)));
         }
 
-        if (daPy_py_c::checkNowWolfPowerUp()) {
+        if (dKy_isSensePresentationActive()) {
             dKy_WolfPowerup_AmbCol(&tevstr_p->AmbCol);
         }
 
@@ -3104,7 +3170,7 @@ void dScnKy_env_light_c::setLight_actor(dKy_tevstr_c* tevstr_p, GXColorS10* fog_
                                        &next_pal_end_p->plight_col[i], color_ratio,
                                        tevstr_p->pat_ratio, actor_addcol_amb, 1.0f);
 
-                    if (daPy_py_c::checkNowWolfPowerUp()) {
+                    if (dKy_isSensePresentationActive()) {
                         plight_col[i].r = 0;
                         plight_col[i].g = 0;
                         plight_col[i].b = 0;
@@ -3125,7 +3191,7 @@ void dScnKy_env_light_c::setLight_actor(dKy_tevstr_c* tevstr_p, GXColorS10* fog_
                         &next_pal_end_p->plight_col[i], color_ratio, tevstr_p->pat_ratio,
                         actor_addcol_amb, g_env_light.field_0x1210);
 
-                    if (daPy_py_c::checkNowWolfPowerUp()) {
+                    if (dKy_isSensePresentationActive()) {
                         plight_col[i].r = 0;
                         plight_col[i].g = 0;
                         plight_col[i].b = 0;
@@ -3141,7 +3207,7 @@ void dScnKy_env_light_c::setLight_actor(dKy_tevstr_c* tevstr_p, GXColorS10* fog_
                                    actor_addcol_amb,
                                    g_env_light.now_actcol_ratio * g_env_light.now_actcol_ratio);
 
-                if (daPy_py_c::checkNowWolfPowerUp()) {
+                if (dKy_isSensePresentationActive()) {
                     plight_col[i].r = 0;
                     plight_col[i].g = 0;
                     plight_col[i].b = 0;
@@ -3161,7 +3227,7 @@ void dScnKy_env_light_c::setLight_actor(dKy_tevstr_c* tevstr_p, GXColorS10* fog_
                                    g_env_light.field_0x1210 * (g_env_light.now_actcol_ratio *
                                                                g_env_light.now_actcol_ratio));
 
-                if (daPy_py_c::checkNowWolfPowerUp()) {
+                if (dKy_isSensePresentationActive()) {
                     plight_col[i].r = 0;
                     plight_col[i].g = 0;
                     plight_col[i].b = 0;
@@ -3195,7 +3261,7 @@ void dScnKy_env_light_c::setLight_actor(dKy_tevstr_c* tevstr_p, GXColorS10* fog_
                 g_env_light.field_0x11f0, 0.0f);
         }
 
-        if (daPy_py_c::checkNowWolfPowerUp()) {
+        if (dKy_isSensePresentationActive()) {
             int sp58 = 0;
             fog_col_p->r = 0;
             fog_col_p->g = 0;
@@ -10445,7 +10511,160 @@ int dKy_WolfEyeLight_set(cXyz* pos_p, f32 angle_x, f32 angle_y, f32 cutoff, GXCo
     return sp28;
 }
 
+#if TARGET_PC
+static unsigned int dKy_buildTwilightCameraLight(BOSS_LIGHT* lights, fopAc_ac_c* player,
+                                                  camera_class* camera, bool sense_active) {
+    if ((strcmp(dComIfGp_getStartStageName(), "R_SP107") == 0 &&
+         dComIfGp_roomControl_getStayNo() == 3 && dComIfGp_getStartStageLayer() == 12) ||
+        !dKy_darkworld_check() || memcmp(dComIfGp_getStartStageName(), "D_MN08", 6) == 0 ||
+        sense_active || camera == NULL)
+    {
+        unsigned int mask = 0;
+        for (int i = 0; i < 6; i++) {
+            if (lights[i].field_0x26 == 1) {
+                mask |= 1u << i;
+            }
+        }
+        return mask;
+    }
+
+    for (int i = 0; i < 6; i++) {
+        BOSS_LIGHT& light = lights[i];
+        if (light.field_0x26 == 1) {
+            continue;
+        }
+
+        dKy_twi_wolflight_calc(light, &camera->view);
+        light.field_0x14 = 0.99f;
+        light.mColor.a = 254;
+
+        f32 height_ratio = 0.0f;
+        if (player != NULL) {
+            f32 height = camera->view.lookat.eye.y - player->current.pos.y;
+            if (height < 0.0f) {
+                height = 0.0f;
+            } else if (height > 600.0f) {
+                height = 600.0f;
+            }
+            height_ratio = height / 450.0f;
+        }
+
+        switch (g_env_light.light_size) {
+        case LIGHT_SIZE_S:
+            light.mColor.r = 0x19;
+            light.mColor.g = 0x5A;
+            light.mColor.b = 0xB7;
+            cLib_addCalc(&light.mRefDistance, 1.0625f + 0.75f * height_ratio, 0.2f, 10.0f,
+                         0.0001f);
+            light.mCutoffAngle = 90.0f;
+            break;
+        case LIGHT_SIZE_M:
+            light.mColor.r = 0x48;
+            light.mColor.g = 0x87;
+            light.mColor.b = 0xCE;
+            cLib_addCalc(&light.mRefDistance, 1.7f + 0.75f * height_ratio, 0.2f, 10.0f,
+                         0.0001f);
+            light.mCutoffAngle = 70.0f;
+            break;
+        case LIGHT_SIZE_L:
+            light.mColor.r = 0x48;
+            light.mColor.g = 0x87;
+            light.mColor.b = 0xCE;
+            cLib_addCalc(&light.mRefDistance, 2.5500002f + 0.75f * height_ratio, 0.2f, 10.0f,
+                         0.0001f);
+            light.mCutoffAngle = 70.0f;
+            break;
+        case LIGHT_SIZE_LL:
+            light.mColor.r = 0x50;
+            light.mColor.g = 0x87;
+            light.mColor.b = 0xCE;
+            cLib_addCalc(&light.mRefDistance, 3.4f + 0.75f * height_ratio, 0.2f, 10.0f,
+                         0.0001f);
+            light.mCutoffAngle = 65.0f;
+            break;
+        }
+
+        #if DEBUG
+        switch (g_kankyoHIO.navy.room_light_type) {
+        case 0:
+            break;
+        case 1:
+            cLib_addCalc(&light.mRefDistance, 0.75f * height_ratio + 1.0625f, 0.5f, 100.0f,
+                         0.0001f);
+            light.mCutoffAngle = 90.0f;
+            break;
+        case 2:
+            cLib_addCalc(&light.mRefDistance, 0.75f * height_ratio + 1.7f, 0.5f, 100.0f,
+                         0.0001f);
+            light.mCutoffAngle = 70.0f;
+            break;
+        case 3:
+            cLib_addCalc(&light.mRefDistance, 0.75f * height_ratio + 2.5500002f, 0.5f,
+                         100.0f, 0.0001f);
+            light.mCutoffAngle = 70.0f;
+            break;
+        case 4:
+            cLib_addCalc(&light.mRefDistance, 0.75f * height_ratio + 3.4f, 0.5f, 100.0f,
+                         0.0001f);
+            light.mCutoffAngle = 65.0f;
+            break;
+        }
+        if (g_kankyoHIO.navy.camera_light_adjust_ON) {
+            light.mColor.r = g_kankyoHIO.navy.camera_light_col.r;
+            light.mColor.g = g_kankyoHIO.navy.camera_light_col.g;
+            light.mColor.b = g_kankyoHIO.navy.camera_light_col.b;
+            light.mRefDistance =
+                g_kankyoHIO.navy.camera_light_power * 0.85f + height_ratio * 0.75f;
+            light.mCutoffAngle = g_kankyoHIO.navy.camera_light_cutoff;
+        }
+        light.mAngleAttenuation = g_kankyoHIO.navy.camera_light_sp;
+        light.mDistAttenuation = g_kankyoHIO.navy.camera_light_da;
+        #else
+        light.mAngleAttenuation = GX_SP_COS;
+        light.mDistAttenuation = GX_DA_STEEP;
+        #endif
+        light.field_0x26 = 1;
+        break;
+    }
+
+    unsigned int mask = 0;
+    for (int i = 0; i < 6; i++) {
+        if (lights[i].field_0x26 == 1) {
+            mask |= 1u << i;
+        }
+    }
+    return mask;
+}
+#endif
+
 void dKy_twilight_camelight_set() {
+#if TARGET_PC
+    // Co-op: every active ALINK receives the native Twilight camera-light update for its camera.
+    BOSS_LIGHT base_lights[8];
+    for (int i = 0; i < 8; i++) {
+        base_lights[i] = g_env_light.field_0x0c18[i];
+    }
+
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        const dusk::coop::PlayerSlot slot = static_cast<dusk::coop::PlayerSlot>(i);
+        fopAc_ac_c* player = dusk::coop::getPlayer(slot);
+        if (player == NULL && slot != dusk::coop::PlayerSlot::Primary) {
+            continue;
+        }
+
+        BOSS_LIGHT slot_lights[8];
+        dusk::coop::render_effects::prepareTwilightLights(slot, base_lights, slot_lights, 8);
+        const int camera_id = dusk::coop::render_effects::cameraIdForSlot(slot);
+        camera_class* camera = (camera_class*)dComIfGp_getCamera(camera_id);
+        const unsigned int mask = dKy_buildTwilightCameraLight(
+            slot_lights, player, camera, dusk::coop::render_effects::isSenseActive(slot));
+        dusk::coop::render_effects::storeTwilightLights(slot, slot_lights, 8, camera_id, player,
+                                                        mask);
+    }
+
+    dusk::coop::render_effects::applyTwilightLightsForSlot(dusk::coop::PlayerSlot::Primary);
+    return;
+#endif
     dScnKy_env_light_c* kankyo = dKy_getEnvlight();
     fopAc_ac_c* player_p = dComIfGp_getPlayer(0);
     camera_class* camera_p = (camera_class*)dComIfGp_getCamera(0);
@@ -10463,7 +10682,7 @@ void dKy_twilight_camelight_set() {
             return;
         }
 
-        if (!daPy_py_c::checkNowWolfPowerUp()) {
+        if (!dKy_isSensePresentationActive()) {
             for (i = 0; i < 6; i++) {
                 if (kankyo->field_0x0c18[i].field_0x26 != 1) {
                     dKy_twi_wolflight_set(i);

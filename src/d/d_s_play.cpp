@@ -48,6 +48,7 @@
 #include "dusk/coop/message_owner.h"
 #include "dusk/coop/midna_owner.h"
 #include "dusk/coop/player_attention.h"
+#include "dusk/coop/render_effects.h"
 #include "dusk/memory.h"
 #include "dusk/ui/ui.hpp"
 #endif
@@ -927,6 +928,7 @@ static int dScnPly_Delete(dScnPly_c* i_this) {
     dusk::coop::message_owner::reset();
     dusk::coop::item_get_owner::reset();
     dusk::coop::event_presentation::reset();
+    dusk::coop::render_effects::reset();
     dusk::coop::camera::resetSplitScreenCameraState();
 #endif
     dComIfGd_setView(NULL);
@@ -1490,6 +1492,7 @@ static int phase_4(dScnPly_c* i_this) {
     dusk::coop::message_owner::reset();
     dusk::coop::item_get_owner::reset();
     dusk::coop::event_presentation::reset();
+    dusk::coop::render_effects::reset();
     dusk::coop::camera::resetSplitScreenCameraState();
 #endif
     dComIfGd_setWindow(NULL);

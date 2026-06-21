@@ -74,6 +74,10 @@ Darknut repeats the original world-space annulus. Shadow Kargarok uses the origi
 grass-call range independently of sticky Combat targeting; the separate `BOW_IKKI2` `z > 35000`
 setpiece remains untouched. Those two proofs retain P1 choreography and begin P1 fullscreen only
 after native demo acceptance, releasing after native camera reset/start, skip, or actor deletion.
+The Shadow Kargarok field pass also proved that fullscreen hiding must cover the complete slot-owned
+visual group. P1's canonical Midna follows the authored Link's native `PLAYER_NODRAW`; additional
+Midnas are independent runtime actors and therefore use `midna_owner` slot identity plus
+`event_presentation::shouldHideSlot()` at draw submission.
 
 ## Audit and Diagnostics
 

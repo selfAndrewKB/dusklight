@@ -16,15 +16,15 @@ families, and which systems are intentionally deferred.
 | Which player owns this camera, render window, or camera decision? | `camera_owner` / existing `dusk::coop::camera` | Partially implemented as the camera/window/player sidecar |
 | Which viewport is being rendered right now? | `viewport_owner` / render-window context | Partially implemented in the painter loop |
 | Which player-status bits should a camera or camera tag read? | `player_camera_status` | First pass implemented for slot-local camera/action bits, attention bits, item aim, and climb/hang hints |
-| Which render state must be installed per viewport? | `viewport_render_state` / `dusk::coop::render_materials` | Partially implemented through painter-level per-viewport environment/material refresh and line-material refresh |
-| Which fullscreen effect owns this viewport/framebuffer? | `viewport_effect_owner` | Partially implemented through `dusk::coop::render_effects` policy helpers and the central per-window painter replay |
+| Which render state must be installed per viewport? | `dusk::coop::render_materials` / `dusk::coop::render_effects` | Implemented for kankyo/J3D material refresh, camera-facing `viewCalc()`, projected texture matrices, Base/Sense environment snapshots, Twilight camera lights, and fixed per-slot camera-retained weather histories for cloud haze and Twilight `housi` particles |
+| Which fullscreen effect owns this viewport/framebuffer? | `dusk::coop::render_effects` | Viewport context and Dusk/Classic bloom are implemented; motion blur, depth of field, fades, indirect-screen passes, and generic fullscreen 2D remain explicitly global/gated |
 | Which viewport owns real-shadow submission culling and baked shadow matrices? | `render_shadows` | Partially implemented through `dusk::coop::render_shadows` for shared-list culling bypass and per-viewport real-shadow refresh |
 | Which viewport should camera-facing 3D line/ribbon geometry use? | shared 3D-line material refresh | Implemented for `mDoExt_3DlineMat0_c` and `mDoExt_3DlineMat1_c` during the per-window painter pass |
 | Which player owns HUD, reticles, prompts, and message UI? | `hud_owner` / `ui_owner` / `message_owner` | `hud_owner` presents slot-local prompts and assigned items; `ui_owner` owns transient overlay viewport context and the singular item wheel; `message_owner` retains the active interactive dialogue slot/pad/listener/speaker. Full inventory/menu and passive message UI remain deferred |
 | Should an explicitly classified singular event, interactive dialogue, item-get sequence, or captured menu surface temporarily present one fullscreen camera and hide non-presenting players? | `event_presentation` | Implemented opt-in override above the camera sidecar; howling stones, Midna service, interactive dialogue, generic ItemGet, and captured fullscreen menu surfaces are classified consumers |
 | Which player activated an NPC/object/event trigger? | `interaction_owner` / `event_owner` | Initial knob/shutter prompt-side and accepted door-demo proofs implemented; generic ALINK talk/check/pickup actions already flow through slot-local attention/status, while remaining world-actor singleton prompts are audited case by case |
 | Which camera or player should audio listener state follow? | `audio_listener_owner` | Not implemented; audio listener stays camera 0/P1-owned |
-| Should this actor, world chunk, foliage/detail, or background part be draw-culled for local split-screen? | `render_visibility` | Initial PC split-screen bypass implemented for known P1-camera draw-culling paths |
+| Should this actor, world chunk, foliage/detail, background part, or Sense-only model draw in this viewport? | `render_visibility` | PC split-screen bypass covers known P1-camera culling; Sense-only model packets and real shadows are filtered per viewport |
 
 ## Current Split-Screen Patches To Revisit
 
@@ -92,8 +92,23 @@ Audit decision:
   tail again.
 - Heat-haze projection particles bind the particle resource `dummy` texture, which is backed by the
   framebuffer. Split-screen refreshes that framebuffer texture from the active viewport immediately
-  before projection particles draw; this is separate from the later indirect-screen draw list, which
-  remains disabled in split-screen because it contains mixed fullscreen weather/effect packets.
+  before projection particles draw. The backing `ResTIMG` remains canonical. Rebuilding the common
+  and room JParticle resource managers' cached `dummy` bindings did not change the Goron Mines haze,
+  and diagnostics instead identified `daYkgr_c` particle `0x80E2` as the Camera-0-relative
+  distortion sheet. It now retains one simulation while `render_effects` installs its simulation-
+  camera matrix captured at native submission and slot-local path strength for each viewport draw.
+  Its native post-particle framebuffer capture is refreshed per viewport so the distortion samples
+  current fire/lava particles instead of a pre-particle frame. Kankyo modes below 50 are
+  separately replayed as camera-relative world-space cloud/mist packets while the mixed indirect-
+  screen list remains disabled. Each active camera owns a fixed `CLOUD_EFF` simulation sidecar;
+  P1 retains the canonical packet and vanilla RNG, additional slots use private visual RNG, and
+  shared texture animation advances once. This sidecar is required because native update stores
+  camera/player-dependent positions, alpha, and room-ratio history before draw; replaying P1's
+  completed packet under Camera 1 cannot recover that missing lifecycle.
+- Framebuffer-effect policy is per consumer and per phase. The group-13 distortion sheet requires
+  the second native capture after ordinary particles, while water requires the capture before the
+  invisible-list replay. Satisfying either dependency does not enable motion blur, depth of field,
+  fades, or the mixed indirect-screen list.
 - Refractive water surfaces are submitted through the invisible draw lists and sample the same
   framebuffer texture. Split-screen refreshes that capture from the active viewport immediately
   before each invisible-list replay, including the alternate blur ordering, so water does not sample
@@ -182,8 +197,9 @@ Current behavior:
 - The painter installs the active view and refreshes registered kankyo/J3D model materials for each
   viewport before draw-list replay.
 - Camera-facing 3D line materials are refreshed per viewport alongside those registered models.
-- P2-owned fullscreen presentation still refreshes camera-1 culling, real shadows, kankyo/J3D
-  materials, particle-creation culling, and GX lights even though only one window is replayed.
+- Any fullscreen presenter in an active split-screen session still refreshes its culling, real
+  shadows, kankyo/J3D materials, particle-creation culling, and GX lights even though only one window
+  is replayed. Shadow Kargarok proved this is required for P1-authored fullscreen cameras too.
 - After camera 1 draw, camera 0's global J3D view is restored so later global lighting/debug code
   does not accidentally inherit P2's camera.
 
@@ -192,7 +208,8 @@ Audit decision:
 - Keep per-viewport refresh centralized in `render_materials` and the painter loop.
 - Keep `shouldPresentSplitViewports()` separate from
   `shouldRefreshViewportOwnedWorldState()`. The former controls whether both windows and split-only
-  framebuffer work run; the latter remains true for camera-1 fullscreen presentation.
+  framebuffer work run; the latter remains true for every fullscreen presenter while split-screen
+  capability is active.
 - Add future material families to that registry rather than scattering actor-local refresh calls.
 - Continue restoring a known global baseline after the split viewport loop.
 - Treat the current lighting fix as a valid V1, but a future `viewport_render_state` pass should
@@ -245,6 +262,10 @@ Audit decision:
 - Implemented as an opt-in `event_presentation` override above the camera/window sidecar. Do not
   call `setSplitScreenEnabled(false)` and do not mutate persistent actor `NODRAW` state as the
   default hiding mechanism.
+- The hidden unit is the slot-owned visual group, not only the ALINK actor. Runtime Epona and
+  runtime Midna service actors consult the same `shouldHideSlot()` predicate at draw submission.
+  Shadow Kargarok proved the distinction: canonical Midna naturally follows P1's authored
+  `PLAYER_NODRAW`, while P2's separately executing Midna has no native reason to inherit that flag.
 - Keep howling stones P1/global in V1. Midna keeps P1's canonical actor for story/save/global paths,
   while additional slots use runtime service actors; the transient service opts in with the
   requesting slot as presenter and reads that slot for active-service physical setup. Captured
@@ -383,8 +404,11 @@ Follow-up investigation:
    actor draw culling and the known world/background clipper paths.
 3. Add diagnostics or overlay evidence only if objects still disappear or shift in P2's view.
 4. Start `player_camera_status` for camera 1 item/lock-on/special mode correctness.
-5. Start `viewport_render_state` with environment lighting/fog ownership.
-6. Revisit HUD/reticles after camera/render correctness is stable.
+5. Done: install Base/Sense environment snapshots, slot-local Twilight camera lights, and
+   viewport-sized bloom through `render_effects`.
+6. Done pending field validation: renew pooled simple Sense-emitter classification on native reuse
+   and simulate `dKankyo_housi_Packet` retained particle history once per active camera.
+7. Revisit HUD/reticles after camera/render correctness is stable.
 
 ## Acceptance Targets
 

@@ -14,6 +14,12 @@
 #include "m_Do/m_Do_lib.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/coop/player_sense.h"
+#include "dusk/coop/render_effects.h"
+#include "dusk/coop/render_visibility.h"
+#endif
+
 #if DEBUG
 void daNpcT_cmnListenPropertyEvent(char* param_0, int* param_1, daNpcT_HIOParam* param_2) {
     sprintf(&param_0[*param_1], "%.3ff,\t//  注目オフセット\n", param_2->attention_offset);
@@ -1435,9 +1441,21 @@ int daNpcT_c::draw(BOOL param_0, BOOL i_setEffMtx, f32 param_2, GXColorS10* i_co
     J3DModelData* modelData = model->getModelData();
     field_0xe34 = 1;
 
+#if TARGET_PC
+    const bool viewportSenseVisibility =
+        mTwilight && dusk::coop::render_visibility::shouldUseViewportVisibility();
+#else
+    const bool viewportSenseVisibility = false;
+#endif
     if (drawDbgInfo() || checkHide() || mNoDraw) {
         return 1;
     }
+#if TARGET_PC
+    if (viewportSenseVisibility) {
+        // Co-op: submit once, then apply owner Sense and native camera culling per viewport.
+        dusk::coop::render_visibility::registerSenseOnlyModel(model, this);
+    }
+#endif
 
     tevStr.TevColor.r = 0;
     tevStr.TevColor.g = 0;
@@ -2030,6 +2048,10 @@ bool daNpcT_c::checkCullDraw() {
 
 void daNpcT_c::twilight() {
     if (mTwilight) {
+#if TARGET_PC
+        // Co-op: each attention scanner applies its owner's Sense threshold to this shared actor.
+        dusk::coop::player_sense::registerRevealActor(this);
+#endif
         attention_info.flags |= fopAc_AttnFlag_UNK_0x400000;
         mNoDraw = false;
         attention_info.flags |= fopAc_AttnFlag_UNK_0x800000;
@@ -2048,7 +2070,13 @@ void daNpcT_c::evtOrder() {
         fopAcM_orderOtherEventId(this, mEvtId, 0xFF, 0xFFFF, 40, 1);
     } else if (
 #if !PLATFORM_SHIELD
-        (!mTwilight || daPy_py_c::checkNowWolfEyeUp()) &&
+        (!mTwilight ||
+#if TARGET_PC
+         dusk::coop::player_sense::anyRevealReady()
+#else
+         daPy_py_c::checkNowWolfEyeUp()
+#endif
+        ) &&
 #endif
         ((attention_info.flags & fopAc_AttnFlag_SPEAK_e) || (attention_info.flags & fopAc_AttnFlag_TALK_e))) {
         eventInfo.onCondition(dEvtCnd_CANTALK_e);
@@ -2659,9 +2687,13 @@ void daNpcT_c::setHitodamaPrtcl() {
 
         emitter = dComIfGp_particle_getEmitter(mHitodamaPrtclKey[i]);
         if (emitter != NULL) {
-            u8 alpha = dComIfGs_wolfeye_effect_check() == FALSE ? 0xFF : 0;
             emitter->setGlobalTranslation(pos.x, pos.y, pos.z);
-            emitter->setGlobalAlpha(alpha);
+#if TARGET_PC
+            // Co-op: the spirit wisp is the inverse of the owner-local revealed body.
+            dusk::coop::render_effects::registerSenseInactiveEmitter(emitter);
+#else
+            emitter->setGlobalAlpha(dComIfGs_wolfeye_effect_check() == FALSE ? 0xFF : 0);
+#endif
         }
     }
 }

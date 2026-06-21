@@ -177,7 +177,9 @@ Fix only the sites needed for the current split-screen validation scenario.
 - [x] Added camera map-tool diagnostics so `latest.json` shows each camera's active room, stage, default-room, and tag camera tool source alongside the final native type/style.
 - [x] Scoped camera room/default-camera selection to each camera's owning player actor on PC. This keeps camera 1 from using the global stay room when P2 eventually crosses room boundaries independently.
 - [x] Found that P2's `FieldWide` behavior came from camera tags being evaluated only against `dComIfGp_getLinkPlayer()` and applied only through `dCam_getBody()` camera 0. Added a PC split-screen path that evaluates the same native tag volume against P2 and applies it to camera 1.
-- [ ] Design proper per-player/per-viewport environment-light ownership so split-screen lighting can be correct for all local players and future online peers.
+- [x] Added per-viewport Base/Sense environment snapshots, slot-local Twilight camera-light
+  snapshots, camera-derived model/material refresh, and viewport-sized Dusk/Classic bloom through
+  `render_effects` and `render_materials`.
 - [x] Added `render_visibility` and bypassed actor/world/background draw-time culling during native PC split screen.
 - [ ] Validate P1/P2 independent camera follow in a simple field/test room.
 - [ ] Decide and implement real per-player camera status storage/routing for P2-specific item, lock-on, and special camera modes.
@@ -250,7 +252,9 @@ Failure conditions:
 - Move any old camera debug logs into structured diagnostics or remove them.
 - Keep the camera 0 call-site classification table in this plan until it grows large enough to justify a separate audit doc.
 - Revisit HUD and targeting reticles after normal 3D split-screen works.
-- Reintroduce fullscreen post effects for split screen one system at a time: fade, trimming, bloom, motion blur, depth-of-field, and framebuffer capture helpers should each become viewport-aware or be classified as P1/fullscreen.
+- Reintroduce fullscreen post effects one classified family at a time. Bloom and trim are now
+  viewport-safe; motion blur, depth of field, indirect-screen passes, generic fullscreen 2D, and
+  fades remain P1/fullscreen until individually owned.
 
 ## Decision Log
 

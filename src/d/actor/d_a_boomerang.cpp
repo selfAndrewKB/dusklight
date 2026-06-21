@@ -14,6 +14,7 @@
 #include "dusk/coop/camera.h"
 #include "dusk/coop/player_camera_status.h"
 #include "dusk/coop/player_slots.h"
+#include "dusk/coop/render_materials.h"
 #include "dusk/coop/ui_owner.h"
 #include "m_Do/m_Do_lib.h"
 #include "d/actor/d_a_mirror.h"
@@ -638,6 +639,11 @@ int daBoomerang_c::draw() {
     if (fopAcM_GetParam(this) != 0) {
         g_env_light.setLightTevColorType_MAJI(mp_shippuModel, &tevStr);
         mDoExt_modelEntryDL(mp_shippuModel);
+#if TARGET_PC
+        // Co-op: the wind model's native viewCalc is camera-dependent. Register the submitted
+        // model so each split viewport rebuilds those matrices before shared-list replay.
+        dusk::coop::render_materials::registerViewDependentModel(mp_shippuModel);
+#endif
         daMirror_c::entry(mp_shippuModel);
     } else if (daBoomerang_checkOwnerStatus0(this, 0x80000)) {
         g_env_light.setLightTevColorType_MAJI(mp_setboomEfModel, &tevStr);

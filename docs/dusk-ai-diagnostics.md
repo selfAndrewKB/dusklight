@@ -406,6 +406,22 @@ Implemented:
 - `camera.state` records camera 0/1 assignment, player ids, window ids, attention status, pointers, initialization readiness, owner/global room numbers, aspect/FOV, eye/center, camera distance, native `dCamera_c` type id/name, mode/state/style, trim, gear, window dimensions, and map-tool inputs for room/stage/default/tag camera selection. It samples every frame during the active profile so half-initialized camera processes and P2 camera-behavior differences are visible, but its event key intentionally uses assignment/readiness/mode/style facts, not exact camera vectors, distance, style timers, or window dimensions.
 - `camera.state` events include `event_context.player_slots` so camera type/style/tag transitions can be read together with current P1/P2 position, room, angle, and speed. These context values do not participate in the event key and therefore cannot make movement itself spam `events.jsonl`.
 - `render.windows` records active render-window count, split-screen layout, viewport/scissor rectangles, and camera id per window. It samples every frame during the active profile so bootstrap failures are visible, but emits JSONL only when layout/window facts change.
+- `render.effects` schema 7 records the last viewport slot/window/camera, logical viewport/scissor,
+  native bloom source, packed target, and composite bounds, effect-family policy, Base/Sense
+  snapshot validity, per-slot Sense activation/strength/owned emitters, shared Sense-reveal and
+  inverse-wisp emitter counts, Sense-only model count, the latest model/actor/slot Sense and culling
+  decision, per-slot Twilight camera/player/light mask, and current view-dependent/projected-
+  material registrations. It also records projection-particle resource/group ownership per
+  viewport and the kankyo cloud/haze packet's simulation source, active draw camera, projection
+  camera, per-slot draw counts, visible counts, aggregate alpha, submitted camera-relative particle
+  matrices, per-consumer framebuffer refresh policy, and per-slot Twilight `housi` simulation/draw
+  source camera, player, center, first particle, draw camera, and aggregate alpha. It also retains narrow Type 2/9 lighting
+  probes for Shadow Rider, carrier Kargarok, and wolf Link: submission/refresh ambient and six light
+  colors/positions plus per-slot GX-light reload and kankyo-material refresh policy. Exact strength,
+  positions, light values, and rectangles remain rich `latest.json` context. The most recent
+  authored-enemy-demo lighting pass is retained after the presentation ends so a post-encounter
+  flush does not erase the evidence. JSONL changes are driven by ownership, activation, policy,
+  light-mask, and registration state.
 - `horse.owner` records slot-assigned Epona state, retained rider horse, reins, localized animation wrappers, lash presentation facts, and summon diagnostics. For horse-grass tests, inspect `last_summon_revision`, `last_summon_activator`, `last_summon_pos`, each slot's `last_summon_decision`, `call_wait`, `call_deferred`, `call_delay_seconds`, `call_target`, `call_target_distance_xz`, `last_summon_distance_xz`, and `owner_distance_xz`. Summon decisions distinguish deferred player registration, deferred spawn, parked native call, already-present native call, mounted skip, and invalid/no-player cases. Exact positions and distances stay in `latest.json`; JSONL events key off semantic decisions and flags.
 - The Actor Spawner split-screen controls expose the current secondary camera readiness/request state so a capture can distinguish "P2 did not spawn" from "camera 1 has not finished init" from "render window 1 did not draw."
 
