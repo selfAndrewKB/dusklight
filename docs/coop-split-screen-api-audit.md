@@ -262,6 +262,10 @@ Audit decision:
 - Implemented as an opt-in `event_presentation` override above the camera/window sidecar. Do not
   call `setSplitScreenEnabled(false)` and do not mutate persistent actor `NODRAW` state as the
   default hiding mechanism.
+- The hidden unit is the slot-owned visual group, not only the ALINK actor. Runtime Epona and
+  runtime Midna service actors consult the same `shouldHideSlot()` predicate at draw submission.
+  Shadow Kargarok proved the distinction: canonical Midna naturally follows P1's authored
+  `PLAYER_NODRAW`, while P2's separately executing Midna has no native reason to inherit that flag.
 - Keep howling stones P1/global in V1. Midna keeps P1's canonical actor for story/save/global paths,
   while additional slots use runtime service actors; the transient service opts in with the
   requesting slot as presenter and reads that slot for active-service physical setup. Captured

@@ -15,6 +15,7 @@
 #include "d/d_s_play.h"
 #include "d/d_debug_viewer.h"
 #if TARGET_PC
+#include "dusk/coop/event_presentation.h"
 #include "dusk/coop/midna_owner.h"
 #include "dusk/coop/player_camera_status.h"
 #endif
@@ -3892,6 +3893,15 @@ int daMidna_c::draw() {
 }
 
 static int daMidna_Draw(daMidna_c* i_this) {
+#if TARGET_PC
+    if (dusk::coop::event_presentation::shouldHideSlot(
+            dusk::coop::midna_owner::getSlotForMidna(i_this)))
+    {
+        // Co-op: slot-owned Midna copies are part of their ALINK's visual group during
+        // singular fullscreen presentation, while their actor simulation continues.
+        return 1;
+    }
+#endif
     return i_this->draw();
 }
 
