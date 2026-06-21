@@ -94,6 +94,29 @@ struct CloudHazeDebugState {
     float alphaSums[kPlayerSlotCount] = {};
 };
 
+struct HousiDebugState {
+    bool simulationRecorded = false;
+    bool drawRecorded = false;
+    const void* packet = nullptr;
+    const void* sourceCamera = nullptr;
+    const void* sourcePlayer = nullptr;
+    int sourceCameraId = 0;
+    int count = 0;
+    float centerX = 0.0f;
+    float centerY = 0.0f;
+    float centerZ = 0.0f;
+    float firstParticleX = 0.0f;
+    float firstParticleY = 0.0f;
+    float firstParticleZ = 0.0f;
+    int drawCalls = 0;
+    int drawWindowIndex = 0;
+    int drawCameraId = 0;
+    float drawEyeX = 0.0f;
+    float drawEyeY = 0.0f;
+    float drawEyeZ = 0.0f;
+    float alphaSum = 0.0f;
+};
+
 struct DebugState {
     bool viewportActive = false;
     ViewportContext viewport = {};
@@ -116,6 +139,7 @@ struct DebugState {
     ProjectionParticleDebugState
         projectionParticles[kProjectionParticleDebugCapacity] = {};
     CloudHazeDebugState cloudHaze = {};
+    HousiDebugState housi[kPlayerSlotCount] = {};
 };
 
 struct EmitterPresentationState {
@@ -187,6 +211,14 @@ void recordCloudHazeDraw(int mode, int count, const void* packet, int sourceCame
                          float activeFovy, float activeAspect, float projectionFovy,
                          float projectionAspect, float firstCloudX, float firstCloudY,
                          float firstCloudZ, int visibleCount, float alphaSum);
+void recordHousiSimulation(PlayerSlot slot, int count, const void* packet,
+                           const void* sourceCamera, const void* sourcePlayer,
+                           int sourceCameraId, float centerX, float centerY, float centerZ,
+                           float firstParticleX, float firstParticleY, float firstParticleZ);
+void recordHousiDraw(int count, const void* packet, float drawEyeX, float drawEyeY,
+                     float drawEyeZ, float centerX, float centerY, float centerZ,
+                     float firstParticleX, float firstParticleY, float firstParticleZ,
+                     float alphaSum);
 void drawViewportSafeIndirectWorldEffects();
 DebugState getDebugState();
 

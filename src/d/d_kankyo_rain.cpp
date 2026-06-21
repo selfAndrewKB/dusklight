@@ -912,8 +912,106 @@ void dKyr_rain_move() {
     }
 }
 
-static BOOL d_krain_cut_turn_check() {
-    daPy_py_c* player = (daPy_py_c*)dComIfGp_getPlayer(0);
+struct HousiSimulationBuffer {
+    cXyz center;
+    HOUSI_EFF* effects;
+    s16 count;
+    f32 strength;
+};
+
+struct HousiRandomState {
+    u32 value;
+};
+
+static f32 housiRandomF(HousiRandomState* random, f32 range) {
+    if (random == NULL) {
+        return cM_rndF(range);
+    }
+
+    random->value = random->value * 1664525u + 1013904223u;
+    return static_cast<f32>((random->value >> 8) & 0x00ffffff) *
+           (range / 16777216.0f);
+}
+
+static f32 housiRandomFX(HousiRandomState* random, f32 range) {
+    if (random == NULL) {
+        return cM_rndFX(range);
+    }
+    return housiRandomF(random, range * 2.0f) - range;
+}
+
+#if TARGET_PC
+// Co-op: housi stores camera/player-relative particle history, so each added viewport needs the
+// same native visual update P1 receives without duplicating global weather activation.
+struct HousiViewportSimulation {
+    bool valid;
+    const dKankyo_housi_Packet* sourcePacket;
+    HousiRandomState random;
+    cXyz center;
+    HOUSI_EFF effects[300];
+};
+
+static HousiViewportSimulation
+    s_housiViewportSimulation[dusk::coop::kPlayerSlotCount] = {};
+
+void dKyr_resetHousiViewportState() {
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        s_housiViewportSimulation[i].valid = false;
+        s_housiViewportSimulation[i].sourcePacket = NULL;
+    }
+}
+
+static void initializeHousiViewportSimulation(HousiViewportSimulation* state,
+                                               const dKankyo_housi_Packet* source,
+                                               int slotIndex) {
+    state->valid = true;
+    state->sourcePacket = source;
+    state->random.value = 0x517cc1b7u ^ (0x9e3779b9u * slotIndex) ^ g_Counter.mCounter0;
+    state->center = source->field_0x10;
+    for (int i = 0; i < 300; i++) {
+        state->effects[i] = source->mHousiEff[i];
+    }
+}
+
+static HOUSI_EFF* getHousiViewportDrawState(dKankyo_housi_Packet* source,
+                                             s16* count, cXyz* center) {
+    *count = source->mHousiCount;
+    *center = source->field_0x10;
+    if (!dusk::coop::render_effects::hasViewport()) {
+        return source->mHousiEff;
+    }
+
+    const int slotIndex =
+        static_cast<int>(dusk::coop::render_effects::currentViewportSlot());
+    if (slotIndex <= 0 || slotIndex >= dusk::coop::kPlayerSlotCount) {
+        return source->mHousiEff;
+    }
+
+    HousiViewportSimulation& state = s_housiViewportSimulation[slotIndex];
+    if (state.valid && state.sourcePacket == source) {
+        *center = state.center;
+        return state.effects;
+    }
+    return source->mHousiEff;
+}
+
+static void recordHousiSimulationDebug(dusk::coop::PlayerSlot slot,
+                                       const dKankyo_housi_Packet* packet,
+                                       camera_class* camera, fopAc_ac_c* player,
+                                       int cameraId, const HousiSimulationBuffer& simulation) {
+    cXyz first;
+    first.set(0.0f, 0.0f, 0.0f);
+    if (simulation.count > 0) {
+        first = simulation.effects[0].mBasePos + simulation.effects[0].mPosition;
+    }
+    dusk::coop::render_effects::recordHousiSimulation(
+        slot, simulation.count, packet, camera, player, cameraId,
+        simulation.center.x, simulation.center.y, simulation.center.z,
+        first.x, first.y, first.z);
+}
+#endif
+
+static BOOL d_krain_cut_turn_check(daPy_py_c* player) {
     BOOL ret = FALSE;
 
     if (player != NULL && (player->getCutType() == daPy_py_c::CUT_TYPE_TURN_RIGHT ||
@@ -925,11 +1023,14 @@ static BOOL d_krain_cut_turn_check() {
     return ret;
 }
 
-void dKyr_housi_move() {
-    dKankyo_housi_Packet* housi_packet = g_env_light.mpHousiPacket;
+static void dKyr_housi_move_buffer(HousiSimulationBuffer* housi,
+                                   camera_class* camera, fopAc_ac_c* player,
+                                   HousiRandomState* random) {
     HOUSI_EFF* effect;
-    camera_class* camera = (camera_class*)dComIfGp_getCamera(0);
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
+
+    if (housi == NULL || camera == NULL || player == NULL || housi->count == 0) {
+        return;
+    }
 
     cXyz sp84;
     cXyz sp78 = dKyw_get_wind_vecpow();
@@ -970,29 +1071,13 @@ void dKyr_housi_move() {
         sp78.z = 0.0f;
     }
 
-    if (g_env_light.mHousiCount != 0 ||
-        (g_env_light.mHousiCount == 0 && housi_packet->field_0x5de8 <= 0.0f))
-    {
-        housi_packet->mHousiCount = g_env_light.mHousiCount;
-    }
-
-    if (g_env_light.mHousiCount != 0) {
-        cLib_addCalc(&housi_packet->field_0x5de8, 1.0f, 0.2f, 0.05f, 0.01f);
-    } else {
-        cLib_addCalc(&housi_packet->field_0x5de8, 0.0f, 0.2f, 0.05f, 0.01f);
-    }
-
-    if (housi_packet->mHousiCount == 0) {
-        return;
-    }
-
     dKy_set_eyevect_calc2(camera, &sp84, 800.0f, 800.0f);
 
-    if (sp84.abs(housi_packet->field_0x10) > 500.0f) {
+    if (sp84.abs(housi->center) > 500.0f) {
         var_r27 = 1;
     }
 
-    housi_packet->field_0x10 = sp84;
+    housi->center = sp84;
     dKyw_get_wind_pow();
 
     if (g_env_light.field_0xea9 == 1) {
@@ -1002,14 +1087,14 @@ void dKyr_housi_move() {
             dBgS_CamGndChk_Wtr sp90;
 
             cXyz sp48;
-            camera_process_class* cam_p = dComIfGp_getCamera(0);
-            sp48 = cam_p->view.lookat.eye;
+            // Co-op: seasonal particle grounding follows the camera advancing this buffer.
+            sp48 = camera->view.lookat.eye;
             sp48.y += 100000.0f;
 
             sp90.SetPos(&sp48);
             f32 gnd_cross = dComIfG_Bgsp().GroundCross(&sp90);
-            if (gnd_cross > cam_p->view.lookat.eye.y) {
-                var_f31 = (gnd_cross - cam_p->view.lookat.eye.y) / 700.0f;
+            if (gnd_cross > camera->view.lookat.eye.y) {
+                var_f31 = (gnd_cross - camera->view.lookat.eye.y) / 700.0f;
                 if (var_f31 < 0.0f) {
                     var_f31 = 0.0f;
                 }
@@ -1021,31 +1106,31 @@ void dKyr_housi_move() {
         }
     }
 
-    for (int i = housi_packet->mHousiCount - 1; i >= 0; i--) {
-        f32 var_f26 = 0.4f * housi_packet->field_0x5de8;
-        effect = &housi_packet->mHousiEff[i];
+    for (int i = housi->count - 1; i >= 0; i--) {
+        f32 var_f26 = 0.4f * housi->strength;
+        effect = &housi->effects[i];
 
-        switch (housi_packet->mHousiEff[i].mStatus) {
+        switch (housi->effects[i].mStatus) {
         case 0:
             if (g_env_light.field_0xea9 == 1) {
-                effect->field_0x34 = cM_rndF(0.5f) + 0.1f;
+                effect->field_0x34 = housiRandomF(random, 0.5f) + 0.1f;
             } else {
-                effect->field_0x34 = cM_rndF(1.5f) + 0.2f;
+                effect->field_0x34 = housiRandomF(random, 1.5f) + 0.2f;
             }
 
             effect->field_0x3c = 0;
-            effect->field_0x4c = cM_rndFX(65536.0f);
+            effect->field_0x4c = housiRandomFX(random, 65536.0f);
             effect->mBasePos.x = sp84.x;
             effect->mBasePos.y = sp84.y;
             effect->mBasePos.z = sp84.z;
-            effect->mPosition.x = cM_rndFX(1000.0f);
-            effect->mPosition.y = cM_rndFX(1000.0f);
-            effect->mPosition.z = cM_rndFX(1000.0f);
+            effect->mPosition.x = housiRandomFX(random, 1000.0f);
+            effect->mPosition.y = housiRandomFX(random, 1000.0f);
+            effect->mPosition.z = housiRandomFX(random, 1000.0f);
             effect->mAlpha = 0.0f;
             effect->field_0x48 = 0.0f;
-            effect->mScale.x = cM_rndF(360.0f);
-            effect->mScale.y = cM_rndF(360.0f);
-            effect->mScale.z = cM_rndF(360.0f);
+            effect->mScale.x = housiRandomF(random, 360.0f);
+            effect->mScale.y = housiRandomF(random, 360.0f);
+            effect->mScale.z = housiRandomF(random, 360.0f);
             effect->mSpeed.x = 0.0f;
             effect->mSpeed.y = 0.0f;
             effect->mSpeed.z = 0.0f;
@@ -1101,7 +1186,7 @@ void dKyr_housi_move() {
                 effect->mPosition.x += temp_f0_5 * var_f23;
                 effect->mPosition.y += var_f23 * 0.5f * cM_fsin(effect->mScale.y);
                 effect->mPosition.z += cM_fsin(effect->mScale.z) * var_f23;
-            } else if (d_krain_cut_turn_check()) {
+            } else if (d_krain_cut_turn_check(static_cast<daPy_py_c*>(player))) {
                 effect->mStatus = 3;
             }
 
@@ -1182,11 +1267,11 @@ void dKyr_housi_move() {
                     effect->mBasePos = sp84;
 
                     if (sp6C.abs(sp84) > 1050.0f) {
-                        effect->mPosition.x = cM_rndFX(1000.0f);
-                        effect->mPosition.y = cM_rndFX(1000.0f);
-                        effect->mPosition.z = cM_rndFX(1000.0f);
+                        effect->mPosition.x = housiRandomFX(random, 1000.0f);
+                        effect->mPosition.y = housiRandomFX(random, 1000.0f);
+                        effect->mPosition.z = housiRandomFX(random, 1000.0f);
                     } else {
-                        f32 temp_f23 = cM_rndFX(50.0f);
+                        f32 temp_f23 = housiRandomFX(random, 50.0f);
                         get_vectle_calc(&sp6C, &sp84, &sp60);
 
                         effect->mPosition.x = sp60.x * (temp_f23 + 1000.0f);
@@ -1207,7 +1292,7 @@ void dKyr_housi_move() {
                     effect->mSpeed.z = 0.0f;
 
                     if (g_env_light.field_0xea9 == 2) {
-                        effect->mPosition.y += cM_rndF(3200.0f);
+                        effect->mPosition.y += housiRandomF(random, 3200.0f);
                         if (sp6C.y > 3200.0f) {
                             effect->mPosition.y = 3200.0f - effect->mBasePos.y;
                         }
@@ -1272,6 +1357,87 @@ void dKyr_housi_move() {
         f32 temp_f25 = var_f1_8 / 2000.0f;
         effect->field_0x48 = 1.0f - (temp_f25 * temp_f25);
     }
+}
+
+void dKyr_housi_move() {
+    dKankyo_housi_Packet* packet = g_env_light.mpHousiPacket;
+    camera_class* primaryCamera = (camera_class*)dComIfGp_getCamera(0);
+    fopAc_ac_c* primaryPlayer = dComIfGp_getPlayer(0);
+    if (packet == NULL || primaryCamera == NULL || primaryPlayer == NULL) {
+        return;
+    }
+
+    if (g_env_light.mHousiCount != 0 ||
+        (g_env_light.mHousiCount == 0 && packet->field_0x5de8 <= 0.0f))
+    {
+        packet->mHousiCount = g_env_light.mHousiCount;
+    }
+
+    if (g_env_light.mHousiCount != 0) {
+        cLib_addCalc(&packet->field_0x5de8, 1.0f, 0.2f, 0.05f, 0.01f);
+    } else {
+        cLib_addCalc(&packet->field_0x5de8, 0.0f, 0.2f, 0.05f, 0.01f);
+    }
+
+    if (packet->mHousiCount == 0) {
+        return;
+    }
+
+    HousiSimulationBuffer primary = {
+        packet->field_0x10, packet->mHousiEff, packet->mHousiCount, packet->field_0x5de8,
+    };
+    dKyr_housi_move_buffer(&primary, primaryCamera, primaryPlayer, NULL);
+    packet->field_0x10 = primary.center;
+
+#if TARGET_PC
+    recordHousiSimulationDebug(dusk::coop::PlayerSlot::Primary, packet, primaryCamera,
+                               primaryPlayer, 0, primary);
+    // Co-op: advance added-slot visual history once with that slot's native player and camera.
+    for (int i = 1; i < dusk::coop::kPlayerSlotCount; i++) {
+        HousiViewportSimulation& state = s_housiViewportSimulation[i];
+        fopAc_ac_c* player = dusk::coop::getPlayer(static_cast<dusk::coop::PlayerSlot>(i));
+        if (player == NULL || !dusk::coop::camera::isExtensionIndex(i) ||
+            (i == 1 && !dusk::coop::camera::isSecondaryCameraReady()))
+        {
+            state.valid = false;
+            state.sourcePacket = NULL;
+            continue;
+        }
+
+        camera_class* camera = (camera_class*)dComIfGp_getCamera(
+            dusk::coop::render_effects::cameraIdForSlot(
+                static_cast<dusk::coop::PlayerSlot>(i)));
+        if (camera == NULL) {
+            state.valid = false;
+            state.sourcePacket = NULL;
+            continue;
+        }
+
+        if (!state.valid || state.sourcePacket != packet) {
+            initializeHousiViewportSimulation(&state, packet, i);
+            HousiSimulationBuffer initialized = {
+                state.center, state.effects, packet->mHousiCount, packet->field_0x5de8,
+            };
+            recordHousiSimulationDebug(static_cast<dusk::coop::PlayerSlot>(i), packet,
+                                       camera, player,
+                                       dusk::coop::render_effects::cameraIdForSlot(
+                                           static_cast<dusk::coop::PlayerSlot>(i)),
+                                       initialized);
+            continue;
+        }
+
+        HousiSimulationBuffer slotBuffer = {
+            state.center, state.effects, packet->mHousiCount, packet->field_0x5de8,
+        };
+        dKyr_housi_move_buffer(&slotBuffer, camera, player, &state.random);
+        state.center = slotBuffer.center;
+        recordHousiSimulationDebug(static_cast<dusk::coop::PlayerSlot>(i), packet,
+                                   camera, player,
+                                   dusk::coop::render_effects::cameraIdForSlot(
+                                       static_cast<dusk::coop::PlayerSlot>(i)),
+                                   slotBuffer);
+    }
+#endif
 }
 
 void dKyr_snow_init() {
@@ -2015,6 +2181,10 @@ void vrkumo_move() {
     dKankyo_vrkumo_Packet* vrkumo_packet = g_env_light.mpVrkumoPacket;
     camera_class* camera = (camera_class*)dComIfGp_getCamera(0);
     cXyz sp80;
+
+    if (vrkumo_packet == NULL || camera == NULL) {
+        return;
+    }
 
     f32 sp3C = 0.0f;
     cXyz* wind_vec = dKyw_get_wind_vec();
@@ -3644,6 +3814,26 @@ void dKyr_drawSibuki(Mtx drawMtx, u8** tex) {
 void dKyr_drawHousi(Mtx drawMtx, u8** tex) {
     ZoneScoped;
     dKankyo_housi_Packet* housi_packet = g_env_light.mpHousiPacket;
+    if (housi_packet == NULL) {
+        return;
+    }
+#if TARGET_PC
+    s16 housi_count;
+    cXyz housi_center;
+    // Co-op: draw the visual history advanced by this viewport owner's native camera/player.
+    HOUSI_EFF* housi_effects =
+        getHousiViewportDrawState(housi_packet, &housi_count, &housi_center);
+    fopAc_ac_c* viewport_player = dusk::coop::getPlayer(
+        dusk::coop::render_effects::currentViewportSlot());
+    if (viewport_player == NULL) {
+        viewport_player = dComIfGp_getPlayer(0);
+    }
+#else
+    s16 housi_count = housi_packet->mHousiCount;
+    HOUSI_EFF* housi_effects = housi_packet->mHousiEff;
+    cXyz housi_center = housi_packet->field_0x10;
+    fopAc_ac_c* viewport_player = dComIfGp_getPlayer(0);
+#endif
     static f32 rot = 0.0f;
 
     Mtx camMtx;
@@ -3659,7 +3849,7 @@ void dKyr_drawHousi(Mtx drawMtx, u8** tex) {
     Vec spB8;
 
     bool isPalaceOfTwilight = 0;
-    if (housi_packet->mHousiCount != 0) {
+    if (housi_count != 0) {
         if (strcmp(dComIfGp_getStartStageName(), "D_MN08") == 0) {
             isPalaceOfTwilight = 1;
         }
@@ -3714,7 +3904,16 @@ void dKyr_drawHousi(Mtx drawMtx, u8** tex) {
                 GXColor sp1C = {0x32, 0x32, 0x32, 0xFF};
                 GXColor sp18 = {0xFF, 0xD7, 0xF0, 0xFF};
 
+#if TARGET_PC
+                // Co-op: seasonal particle colors sample the presented viewport's camera.
+                camera_process_class* cam_p = dComIfGp_getCamera(
+                    dusk::coop::render_effects::currentViewport().cameraId);
+#else
                 camera_process_class* cam_p = dComIfGp_getCamera(0);
+#endif
+                if (cam_p == NULL) {
+                    return;
+                }
                 if (g_env_light.fishing_hole_season == 3) {
                     sp1C.r = 0x78;
                     sp1C.g = 0x0A;
@@ -3735,6 +3934,22 @@ void dKyr_drawHousi(Mtx drawMtx, u8** tex) {
             } else {
                 return;
             }
+#if TARGET_PC
+            cXyz first_particle;
+            first_particle.set(0.0f, 0.0f, 0.0f);
+            f32 alpha_sum = 0.0f;
+            if (housi_count > 0) {
+                first_particle = housi_effects[0].mBasePos + housi_effects[0].mPosition;
+                for (int i = 0; i < housi_count; i++) {
+                    alpha_sum += housi_effects[i].mAlpha;
+                }
+            }
+            const cXyz& draw_eye = dComIfGd_getView()->lookat.eye;
+            dusk::coop::render_effects::recordHousiDraw(
+                housi_count, housi_packet, draw_eye.x, draw_eye.y, draw_eye.z,
+                housi_center.x, housi_center.y, housi_center.z,
+                first_particle.x, first_particle.y, first_particle.z, alpha_sum);
+#endif
 
             f32 temp_f26 = 1.2f;
             f32 temp_f24 = 6.5f;
@@ -3785,7 +4000,15 @@ void dKyr_drawHousi(Mtx drawMtx, u8** tex) {
                 GXSetNumIndStages(0);
                 dKr_cullVtx_Set(IF_DUSK(true));
 
+#if TARGET_PC
+                static int last_rot_frame = -1;
+                if (last_rot_frame != g_Counter.mCounter0) {
+                    rot += 1.2f;
+                    last_rot_frame = g_Counter.mCounter0;
+                }
+#else
                 rot += 1.2f;
+#endif
                 MTXRotRad(rotMtx, 'Z', DEG_TO_RAD(rot));
                 MTXConcat(camMtx, rotMtx, camMtx);
 
@@ -3794,19 +4017,19 @@ void dKyr_drawHousi(Mtx drawMtx, u8** tex) {
 
 #if TARGET_PC
                 // Dusklight optimization: we submit a single large draw call, rather than hundreds.
-                u32 vertCount = 4 * housi_packet->mHousiCount;
+                u32 vertCount = 4 * housi_count;
                 GXBegin(GX_QUADS, GX_VTXFMT0, vertCount);
 #endif
 
-                for (int j = 0; j < housi_packet->mHousiCount; j++) {
-                    fopAc_ac_c* player = dComIfGp_getPlayer(0);
+                for (int j = 0; j < housi_count; j++) {
+                    HOUSI_EFF& housi_effect = housi_effects[j];
 
                     spD0.x =
-                        housi_packet->mHousiEff[j].mBasePos.x + housi_packet->mHousiEff[j].mPosition.x;
+                        housi_effect.mBasePos.x + housi_effect.mPosition.x;
                     spD0.y =
-                        housi_packet->mHousiEff[j].mBasePos.y + housi_packet->mHousiEff[j].mPosition.y;
+                        housi_effect.mBasePos.y + housi_effect.mPosition.y;
                     spD0.z =
-                        housi_packet->mHousiEff[j].mBasePos.z + housi_packet->mHousiEff[j].mPosition.z;
+                        housi_effect.mBasePos.z + housi_effect.mPosition.z;
 
                     if (i == 1 && j == 0) {
 #if TARGET_PC
@@ -3826,19 +4049,19 @@ void dKyr_drawHousi(Mtx drawMtx, u8** tex) {
 
                     if (i == 1) {
                         f32 temp_f4 = 100.0f;
-                        if (!(spD0.y > player->current.pos.y + temp_f4)) {
-                            if (!(spD0.y < player->current.pos.y - 20.0f)) {
-                                if (!(housi_packet->mHousiEff[j].mAlpha <= 0.0f)) {
+                        if (!(spD0.y > viewport_player->current.pos.y + temp_f4)) {
+                            if (!(spD0.y < viewport_player->current.pos.y - 20.0f)) {
+                                if (!(housi_effect.mAlpha <= 0.0f)) {
                                     color_reg0.a =
-                                        housi_packet->mHousiEff[j].mAlpha * 40.0f *
-                                        (1.0f - ((spD0.y - player->current.pos.y) / 100.0f));
-                                    spD0.y = player->current.pos.y - 20.0f;
+                                        housi_effect.mAlpha * 40.0f *
+                                        (1.0f - ((spD0.y - viewport_player->current.pos.y) / 100.0f));
+                                    spD0.y = viewport_player->current.pos.y - 20.0f;
                                     goto block_14;  // probably fake match
                                 }
                             }
                         }
                     } else {
-                        color_reg0.a = housi_packet->mHousiEff[j].mAlpha * var_f25;
+                        color_reg0.a = housi_effect.mAlpha * var_f25;
 
                     block_14:
 #if !TARGET_PC // GXLoadTextObj does nothing, TEV colors replaced with vertex colors
@@ -3846,15 +4069,15 @@ void dKyr_drawHousi(Mtx drawMtx, u8** tex) {
                         GXSetTevColor(GX_TEVREG0, color_reg0);
 #endif
 
-                        f32 var_f27 = housi_packet->mHousiEff[j].field_0x48 * 9.0f;
+                        f32 var_f27 = housi_effect.field_0x48 * 9.0f;
                         if (g_env_light.field_0xea9 == 1) {
-                            var_f27 = housi_packet->mHousiEff[j].field_0x48 * 18.0f;
+                            var_f27 = housi_effect.field_0x48 * 18.0f;
                         }
 
                         f32 temp_f28 =
-                            (var_f27 * 0.2f) * cM_fsin(housi_packet->mHousiEff[j].mScale.x * 5.0f);
+                            (var_f27 * 0.2f) * cM_fsin(housi_effect.mScale.x * 5.0f);
                         f32 temp_f30 =
-                            (var_f27 * 0.2f) * cM_fcos(housi_packet->mHousiEff[j].mScale.y * 6.0f);
+                            (var_f27 * 0.2f) * cM_fcos(housi_effect.mScale.y * 6.0f);
 
                         if (dKy_darkworld_check() == 1 || isPalaceOfTwilight == 1) {
                             cXyz sp7C[] = {
@@ -3893,12 +4116,11 @@ void dKyr_drawHousi(Mtx drawMtx, u8** tex) {
                                 cXyz sp88;
 
                                 f32 var_f24;
-                                if (housi_packet->mHousiEff[j].mStatus == 1 ||
-                                    housi_packet->mHousiEff[j].mStatus == 3)
+                                if (housi_effect.mStatus == 1 || housi_effect.mStatus == 3)
                                 {
                                     var_f24 =
                                         0.2f +
-                                        (housi_packet->mHousiEff[j].field_0x34 *
+                                        (housi_effect.field_0x34 *
                                             (fabsf(cM_ssin((f32)j * 213.0f +
                                                         (f32)(g_Counter.mCounter0 * 330))) *
                                             0.8f));
@@ -3911,9 +4133,9 @@ void dKyr_drawHousi(Mtx drawMtx, u8** tex) {
                                 if (g_env_light.fishing_hole_season == 3) {
                                     var_f2 = 15.0f;
 
-                                    if (housi_packet->mHousiEff[j].mStatus == 1) {
+                                    if (housi_effect.mStatus == 1) {
                                         var_f24 =
-                                            housi_packet->mHousiEff[j].field_0x34 *
+                                            housi_effect.field_0x34 *
                                             fabsf(cM_ssin((f32)j * 250.0f +
                                                             (f32)(g_Counter.mCounter0 * 88)));
                                     } else {
@@ -3930,38 +4152,35 @@ void dKyr_drawHousi(Mtx drawMtx, u8** tex) {
                                 sp94.z = temp_r3_2->z * (var_f2 * (1.0f + (var_f24 * 0.3f)));
                                 mDoMtx_stack_c::transS(spD0.x, spD0.y, spD0.z);
 
-                                if (housi_packet->mHousiEff[j].mStatus == 1 ||
-                                    housi_packet->mHousiEff[j].mStatus == 3)
+                                if (housi_effect.mStatus == 1 || housi_effect.mStatus == 3)
                                 {
-                                    housi_packet->mHousiEff[j].field_0x38 +=
+                                    housi_effect.field_0x38 +=
                                         483.0f * (0.5f + (var_f24 * 0.5f));
 
-                                    housi_packet->mHousiEff[j].field_0x44 =
-                                        (s16)housi_packet->mHousiEff[j].field_0x38;
-                                    mDoMtx_stack_c::YrotM(housi_packet->mHousiEff[j].field_0x38);
-                                    mDoMtx_stack_c::XrotM(housi_packet->mHousiEff[j].field_0x38);
-                                    mDoMtx_stack_c::ZrotM(housi_packet->mHousiEff[j].field_0x38);
+                                    housi_effect.field_0x44 = (s16)housi_effect.field_0x38;
+                                    mDoMtx_stack_c::YrotM(housi_effect.field_0x38);
+                                    mDoMtx_stack_c::XrotM(housi_effect.field_0x38);
+                                    mDoMtx_stack_c::ZrotM(housi_effect.field_0x38);
                                 } else {
-                                    if (housi_packet->mHousiEff[j].mStatus == 2) {
+                                    if (housi_effect.mStatus == 2) {
                                         if (g_env_light.fishing_hole_season == 3) {
-                                            housi_packet->mHousiEff[j].field_0x38 += var_f24 * 30.0f;
+                                            housi_effect.field_0x38 += var_f24 * 30.0f;
                                         } else {
-                                            housi_packet->mHousiEff[j].field_0x38 +=
-                                                var_f24 * 100.0f;
+                                            housi_effect.field_0x38 += var_f24 * 100.0f;
                                         }
                                     }
 
-                                    if (housi_packet->mHousiEff[j].field_0x38 > 32765.0f) {
-                                        cLib_addCalc(&housi_packet->mHousiEff[j].field_0x44,
+                                    if (housi_effect.field_0x38 > 32765.0f) {
+                                        cLib_addCalc(&housi_effect.field_0x44,
                                                         -16384.0f, 0.1f, 500.0f, 0.0001f);
                                     } else {
-                                        cLib_addCalc(&housi_packet->mHousiEff[j].field_0x44,
+                                        cLib_addCalc(&housi_effect.field_0x44,
                                                         16384.0f, 0.1f, 500.0f, 0.0001f);
                                     }
 
-                                    mDoMtx_stack_c::YrotM(housi_packet->mHousiEff[j].field_0x38);
-                                    mDoMtx_stack_c::XrotM(housi_packet->mHousiEff[j].field_0x44);
-                                    mDoMtx_stack_c::ZrotM(housi_packet->mHousiEff[j].field_0x38);
+                                    mDoMtx_stack_c::YrotM(housi_effect.field_0x38);
+                                    mDoMtx_stack_c::XrotM(housi_effect.field_0x44);
+                                    mDoMtx_stack_c::ZrotM(housi_effect.field_0x38);
                                 }
 
                                 mDoMtx_stack_c::multVec(&sp94, &sp88);
@@ -4685,6 +4904,7 @@ void drawCloudShadow(Mtx drawMtx, u8** tex) {
 #endif
     camera_class* camera = (camera_class*)dComIfGp_getCamera(0);
 #if TARGET_PC
+    // Co-op: sky geometry is centered on the camera presenting this viewport, not Camera 0.
     if (dusk::coop::render_effects::hasViewport()) {
         camera = (camera_class*)dComIfGp_getCamera(
             dusk::coop::render_effects::currentViewport().cameraId);
@@ -4979,6 +5199,16 @@ void drawVrkumo(Mtx drawMtx, GXColor& color, u8** tex) {
     dKankyo_vrkumo_Packet* vrkumo_packet = g_env_light.mpVrkumoPacket;
     camera_class* camera = (camera_class*)dComIfGp_getCamera(0);
     camera_process_class* camera2 = (camera_process_class*)dComIfGp_getCamera(0);
+#if TARGET_PC
+    if (dusk::coop::render_effects::hasViewport()) {
+        const int cameraId = dusk::coop::render_effects::currentViewport().cameraId;
+        camera = (camera_class*)dComIfGp_getCamera(cameraId);
+        camera2 = (camera_process_class*)dComIfGp_getCamera(cameraId);
+    }
+#endif
+    if (camera == NULL) {
+        return;
+    }
 
     Mtx camMtx;
     Mtx rotMtx;
@@ -5145,7 +5375,9 @@ void drawVrkumo(Mtx drawMtx, GXColor& color, u8** tex) {
             for (k = 0; k < 100; k++) {
                 cXyz pos[4];
 
-                if (!(vrkumo_packet->mVrkumoEff[k].mAlpha <= 0.0000000001f) && (pass != 0 || !(vrkumo_packet->mVrkumoEff[k].mAlpha < 0.45f))) {
+                if (!(vrkumo_packet->mVrkumoEff[k].mAlpha <= 0.0000000001f) &&
+                    (pass != 0 || !(vrkumo_packet->mVrkumoEff[k].mAlpha < 0.45f)))
+                {
                     f32 sp68;
                     f32 sp64;
                     f32 sp60;

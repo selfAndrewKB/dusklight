@@ -16,7 +16,7 @@ families, and which systems are intentionally deferred.
 | Which player owns this camera, render window, or camera decision? | `camera_owner` / existing `dusk::coop::camera` | Partially implemented as the camera/window/player sidecar |
 | Which viewport is being rendered right now? | `viewport_owner` / render-window context | Partially implemented in the painter loop |
 | Which player-status bits should a camera or camera tag read? | `player_camera_status` | First pass implemented for slot-local camera/action bits, attention bits, item aim, and climb/hang hints |
-| Which render state must be installed per viewport? | `dusk::coop::render_materials` / `dusk::coop::render_effects` | Implemented for kankyo/J3D material refresh, camera-facing `viewCalc()`, projected texture matrices, Base/Sense environment snapshots, and Twilight camera lights |
+| Which render state must be installed per viewport? | `dusk::coop::render_materials` / `dusk::coop::render_effects` | Implemented for kankyo/J3D material refresh, camera-facing `viewCalc()`, projected texture matrices, Base/Sense environment snapshots, Twilight camera lights, and fixed per-slot camera-retained weather histories for cloud haze and Twilight `housi` particles |
 | Which fullscreen effect owns this viewport/framebuffer? | `dusk::coop::render_effects` | Viewport context and Dusk/Classic bloom are implemented; motion blur, depth of field, fades, indirect-screen passes, and generic fullscreen 2D remain explicitly global/gated |
 | Which viewport owns real-shadow submission culling and baked shadow matrices? | `render_shadows` | Partially implemented through `dusk::coop::render_shadows` for shared-list culling bypass and per-viewport real-shadow refresh |
 | Which viewport should camera-facing 3D line/ribbon geometry use? | shared 3D-line material refresh | Implemented for `mDoExt_3DlineMat0_c` and `mDoExt_3DlineMat1_c` during the per-window painter pass |
@@ -197,8 +197,9 @@ Current behavior:
 - The painter installs the active view and refreshes registered kankyo/J3D model materials for each
   viewport before draw-list replay.
 - Camera-facing 3D line materials are refreshed per viewport alongside those registered models.
-- P2-owned fullscreen presentation still refreshes camera-1 culling, real shadows, kankyo/J3D
-  materials, particle-creation culling, and GX lights even though only one window is replayed.
+- Any fullscreen presenter in an active split-screen session still refreshes its culling, real
+  shadows, kankyo/J3D materials, particle-creation culling, and GX lights even though only one window
+  is replayed. Shadow Kargarok proved this is required for P1-authored fullscreen cameras too.
 - After camera 1 draw, camera 0's global J3D view is restored so later global lighting/debug code
   does not accidentally inherit P2's camera.
 
@@ -207,7 +208,8 @@ Audit decision:
 - Keep per-viewport refresh centralized in `render_materials` and the painter loop.
 - Keep `shouldPresentSplitViewports()` separate from
   `shouldRefreshViewportOwnedWorldState()`. The former controls whether both windows and split-only
-  framebuffer work run; the latter remains true for camera-1 fullscreen presentation.
+  framebuffer work run; the latter remains true for every fullscreen presenter while split-screen
+  capability is active.
 - Add future material families to that registry rather than scattering actor-local refresh calls.
 - Continue restoring a known global baseline after the split viewport loop.
 - Treat the current lighting fix as a valid V1, but a future `viewport_render_state` pass should
@@ -400,7 +402,9 @@ Follow-up investigation:
 4. Start `player_camera_status` for camera 1 item/lock-on/special mode correctness.
 5. Done: install Base/Sense environment snapshots, slot-local Twilight camera lights, and
    viewport-sized bloom through `render_effects`.
-6. Revisit HUD/reticles after camera/render correctness is stable.
+6. Done pending field validation: renew pooled simple Sense-emitter classification on native reuse
+   and simulate `dKankyo_housi_Packet` retained particle history once per active camera.
+7. Revisit HUD/reticles after camera/render correctness is stable.
 
 ## Acceptance Targets
 

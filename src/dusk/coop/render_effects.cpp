@@ -113,6 +113,7 @@ int s_projectionParticleCount = 0;
 ProjectionParticleDebugState
     s_projectionParticles[kProjectionParticleDebugCapacity] = {};
 CloudHazeDebugState s_cloudHaze = {};
+HousiDebugState s_housi[kPlayerSlotCount] = {};
 
 void beginDebugFrame() {
     if (s_debugFrame == g_Counter.mCounter0) {
@@ -125,6 +126,9 @@ void beginDebugFrame() {
         s_projectionParticles[i] = {};
     }
     s_cloudHaze = {};
+    for (int i = 0; i < kPlayerSlotCount; i++) {
+        s_housi[i] = {};
+    }
 }
 
 PlayerSlot slotForCamera(int cameraId) {
@@ -798,6 +802,55 @@ void recordCloudHazeDraw(int mode, int count, const void* packet, int sourceCame
 #endif
 }
 
+void recordHousiSimulation(PlayerSlot slot, int count, const void* packet,
+                           const void* sourceCamera, const void* sourcePlayer,
+                           int sourceCameraId, float centerX, float centerY, float centerZ,
+                           float firstParticleX, float firstParticleY, float firstParticleZ) {
+#if TARGET_PC
+    beginDebugFrame();
+    HousiDebugState& state = s_housi[slotIndex(slot)];
+    state.simulationRecorded = true;
+    state.packet = packet;
+    state.sourceCamera = sourceCamera;
+    state.sourcePlayer = sourcePlayer;
+    state.sourceCameraId = sourceCameraId;
+    state.count = count;
+    state.centerX = centerX;
+    state.centerY = centerY;
+    state.centerZ = centerZ;
+    state.firstParticleX = firstParticleX;
+    state.firstParticleY = firstParticleY;
+    state.firstParticleZ = firstParticleZ;
+#endif
+}
+
+void recordHousiDraw(int count, const void* packet, float drawEyeX, float drawEyeY,
+                     float drawEyeZ, float centerX, float centerY, float centerZ,
+                     float firstParticleX, float firstParticleY, float firstParticleZ,
+                     float alphaSum) {
+#if TARGET_PC
+    beginDebugFrame();
+    const ViewportContext& viewport = currentViewport();
+    HousiDebugState& state = s_housi[slotIndex(viewport.slot)];
+    state.drawRecorded = true;
+    state.packet = packet;
+    state.count = count;
+    state.centerX = centerX;
+    state.centerY = centerY;
+    state.centerZ = centerZ;
+    state.firstParticleX = firstParticleX;
+    state.firstParticleY = firstParticleY;
+    state.firstParticleZ = firstParticleZ;
+    state.drawCalls++;
+    state.drawWindowIndex = viewport.windowIndex;
+    state.drawCameraId = viewport.cameraId;
+    state.drawEyeX = drawEyeX;
+    state.drawEyeY = drawEyeY;
+    state.drawEyeZ = drawEyeZ;
+    state.alphaSum = alphaSum;
+#endif
+}
+
 void drawViewportSafeIndirectWorldEffects() {
 #if TARGET_PC
     // Co-op: ordinary cloud/mist modes are world presentation, unlike the mixed fullscreen list.
@@ -841,6 +894,7 @@ DebugState getDebugState() {
         state.twilight[i].cameraId = s_twilight[i].cameraId;
         state.twilight[i].player = s_twilight[i].player;
         state.twilight[i].activeMask = s_twilight[i].activeMask;
+        state.housi[i] = s_housi[i];
     }
     for (int i = 0; i < kEmitterOwnerCapacity; i++) {
         if (s_emitterOwners[i].emitter == nullptr) {

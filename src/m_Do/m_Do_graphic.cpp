@@ -2525,13 +2525,17 @@ int mDoGph_Painter() {
 #endif
             dKy_setLight();
 #if TARGET_PC
+            bool reloaded_viewport_lights = false;
             if (refresh_viewport_world_state || dusk::frame_interp::is_enabled()) {
                 // Co-op: dKy_setLight() updates environment state, but dKy_setLight_again()
-                // reloads GX light objects for split views and P2 fullscreen presentation.
+                // reloads GX light objects for split views and collapsed fullscreen presentation.
                 dKy_setLight_again();
+                reloaded_viewport_lights = true;
             }
+            dusk::coop::render_materials::recordGxLightReloadForCurrentView(
+                reloaded_viewport_lights);
             // Co-op: draw submission patches kankyo state once under camera 0. Re-patch after
-            // the presented viewport camera is active so camera 1 gets its own lighting.
+            // the presented viewport camera is active so it receives its own lighting.
             if (!refreshed_kankyo_materials) {
                 dusk::coop::render_materials::refreshKankyoMaterialsForCurrentView();
             }

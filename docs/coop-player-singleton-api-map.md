@@ -425,8 +425,8 @@ player who owns the accepted catch event, so it routes through `event_owner`.
   Use `render_visibility` for shared draw-culling decisions, `render_materials` for viewport-owned
   kankyo/J3D material state, `render_effects` for late world/effect versus fullscreen framebuffer
   ownership, and `render_shadows` for real-shadow culling or baked shadow matrix ownership. A P2
-  fullscreen surface draws one window but still needs camera-1 viewport-owned world refresh; do not
-  equate “not presenting both split windows” with “camera-0 render state is sufficient.” Do not
+  fullscreen surface draws one window but still needs presenter-camera viewport-owned world refresh;
+  do not equate “not presenting both split windows” with “camera-0 render state is sufficient.” Do not
   scatter actor-specific render fixes when a central PC split-screen policy can answer the question.
 - **Per-viewport effects:** `render_effects` retains the active slot/window/camera/view context,
   Base/Sense environment and bloom snapshots, slot-local Sense fade/emitter state, and slot-local
@@ -438,8 +438,11 @@ player who owns the accepted catch event, so it routes through `event_owner`.
   Shared gameplay actors and emitters stay singular. Camera-retained visual packets are a distinct
   case: if native update consumes a player/camera and stores positions, alpha, room ratio, or other
   history, additional slots need fixed per-slot visual simulation sidecars with private RNG. P1
-  remains canonical. Camera-relative replay uses the exact submitted matrix, independent of frame
-  interpolation enablement. Viewport framebuffer consumers refresh the canonical native capture at
+  remains canonical. This now covers both Goron cloud/haze `CLOUD_EFF[50]` and Twilight rising-
+  particle `HOUSI_EFF[300]` history. Pooled simple Sense emitters renew their viewport classification from
+  native reuse, not only allocation. Camera-relative replay uses the exact submitted matrix,
+  independent of frame interpolation enablement. Viewport framebuffer consumers refresh the
+  canonical native capture at
   the same native phase the consumer expects because water and projection-particle resources retain
   that address; motion blur, depth of field, mixed indirect-screen passes, generic fullscreen 2D,
   and fades remain global/gated.

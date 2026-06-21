@@ -28,6 +28,7 @@
 #include "dusk/coop/event_presentation.h"
 #include "dusk/coop/horse_owner.h"
 #include "dusk/coop/retained_interaction_owner.h"
+#include "dusk/coop/render_materials.h"
 #include "dusk/coop/selected_target_state.h"
 #include "dusk/coop/world_trigger.h"
 #endif
@@ -586,6 +587,11 @@ static int daE_RDY_Draw(e_rdy_class* i_this) {
 
     J3DModel* model = i_this->mpMorf->getModel(); // sp18
     g_env_light.settingTevStruct(2, &a_this->current.pos, &a_this->tevStr);
+#if TARGET_PC
+    // Co-op: capture the Rider's native Type 2 TEV inputs before viewport replay.
+    dusk::coop::render_materials::registerLightingProbe(
+        "e_rdy.type2", i_this, model, &a_this->tevStr, 2);
+#endif
     dComIfGd_setListDark();
     g_env_light.setLightTevColorType_MAJI(model, &a_this->tevStr);
     J3DModelData* model_data;

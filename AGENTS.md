@@ -26,12 +26,17 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
 - Scripted interaction/demo reads must classify prompt ownership separately from accepted-event ownership. Use `interaction_owner` for "who can use this prompt?" and `event_owner` for "who requested this accepted event/demo?" before replacing player singletons; prompt-time wolf/form/side checks belong to `interaction_owner`, not `event_owner`.
 - HUD prompt presentation is a separate ownership question. Use `hud_owner` for "which slot is this meter/HUD pass presenting?", while prompt eligibility stays in `interaction_owner`, accepted event input stays in `event_owner`, and gameplay prompt state stays in `player_button_status`.
 - Singular authored sequences and captured fullscreen menu surfaces are presentation questions, not automatically interaction-owner conversions. Keep howling stones, maps, and Start menus P1/global in V1; use `event_presentation` for explicit owner-camera collapse and non-presenter hiding without disabling co-op simulation. Retained item-ring input stays in `ui_owner`, retained interactive dialogue input/presentation stays in `message_owner`, and authored fullscreen enemy swallow/grab cameras present the retained interaction slot while the retained effect owner remains in `retained_interaction_owner`. Localized enemy force-lock cameras such as the Tile Worm toss remain split-screen and affect only the retained player's viewport.
-- A P2-owned fullscreen presentation still needs viewport-owned world refresh even though only one window is drawn. Keep culling bypass, real-shadow setup, kankyo material replay, and GX light reload active for camera 1; suppress only the second viewport and split-only framebuffer replay.
+- Any fullscreen presentation in an active split-screen session still needs viewport-owned world refresh even though only one window is drawn. Keep culling bypass, real-shadow setup, kankyo material replay, and GX light reload active for the presenting camera; suppress only the other viewport and split-only framebuffer replay.
 - Classify viewport effects by what native update retains. Shared gameplay actors, animations, and
   particle emitters simulate once, then filter or rebuild presentation per viewport. If native visual
   update consumes a camera/player and stores positions, alpha, room ratio, or other history, P2 is
   missing a visual simulation lifecycle: keep P1 canonical and give additional slots fixed sidecar
   history with private RNG. Never replay P1's completed camera-relative packet as a substitute.
+- Identify the exact native packet before designing a viewport fix. Twilight's black rising wisps
+  are `dKankyo_housi_Packet`, whose update retains Camera-0/player-relative particle history; they
+  are not the `dKankyo_vrkumo_Packet` sky-cloud layer. Trace update, retained fields, and draw
+  together so a similarly named or visually adjacent effect does not receive the wrong ownership
+  architecture.
 - Camera-relative replay must use the exact matrix captured at native submission, including frame
   interpolation, rather than reconstructing from the later raw camera body. Viewport refresh and
   interpolation remain separate lifecycles even when they share submitted matrix state.
@@ -45,6 +50,9 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
   viewport. Keep registration frame-scoped so down/dead phases cannot inherit stale hidden state.
   Per-viewport particle presentation may override draw alpha and restore it afterward, but must
   never start, stop, or advance the shared emitter between viewport replays.
+- Pooled simple emitters can outlive a scene-owned render sidecar reset. If their native resource
+  flags classify Sense or another viewport requirement, renew that classification from the native
+  reuse/submission path as well as initial emitter creation.
 - Generic `DEFAULT_GETITEM` sequences retain their collector through `item_get_owner`: only that ALINK consumes the singular staff track, `Demo_Item` follows the owner's live form/position, item text uses the owner's pad, and `event_presentation::ItemGet` presents that slot until the post-camera render handoff after native control restoration. Keep shared inventory/save mutation global.
 - ItemGet teardown is ordered: classify the closing event from `event->getName()` while it is in END state, request release, let event `Step()` clear camera play, let camera actors consume recovery, then finish release at `mDoGph_Painter()` entry before window/render-policy sampling. `getRunEventName()` cannot classify END state, and releasing immediately after `setCameraPlay(0)` is still too early.
 - Poe soul collection is the validated `item_get_owner` producer. Other `DEFAULT_GETITEM` sources must retain the exact collector before ordering/changing the event; do not assume the generic fallback proves pickup, chest, NPC, insect, key, or equipment ownership.

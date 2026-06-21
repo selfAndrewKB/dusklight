@@ -18,6 +18,7 @@
 #include "dusk/coop/damage_owner.h"
 #include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/retained_interaction_owner.h"
+#include "dusk/coop/render_materials.h"
 #include "dusk/coop/selected_target_state.h"
 #include "dusk/coop/wolf_catch_owner.h"
 #endif
@@ -87,6 +88,11 @@ static int daE_YC_Draw(e_yc_class* i_this) {
 
     J3DModel* model = i_this->mpMorf->getModel();
     g_env_light.settingTevStruct(2, &i_this->current.pos, &i_this->tevStr);
+#if TARGET_PC
+    // Co-op: capture the carrier's native Type 2 TEV inputs before viewport replay.
+    dusk::coop::render_materials::registerLightingProbe(
+        "e_yc.type2", i_this, model, &i_this->tevStr, 2);
+#endif
     g_env_light.setLightTevColorType_MAJI(model, &i_this->tevStr);
     dComIfGd_setListDark();
     i_this->mpMorf->entryDL();

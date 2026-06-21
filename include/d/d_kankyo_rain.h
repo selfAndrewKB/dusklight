@@ -30,6 +30,7 @@ void dKyr_rain_move();
 void cloud_shadow_move();
 #if TARGET_PC
 void dKyr_resetCloudViewportState();
+void dKyr_resetHousiViewportState();
 #endif
 void dKyr_odour_init();
 void dKyr_odour_move();

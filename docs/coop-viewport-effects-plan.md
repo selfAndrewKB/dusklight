@@ -3,8 +3,9 @@
 ## Status
 
 Implemented on `co-op-viewport-effects`. The user compiled and field-validated the camera-relative
-Goron Mines cloud/haze and framebuffer ordering fix on 2026-06-21. Codex validation remains source
-inspection and `git diff --check`; Visual Studio/CMake builds remain user-owned.
+Goron Mines cloud/haze and framebuffer ordering fix on 2026-06-21. Dig-spot emitter reuse and the
+per-slot Twilight `housi` simulation are implemented pending field validation. Codex validation
+remains source inspection and `git diff --check`; Visual Studio/CMake builds remain user-owned.
 
 ## Checkpoint 1: World Effects
 
@@ -45,9 +46,14 @@ inspection and `git diff --check`; Visual Studio/CMake builds remain user-owned.
 packed target/composite rectangles, effect-family policy, Base/Sense snapshot validity, per-slot
 Sense activation and owned emitters, shared reveal/inactive emitter counts, Sense-only model count,
 per-slot Twilight camera/player/light mask, and current registered view-dependent and
-projected-material models. Schema 5 also records projection-particle resources per viewport and the
+projected-material models. Schema 6 also records projection-particle resources per viewport and the
 kankyo cloud/haze simulation source, active draw camera, projection camera, per-slot draw count,
-visible-cloud count, aggregate alpha, and the framebuffer refresh policy seen by each consumer.
+visible-cloud count, aggregate alpha, per-slot Twilight `housi` simulation/draw source and retained
+center, and the framebuffer refresh policy seen by each consumer.
+Narrow lighting probes preserve the Shadow Rider, carrier Kargarok, and wolf Link Type 2/9 TEV
+ambient/light values at native submission and viewport refresh. Per-slot lighting-pass records show
+whether GX-light reload and kankyo material refresh were requested and executed during an authored
+fullscreen enemy demo without changing that policy.
 Continuous fade strength, positions, and buffer dimensions live in `latest.json`; JSONL change keys
 use ownership, activation, registration, and policy state.
 
@@ -67,6 +73,10 @@ use ownership, activation, registration, and policy state.
 - Particle simulation remains singular. Native Sense particles stay draw-enabled when any slot
   needs them; viewport replay temporarily applies that slot's reveal/inverse-wisp alpha and restores
   the shared emitter immediately afterward.
+- Native simple-particle callbacks can reuse an existing emitter after `render_effects` has reset
+  its registry. Sense-resource classification is therefore renewed from `dPa_simpleEcallBack::set()`
+  on every native use, not only `createEmitter()`. This keeps DigPlace and DigHoll generic while
+  ensuring their `0x70F` / `0x73D` particles use the presenting slot's Sense strength.
 - Generic Twilight NPC families, custom Castle Town spirits, Frozen Zora, Ghost Soldiers, Poes,
   Ghost Rats, and Shadow Insects use this boundary. Generic dig places preserve vanilla's two-step
   producer order: the shared actor is exposed to the nearest active wolf, then each ALINK's own
@@ -118,6 +128,22 @@ while updating retained history is itself missing a per-slot visual simulation l
 the canonical P1 packet under Camera 1 cannot reconstruct positions, alpha easing, room ratio, or RNG
 decisions that were already committed during update.
 
+The Twilight Realm's rising black particles are the `dKankyo_housi_Packet`, not the separate
+`dKankyo_vrkumo_Packet` sky-cloud layer. Vanilla `dKyr_housi_move()` consumes Camera 0 and P1 while
+storing particle center, position, alpha, scale, speed, and random decisions. P1 keeps the canonical
+packet, shared weather activation/count/fade, and vanilla RNG. Each active added camera owns fixed
+`HOUSI_EFF[300]` visual history with private RNG and runs the same native update against its player
+and camera. Draw replay selects that slot's history while shared weather resources remain singular.
+`drawVrkumo()` only needs the active viewport camera because its sky geometry is camera-relative at
+draw time; it does not own the black rising-particle lifecycle.
+
+Authored fullscreen presentation does not turn a split-screen session back into native Camera 0
+render ownership. The Shadow Kargarok trace proved that P1 fullscreen presentation had requested a
+kankyo material refresh but skipped execution and GX-light reload, leaving wolf/rider Type 9/2
+models with stale black light state. `shouldRefreshViewportOwnedWorldState()` therefore remains true
+for every presented window while split-screen capability is active; `shouldPresentSplitViewports()`
+alone decides whether both windows and split-only framebuffer work run.
+
 ## Durable Rendering Rules
 
 - Trace effects through the complete native chain: simulation producer, retained history, draw-list
@@ -145,7 +171,11 @@ decisions that were already committed during update.
 - `Obj_MHole` projection from opposite camera angles.
 - P1-only and P2-only Sense activation, fade, particles, odour view, and deactivation.
 - P1-only and P2-only reveal visibility, attention, spirit wisps, Poes, insects, and dig places.
+- P1 Sense does not reveal DigPlace/DigHoll particles in P2's unsensed viewport.
+- Twilight `housi` particles remain centered and independently retained around each active camera.
 - Twilight camera lighting without Camera 0 leakage.
+- Shadow Kargarok authored-demo Type 2/9 models receive GX-light and kankyo-material refresh during
+  P1 fullscreen presentation rather than inheriting stale black light state.
 - Dusk and Classic bloom at windowed and ultrawide resolutions.
 - Field-validated Goron Mines mode-6 cloud/smoke, group-13 heat haze, water/refraction, lava jets,
   ash, fire, and Torch Slugs without cross-camera haze movement or particle flicker.

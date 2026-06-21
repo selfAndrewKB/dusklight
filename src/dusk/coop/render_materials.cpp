@@ -7,6 +7,7 @@
 #include "d/d_com_inf_game.h"
 #include "d/d_kankyo.h"
 #include "dusk/coop/event_presentation.h"
+#include "dusk/coop/render_effects.h"
 #include "m_Do/m_Do_graphic.h"
 
 #include <algorithm>
@@ -52,9 +53,75 @@ std::vector<KankyoTevstrEntry> s_tevstrs;
 std::vector<ViewDependentModelEntry> s_viewDependentModels;
 std::vector<LightProjectionModelEntry> s_lightProjectionModels;
 bool s_refreshing = false;
+LightingProbeDebugState s_lightingProbes[kLightingProbeCapacity] = {};
+LightingPassDebugState s_lightingPasses[kPlayerSlotCount] = {};
+LightingPassDebugState s_lastEnemyAuthoredDemoLightingPasses[kPlayerSlotCount] = {};
 
 unsigned int currentFrame() {
     return static_cast<unsigned int>(g_Counter.mCounter0);
+}
+
+int currentViewportSlotIndex() {
+    if (!render_effects::hasViewport()) {
+        return 0;
+    }
+
+    const int slot = static_cast<int>(render_effects::currentViewportSlot());
+    return slot >= 0 && slot < kPlayerSlotCount ? slot : 0;
+}
+
+void captureLightingValue(LightingValueDebugState* out, dKy_tevstr_c* tevstr) {
+    if (out == nullptr || tevstr == nullptr) {
+        return;
+    }
+
+    *out = {};
+    out->frame = currentFrame();
+    out->slot = currentViewportSlotIndex();
+    out->cameraId = render_effects::hasViewport()
+                        ? render_effects::currentViewport().cameraId
+                        : 0;
+    out->ambientR = tevstr->AmbCol.r;
+    out->ambientG = tevstr->AmbCol.g;
+    out->ambientB = tevstr->AmbCol.b;
+    for (int i = 0; i < kLightingProbeLightCount; i++) {
+        const J3DLightInfo* light = tevstr->mLights[i].getLightInfo();
+        out->lightR[i] = light->mColor.r;
+        out->lightG[i] = light->mColor.g;
+        out->lightB[i] = light->mColor.b;
+        out->lightX[i] = light->mLightPosition.x;
+        out->lightY[i] = light->mLightPosition.y;
+        out->lightZ[i] = light->mLightPosition.z;
+    }
+}
+
+LightingPassDebugState& currentLightingPass() {
+    LightingPassDebugState& pass = s_lightingPasses[currentViewportSlotIndex()];
+    const unsigned int frame = currentFrame();
+    if (pass.frame != frame) {
+        if (pass.enemyAuthoredDemo) {
+            s_lastEnemyAuthoredDemoLightingPasses[pass.slot] = pass;
+        }
+        pass = {};
+        pass.frame = frame;
+        pass.slot = currentViewportSlotIndex();
+        pass.cameraId = render_effects::hasViewport()
+                            ? render_effects::currentViewport().cameraId
+                            : 0;
+        const event_presentation::DebugState& presentation =
+            event_presentation::getDebugState();
+        pass.fullscreen = presentation.fullscreen;
+        pass.enemyAuthoredDemo = presentation.enemyAuthoredDemoDepth != 0;
+    }
+    return pass;
+}
+
+void captureLightingProbeRefresh(dKy_tevstr_c* tevstr) {
+    for (int i = 0; i < kLightingProbeCapacity; i++) {
+        if (s_lightingProbes[i].tevstr == tevstr) {
+            captureLightingValue(&s_lightingProbes[i].refresh, tevstr);
+        }
+    }
 }
 
 template <typename Entry, typename Value>
@@ -282,17 +349,64 @@ void registerLightProjectionModel(J3DModel* model, unsigned int materialMask) {
 #endif
 }
 
+void registerLightingProbe(const char* label, const void* actor, J3DModel* model,
+                           dKy_tevstr_c* tevstr, int tevstrType) {
+#if TARGET_PC
+    if (label == nullptr || actor == nullptr || model == nullptr || tevstr == nullptr) {
+        return;
+    }
+
+    LightingProbeDebugState* available = nullptr;
+    LightingProbeDebugState* oldest = &s_lightingProbes[0];
+    for (int i = 0; i < kLightingProbeCapacity; i++) {
+        LightingProbeDebugState& probe = s_lightingProbes[i];
+        if (probe.actor == actor) {
+            available = &probe;
+            break;
+        }
+        if (probe.actor == nullptr && available == nullptr) {
+            available = &probe;
+        }
+        if (probe.submission.frame < oldest->submission.frame) {
+            oldest = &probe;
+        }
+    }
+    if (available == nullptr) {
+        available = oldest;
+    }
+
+    if (available->label != label || available->tevstr != tevstr) {
+        available->refresh = {};
+    }
+    available->label = label;
+    available->actor = actor;
+    available->model = model;
+    available->tevstr = tevstr;
+    available->tevstrType = tevstrType;
+    captureLightingValue(&available->submission, tevstr);
+#endif
+}
+
+void recordGxLightReloadForCurrentView(bool reloaded) {
+#if TARGET_PC
+    currentLightingPass().gxLightReloaded = reloaded;
+#endif
+}
+
 void refreshKankyoMaterialsForCurrentView() {
 #if TARGET_PC
+    LightingPassDebugState& lightingPass = currentLightingPass();
+    lightingPass.materialRefreshRequested = true;
     if (!dusk::coop::event_presentation::shouldRefreshViewportOwnedWorldState() ||
         s_refreshing)
     {
         return;
     }
+    lightingPass.materialRefreshExecuted = true;
 
     // Co-op: actor/background draw submission patches shared J3D material state once before
     // viewport replay. Refresh those same patches after the presented camera is active so
-    // split views and P2 fullscreen presentation do not inherit camera-0 TEV/light state.
+    // split views and collapsed fullscreen presentation do not inherit stale TEV/light state.
     const unsigned int frame = currentFrame();
     sweepStaleRegistrations(frame);
 
@@ -304,6 +418,7 @@ void refreshKankyoMaterialsForCurrentView() {
             // Co-op: material entries are the current-frame draw surface. Recompute the
             // underlying tevstr through its remembered creation inputs before patching it.
             refreshTevstrForCurrentView(entry.tevstr);
+            captureLightingProbeRefresh(entry.tevstr);
             g_env_light.setLightTevColorType_MAJI(entry.modelData, entry.tevstr);
         }
     }
@@ -312,6 +427,7 @@ void refreshKankyoMaterialsForCurrentView() {
             entry.tevstr != nullptr)
         {
             refreshTevstrForCurrentView(entry.tevstr);
+            captureLightingProbeRefresh(entry.tevstr);
             g_env_light.setLightTevColorType_MAJI(entry.model->getModelData(), entry.tevstr);
             diffModelKankyoMaterial(entry.model, entry.tevstr);
         }
@@ -352,6 +468,19 @@ DebugState getDebugState() {
         const int index = state.lightProjectionModelCount++;
         state.lightProjectionModels[index] = entry.model;
         state.lightProjectionMaterialMasks[index] = entry.materialMask;
+    }
+    for (int i = 0; i < kLightingProbeCapacity; i++) {
+        if (s_lightingProbes[i].actor == nullptr) {
+            continue;
+        }
+        state.lightingProbes[state.lightingProbeCount++] = s_lightingProbes[i];
+    }
+    for (int i = 0; i < kPlayerSlotCount; i++) {
+        state.lightingPasses[i] = s_lightingPasses[i];
+        state.lastEnemyAuthoredDemoLightingPasses[i] =
+            s_lightingPasses[i].enemyAuthoredDemo
+                ? s_lightingPasses[i]
+                : s_lastEnemyAuthoredDemoLightingPasses[i];
     }
     return state;
 }

@@ -144,8 +144,9 @@ bool shouldPresentSplitViewports() {
 }
 
 bool shouldRefreshViewportOwnedWorldState() {
-    return camera::isSplitScreenEnabled() &&
-           (!isFullscreen() || presenterSlot() == PlayerSlot::Secondary);
+    // Co-op: a collapsed P1 window is still one viewport of an active split-screen session.
+    // Authored fullscreen cameras need the same kankyo/material/light refresh as P2 presentation.
+    return camera::isSplitScreenEnabled();
 }
 
 bool shouldDrawWindow(int windowIndex) {

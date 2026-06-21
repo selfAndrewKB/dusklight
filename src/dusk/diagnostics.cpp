@@ -1261,6 +1261,17 @@ json eventKeyForProvider(const char* provider, const json& data) {
             });
         }
         const json cloudHaze = data.value("cloud_haze", json::object());
+        json housi = json::array();
+        for (const json& slot : data.value("housi", json::array())) {
+            housi.push_back({
+                {"slot", slot.value("slot", -1)},
+                {"simulation_recorded", slot.value("simulation_recorded", false)},
+                {"draw_recorded", slot.value("draw_recorded", false)},
+                {"source_camera_id", slot.value("source_camera_id", 0)},
+                {"draw_camera_id", slot.value("draw_camera_id", 0)},
+                {"count", slot.value("count", 0)},
+            });
+        }
         return {
             {"schema_version", data.value("schema_version", 1)},
             {"viewport_slot", data.value("viewport_slot", 0)},
@@ -1284,6 +1295,7 @@ json eventKeyForProvider(const char* provider, const json& data) {
                  {"draw_camera_id", cloudHaze.value("draw_camera_id", 0)},
                  {"draw_calls", cloudHaze.value("draw_calls", json::array())},
              }},
+            {"housi", housi},
         };
     }
     if (name == "camera.state") {
@@ -2208,6 +2220,68 @@ json collectRenderEffects() {
         });
     }
 
+    auto lightingValueJson = [](const coop::render_materials::LightingValueDebugState& value) {
+        json lights = json::array();
+        for (int i = 0; i < coop::render_materials::kLightingProbeLightCount; i++) {
+            lights.push_back({
+                {"index", i},
+                {"color", {value.lightR[i], value.lightG[i], value.lightB[i]}},
+                {"position", {value.lightX[i], value.lightY[i], value.lightZ[i]}},
+            });
+        }
+        return json({
+            {"frame", value.frame},
+            {"slot", value.slot},
+            {"camera_id", value.cameraId},
+            {"ambient", {value.ambientR, value.ambientG, value.ambientB}},
+            {"lights", lights},
+        });
+    };
+
+    json lightingProbes = json::array();
+    for (int i = 0; i < materials.lightingProbeCount; i++) {
+        const coop::render_materials::LightingProbeDebugState& probe =
+            materials.lightingProbes[i];
+        lightingProbes.push_back({
+            {"label", probe.label != nullptr ? probe.label : ""},
+            {"actor", ptrString(reinterpret_cast<uintptr_t>(probe.actor))},
+            {"model", ptrString(reinterpret_cast<uintptr_t>(probe.model))},
+            {"tevstr", ptrString(reinterpret_cast<uintptr_t>(probe.tevstr))},
+            {"tevstr_type", probe.tevstrType},
+            {"submission", lightingValueJson(probe.submission)},
+            {"refresh", lightingValueJson(probe.refresh)},
+        });
+    }
+
+    json lightingPasses = json::array();
+    json lastEnemyAuthoredDemoLightingPasses = json::array();
+    for (int i = 0; i < coop::kPlayerSlotCount; i++) {
+        const coop::render_materials::LightingPassDebugState& pass =
+            materials.lightingPasses[i];
+        lightingPasses.push_back({
+            {"slot", i},
+            {"frame", pass.frame},
+            {"camera_id", pass.cameraId},
+            {"fullscreen", pass.fullscreen},
+            {"enemy_authored_demo", pass.enemyAuthoredDemo},
+            {"gx_light_reloaded", pass.gxLightReloaded},
+            {"material_refresh_requested", pass.materialRefreshRequested},
+            {"material_refresh_executed", pass.materialRefreshExecuted},
+        });
+        const coop::render_materials::LightingPassDebugState& authoredPass =
+            materials.lastEnemyAuthoredDemoLightingPasses[i];
+        lastEnemyAuthoredDemoLightingPasses.push_back({
+            {"slot", i},
+            {"frame", authoredPass.frame},
+            {"camera_id", authoredPass.cameraId},
+            {"fullscreen", authoredPass.fullscreen},
+            {"enemy_authored_demo", authoredPass.enemyAuthoredDemo},
+            {"gx_light_reloaded", authoredPass.gxLightReloaded},
+            {"material_refresh_requested", authoredPass.materialRefreshRequested},
+            {"material_refresh_executed", authoredPass.materialRefreshExecuted},
+        });
+    }
+
     json projectionParticles = json::array();
     for (int i = 0; i < effects.projectionParticleCount; i++) {
         const coop::render_effects::ProjectionParticleDebugState& particle =
@@ -2271,6 +2345,29 @@ json collectRenderEffects() {
          {haze.alphaSums[0], haze.alphaSums[1], haze.alphaSums[2], haze.alphaSums[3]}},
     };
 
+    json housi = json::array();
+    for (int i = 0; i < coop::kPlayerSlotCount; i++) {
+        const coop::render_effects::HousiDebugState& slot = effects.housi[i];
+        housi.push_back({
+            {"slot", i},
+            {"simulation_recorded", slot.simulationRecorded},
+            {"draw_recorded", slot.drawRecorded},
+            {"packet", ptrString(reinterpret_cast<uintptr_t>(slot.packet))},
+            {"source_camera", ptrString(reinterpret_cast<uintptr_t>(slot.sourceCamera))},
+            {"source_player", ptrString(reinterpret_cast<uintptr_t>(slot.sourcePlayer))},
+            {"source_camera_id", slot.sourceCameraId},
+            {"count", slot.count},
+            {"center", {slot.centerX, slot.centerY, slot.centerZ}},
+            {"first_particle",
+             {slot.firstParticleX, slot.firstParticleY, slot.firstParticleZ}},
+            {"draw_calls", slot.drawCalls},
+            {"draw_window_index", slot.drawWindowIndex},
+            {"draw_camera_id", slot.drawCameraId},
+            {"draw_eye", {slot.drawEyeX, slot.drawEyeY, slot.drawEyeZ}},
+            {"alpha_sum", slot.alphaSum},
+        });
+    }
+
     json viewport = {
         {"available", effects.viewport.viewport != nullptr},
     };
@@ -2290,7 +2387,7 @@ json collectRenderEffects() {
 
     mDoGph_gInf_c::bloom_c* bloom = mDoGph_gInf_c::getBloom();
     return {
-        {"schema_version", 5},
+        {"schema_version", 7},
         {"viewport_active", effects.viewportActive},
         {"viewport_slot", static_cast<int>(effects.viewport.slot)},
         {"window_index", effects.viewport.windowIndex},
@@ -2347,8 +2444,13 @@ json collectRenderEffects() {
              {"culled", visibility.lastCulled},
          }},
         {"twilight", twilight},
+        {"lighting_probes", lightingProbes},
+        {"lighting_passes", lightingPasses},
+        {"last_enemy_authored_demo_lighting_passes",
+         lastEnemyAuthoredDemoLightingPasses},
         {"projection_particles", projectionParticles},
         {"cloud_haze", cloudHaze},
+        {"housi", housi},
         {"view_dependent_models", viewModels},
         {"projected_material_models", projectedModels},
     };
@@ -3532,7 +3634,7 @@ Provider s_providers[] = {
     {"scene.current", 1, "cheap", 30, true, 20, 4096, collectSceneCurrent},
     {"render.stats", 1, "cheap", 30, true, 20, 4096, collectRenderStats},
     {"render.windows", 2, "cheap", 1, true, 20, 8192, collectRenderWindows},
-    {"render.effects", 5, "cheap", 1, true, 120, 32768, collectRenderEffects},
+    {"render.effects", 7, "cheap", 1, true, 120, 57344, collectRenderEffects},
     {"camera.state", 2, "cheap", 1, true, 20, 8192, collectCameraState},
     {"camera.area_load", 1, "cheap", 1, true, 120, 32768, collectCameraAreaLoad},
     {"player.slots", 2, "cheap", 1, true, 120, 8192, collectPlayerSlots},

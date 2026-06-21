@@ -312,6 +312,9 @@ void dKyw_wether_init() {
 void dKyw_wether_init2() {
     g_env_light.mVrkumoStatus = 0;
     g_env_light.mVrkumoCount = 0;
+#if TARGET_PC
+    dKyr_resetHousiViewportState();
+#endif
 }
 
 void dKyw_wether_delete() {
@@ -339,6 +342,10 @@ void dKyw_wether_delete() {
     }
 
     if (g_env_light.mHousiInitialized) {
+#if TARGET_PC
+        // Co-op: added-camera particle history cannot outlive the native weather packet.
+        dKyr_resetHousiViewportState();
+#endif
         JKR_DELETE(g_env_light.mpHousiPacket);
         g_env_light.mpHousiPacket = NULL;
     }
@@ -712,6 +719,9 @@ static void wether_move_housi() {
             g_env_light.mpHousiPacket = JKR_NEW_ARGS (32) dKankyo_housi_Packet;
 
             if (g_env_light.mpHousiPacket != NULL) {
+#if TARGET_PC
+                dKyr_resetHousiViewportState();
+#endif
                 if (dKy_darkworld_check() == true) {
                     g_env_light.mpHousiPacket->mpResTex = (u8*)dComIfG_getObjectRes("Always", 0x5E);
                 } else {
@@ -752,6 +762,9 @@ static void wether_move_housi() {
             g_env_light.mpHousiPacket->field_0x5de8 <= 0.0f)
         {
             g_env_light.mHousiInitialized = false;
+#if TARGET_PC
+            dKyr_resetHousiViewportState();
+#endif
             JKR_DELETE(g_env_light.mpHousiPacket);
             g_env_light.mpHousiPacket = NULL;
         } else {

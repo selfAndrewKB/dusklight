@@ -850,6 +850,13 @@ u32 dPa_simpleEcallBack::set(cXyz const* i_pos, dKy_tevstr_c const* param_2, u8 
     u8 id = dPa_control_c::getRM_ID(mID);
     JPAResourceManager* manager = dPa_control_c::getEmitterManager()->getResourceManager(id);
     u32 uVar5 = manager->getResUserWork(mID);
+#if TARGET_PC
+    if ((uVar5 & 0x100) != 0) {
+        // Co-op: simple Sense emitters persist across scene-sidecar resets, so renew their
+        // viewport reveal classification whenever native code submits another use.
+        dusk::coop::render_effects::registerSenseRevealEmitter(mEmitter);
+    }
+#endif
     if (((uVar5 & 0xEF0000) >> 16) < 100) {
         dVar7 = ((uVar5 & 0xEF0000) >> 16) / 99.0f;
     }

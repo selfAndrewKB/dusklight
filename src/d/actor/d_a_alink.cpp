@@ -69,6 +69,7 @@
 #include "dusk/coop/player_button_status.h"
 #include "dusk/coop/player_camera_status.h"
 #include "dusk/coop/player_slots.h"
+#include "dusk/coop/render_materials.h"
 #include "dusk/coop/retained_interaction_owner.h"
 #include "dusk/coop/ui_owner.h"
 #include "dusk/diagnostics.h"
@@ -20396,6 +20397,11 @@ void daAlink_c::initTevCustomColor() {
 int daAlink_c::draw() {
     if (checkWolf()) {
         g_env_light.settingTevStruct(9, &current.pos, &tevStr);
+#if TARGET_PC
+        // Co-op: capture each wolf's native Type 9 TEV inputs before viewport replay.
+        dusk::coop::render_materials::registerLightingProbe(
+            "alink.wolf.type9", this, mpLinkModel, &tevStr, 9);
+#endif
     } else {
         g_env_light.settingTevStruct(10, &current.pos, &tevStr);
     }
