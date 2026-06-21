@@ -17,7 +17,9 @@
 #include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/ghost_rat_state_probe.h"
 #include "dusk/coop/midna_owner.h"
+#include "dusk/coop/player_sense.h"
 #include "dusk/coop/player_query.h"
+#include "dusk/coop/render_visibility.h"
 #include "dusk/coop/retained_interaction_owner.h"
 #include "dusk/coop/selected_target_state.h"
 #include "dusk/coop/world_switch_probe.h"
@@ -128,6 +130,10 @@ static int daE_NZ_Draw(e_nz_class* i_this) {
     if (i_this->mMaterialAlpha < 1.0f) {
         return 1;
     }
+#if TARGET_PC
+    // Co-op: Ghost Rat reveal and native culling follow the current Sense viewport.
+    dusk::coop::render_visibility::registerSenseOnlyModel(model, a_this);
+#endif
 
     g_env_light.setLightTevColorType_MAJI(model, &a_this->tevStr);
     J3DModelData* modelData = model->getModelData();
@@ -824,6 +830,11 @@ static s8 action(e_nz_class* i_this) {
 
 static int daE_NZ_Execute(e_nz_class* i_this) {
     fopEn_enemy_c* a_this = (fopEn_enemy_c*)&i_this->enemy;
+
+#if TARGET_PC
+    // Co-op: each attention scanner applies owner-local Sense to the shared Ghost Rat.
+    dusk::coop::player_sense::registerRevealActor(a_this);
+#endif
     
     f32 alphaTarget = 0.0f;
     f32 alphaStep = l_HIO.mVanishingAlphaSpeed;

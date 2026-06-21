@@ -8,6 +8,11 @@
 #include "d/actor/d_a_npc_drainSol.h"
 #include "d/actor/d_a_npc.h"
 
+#if TARGET_PC
+#include "dusk/coop/player_sense.h"
+#include "dusk/coop/render_visibility.h"
+#endif
+
 static DUSK_CONSTEXPR int l_bmdGetParamList[] = {
     9, 7
 };
@@ -182,7 +187,17 @@ int daNpcDrSol_c::Delete() {
 int daNpcDrSol_c::Execute() {
     execute();
 
-    if (daPy_py_c::checkNowWolfEyeUp() && !fopAcM_CheckCondition(this, 4) && chkFindPlayer() && getSwitchNo() != 0xFF) {
+#if TARGET_PC
+    // Co-op: the Drain Soldier's native LOS reveal switch follows the nearest Sense-ready player.
+    const dusk::coop::PlayerQueryResult revealPlayer =
+        dusk::coop::player_sense::findNearestRevealPlayer(this, "npc_drsol.reveal_switch");
+    if (revealPlayer.found && !fopAcM_CheckCondition(this, 4) &&
+        chkFindPlayer(revealPlayer.actor) && getSwitchNo() != 0xFF)
+#else
+    if (daPy_py_c::checkNowWolfEyeUp() && !fopAcM_CheckCondition(this, 4) &&
+        chkFindPlayer(daPy_getPlayerActorClass()) && getSwitchNo() != 0xFF)
+#endif
+    {
         fopAcM_onSwitch(this, getSwitchNo());
     }
 
@@ -195,7 +210,20 @@ int daNpcDrSol_c::Draw() {
 }
 
 void daNpcDrSol_c::drawOtherMdls() {
-    if (daPy_py_c::checkNowWolfEyeUp() && field_0xbd8 != NULL) {
+    if (field_0xbd8 != NULL &&
+#if TARGET_PC
+        (dusk::coop::render_visibility::shouldUseViewportVisibility() ||
+         daPy_py_c::checkNowWolfEyeUp())
+#else
+        daPy_py_c::checkNowWolfEyeUp()
+#endif
+    ) {
+#if TARGET_PC
+        if (dusk::coop::render_visibility::shouldUseViewportVisibility()) {
+            // Co-op: Drain Soldier equipment follows body Sense and native viewport culling.
+            dusk::coop::render_visibility::registerSenseOnlyModel(field_0xbd8, this);
+        }
+#endif
         g_env_light.setLightTevColorType_MAJI(field_0xbd8, &tevStr);
         mDoMtx_stack_c::copy(mAnm_p->getModel()->getAnmMtx(14));
         field_0xbd8->setBaseTRMtx(mDoMtx_stack_c::get());
@@ -283,9 +311,9 @@ int daNpcDrSol_c::setAction(bool (daNpcDrSol_c::*i_action)(void*)) {
     return TRUE;
 }
 
-bool daNpcDrSol_c::chkFindPlayer() {
+bool daNpcDrSol_c::chkFindPlayer(fopAc_ac_c* player) {
     dBgS_LinChk linechk;
-    cXyz end(fopAcM_GetPosition_p(daPy_getPlayerActorClass())->x, eyePos.y, fopAcM_GetPosition_p(daPy_getPlayerActorClass())->z);
+    cXyz end(player->current.pos.x, eyePos.y, player->current.pos.z);
     linechk.Set(&eyePos, &end, this);
     
     if (dComIfG_Bgsp().LineCross(&linechk)) {

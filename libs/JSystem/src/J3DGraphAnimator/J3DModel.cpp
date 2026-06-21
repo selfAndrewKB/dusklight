@@ -9,6 +9,9 @@
 #include "JSystem/J3DGraphBase/J3DSys.h"
 #include "JSystem/JKernel/JKRHeap.h"
 #include "dusk/frame_interpolation.h"
+#if TARGET_PC
+#include "dusk/coop/render_visibility.h"
+#endif
 
 #define J3D_ASSERTMSG(LINE, COND, MSG) JUT_ASSERT_MSG(LINE, (COND) != 0, MSG)
 #define J3D_WARN1(LINE, MSG, ARG1) JUT_WARN(LINE, MSG, ARG1)
@@ -472,6 +475,11 @@ void J3DModel::calc() {
 }
 
 void J3DModel::entry() {
+#if TARGET_PC
+    // Co-op: custom actor draw paths inherit the submitting actor's Sense visibility instead
+    // of relying on every NPC subclass to remember a separate model-registration hook.
+    dusk::coop::render_visibility::registerSubmittedModel(this);
+#endif
     j3dSys.setModel(this);
 
     if (checkFlag(J3DMdlFlag_SkinPosCpu)) {

@@ -6,9 +6,26 @@
 #include "d/dolzel_rel.h" // IWYU pragma: keep
 
 #include "d/actor/d_a_obj_digplace.h"
+#include "d/actor/d_a_alink.h"
 #include "d/actor/d_a_player.h"
 #include "d/d_com_inf_game.h"
 #include "f_pc/f_pc_name.h"
+
+#if TARGET_PC
+#include "dusk/coop/player_query.h"
+#include "dusk/coop/retained_interaction_owner.h"
+
+static dusk::coop::PlayerQueryEligibility digWolfEligibility(
+    dusk::coop::PlayerSlot, fopAc_ac_c* actor, void*)
+{
+    dusk::coop::PlayerQueryEligibility eligibility;
+    eligibility.eligible = static_cast<daAlink_c*>(actor)->checkWolf();
+    if (!eligibility.eligible) {
+        eligibility.failureFlags = dusk::coop::PlayerQueryEligibilityFailure_Form;
+    }
+    return eligibility;
+}
+#endif
 
 int daObjDigpl_c::create() {
     fopAcM_ct(this, daObjDigpl_c);
@@ -52,14 +69,36 @@ static int daObjDigpl_Create(fopAc_ac_c* i_this) {
 daObjDigpl_c::~daObjDigpl_c() {}
 
 static int daObjDigpl_Delete(daObjDigpl_c* i_this) {
+#if TARGET_PC
+    dusk::coop::retained_interaction_owner::clearAllRetainedInteractions(i_this);
+#endif
     i_this->~daObjDigpl_c();
     return 1;
 }
 
 int daObjDigpl_c::execute() {
+#if TARGET_PC
+    // Co-op: vanilla exposes the actor to a wolf before ALINK checks its own Sense state.
+    // Preserve that producer order while choosing which wolf seeds this shared actor this frame.
+    const dusk::coop::PlayerQueryResult wolfPlayer = dusk::coop::findNearestPlayerMatching(
+        this, "digplace.wolf", digWolfEligibility, nullptr);
+    daPy_py_c* player_p = wolfPlayer.found
+                              ? static_cast<daPy_py_c*>(wolfPlayer.actor)
+                              : daPy_getLinkPlayerActorClass();
+#else
     daPy_py_c* player_p = daPy_getLinkPlayerActorClass();
+#endif
 
     if (mDigFlg == 1) {
+#if TARGET_PC
+        const dusk::coop::retained_interaction_owner::RetainedInteractionState digOwner =
+            dusk::coop::retained_interaction_owner::updateRetainedInteraction(
+                "digplace.complete", this,
+                dusk::coop::retained_interaction_owner::RetainedInteractionScope::Dig);
+        if (digOwner.found && digOwner.localPlayer != NULL) {
+            player_p = digOwner.localPlayer;
+        }
+#endif
         if (mSwitch != 0xFF) {
             fopAcM_onSwitch(this, mSwitch);
         }
@@ -90,6 +129,11 @@ int daObjDigpl_c::execute() {
             fopAcM_delete(this);
             return 1;
         }
+#if TARGET_PC
+        dusk::coop::retained_interaction_owner::clearRetainedInteraction(
+            "digplace.complete", this,
+            dusk::coop::retained_interaction_owner::RetainedInteractionScope::Dig);
+#endif
     }
 
     attention_info.flags &= ~fopAc_AttnFlag_ETC_e;
@@ -106,7 +150,12 @@ int daObjDigpl_c::execute() {
             if ((mUsedDigFlags[i >> 5] & (1 << (i % 32))) == 0) {
                 point_pos.set(point_p->m_position.x, point_p->m_position.y, point_p->m_position.z);
 
-                if (player_p->current.pos.abs(point_pos) < 1000.0f) {
+                if (
+#if TARGET_PC
+                    wolfPlayer.found &&
+#endif
+                    player_p->current.pos.abs(point_pos) < 1000.0f)
+                {
                     dComIfGp_particle_setSimple(0x70F, &point_pos, 255, g_whiteColor, g_whiteColor,
                                                 0, 0.0f);
                     dComIfGp_particle_setSimple(0x73D, &point_pos, 255, g_whiteColor, g_whiteColor,
@@ -134,10 +183,17 @@ int daObjDigpl_c::execute() {
         }
     }
 
-    if (daPy_py_c::checkNowWolf() && mDigFlg == 0) {
+    if (
+#if TARGET_PC
+        wolfPlayer.found &&
+#else
+        daPy_py_c::checkNowWolf() &&
+#endif
+        mDigFlg == 0)
+    {
         if (field_0x56b == 0) {
             int seen_angle = fopAcM_seenActorAngleY(player_p, this);
-            f32 dist_to_player = fopAcM_searchPlayerDistanceXZ2(this);
+            f32 dist_to_player = fopAcM_searchActorDistanceXZ2(this, player_p);
 
             if (seen_angle <= 0x2800 || dist_to_player < 1600.0f) {
                 attention_info.flags |= fopAc_AttnFlag_ETC_e;
@@ -146,7 +202,12 @@ int daObjDigpl_c::execute() {
             if (dist_to_player < 250000.0f &&
                 fabsf(current.pos.y - player_p->current.pos.y) < 200.0f)
             {
+#if TARGET_PC
+                // Co-op: the same eligible ALINK that exposed the dig prompt receives look aim.
+                static_cast<daAlink_c*>(player_p)->setLookPosFromOut(&attention_info.position);
+#else
                 daPy_py_c::setLookPos(&attention_info.position);
+#endif
             }
         }
 

@@ -5,6 +5,12 @@
 #include "d/d_msg_object.h"
 #include "d/actor/d_a_tag_evtarea.h"
 
+#if TARGET_PC
+#include "dusk/coop/player_sense.h"
+#include "dusk/coop/render_effects.h"
+#include "dusk/coop/render_visibility.h"
+#endif
+
 static u16 daNpcF_putNurbs(dPnt* param_0, int param_1, int param_2, dPnt* param_3, int param_4);
 u8 daNpcF_getDistTableIdx(int param_0, int param_1);
 
@@ -586,6 +592,10 @@ BOOL daNpcF_c::execute() {
     setCollisions();
 
     if (mTwilight) {
+#if TARGET_PC
+        // Co-op: expose the shared spirit actor only to Sense-ready attention owners.
+        dusk::coop::player_sense::registerRevealActor(this);
+#endif
         attention_info.flags |= fopAc_AttnFlag_UNK_0x400000;
         attention_info.flags |= fopAc_AttnFlag_UNK_0x800000;
         setHitodamaPrtcl();
@@ -621,7 +631,19 @@ int daNpcF_c::draw(BOOL i_isTest, BOOL param_1, f32 i_shadowDepth, GXColorS10* i
     J3DModelData* modelData = model->getModelData();
     field_0x9f3 = 1;
 
+#if TARGET_PC
+    const bool viewportSenseVisibility =
+        mTwilight && dusk::coop::render_visibility::shouldUseViewportVisibility();
+#else
+    const bool viewportSenseVisibility = false;
+#endif
     if (!checkHide()) {
+#if TARGET_PC
+        if (viewportSenseVisibility) {
+            // Co-op: replay the shared model with owner Sense and native camera culling.
+            dusk::coop::render_visibility::registerSenseOnlyModel(model, this);
+        }
+#endif
         if (!i_hideDamage && mDamageTimer != 0 && mTotalDamageTimer != 0) {
             damage_ratio = (f32)mDamageTimer / (f32)mTotalDamageTimer;
         } else {
@@ -1290,7 +1312,12 @@ void daNpcF_c::orderEvent(int i_speak, DUSK_CONST char* i_evtName, u16 param_2, 
 #if PLATFORM_SHIELD
         true
 #else
-        !mTwilight|| daPy_py_c::checkNowWolfEyeUp()
+        !mTwilight ||
+#if TARGET_PC
+        dusk::coop::player_sense::anyRevealReady()
+#else
+        daPy_py_c::checkNowWolfEyeUp()
+#endif
 #endif
     ) {
         if ((attention_info.flags & fopAc_AttnFlag_SPEAK_e) || (attention_info.flags & fopAc_AttnFlag_TALK_e)) {
@@ -1723,9 +1750,13 @@ void daNpcF_c::setHitodamaPrtcl() {
 
         emitter = dComIfGp_particle_getEmitter(mHitodamaParticleKey[i]);
         if (emitter != NULL) {
-            u8 alpha = dComIfGs_wolfeye_effect_check() == 0 ? 0xFF : 0;
             emitter->setGlobalTranslation(pos.x, pos.y, pos.z);
-            emitter->setGlobalAlpha(alpha);
+#if TARGET_PC
+            // Co-op: unrevealed spirit wisps remain visible only in non-Sense viewports.
+            dusk::coop::render_effects::registerSenseInactiveEmitter(emitter);
+#else
+            emitter->setGlobalAlpha(dComIfGs_wolfeye_effect_check() == 0 ? 0xFF : 0);
+#endif
         }
     }
 }

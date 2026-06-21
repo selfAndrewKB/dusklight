@@ -12,6 +12,8 @@
 
 #if TARGET_PC
 #include "dusk/coop/enemy_targeting.h"
+#include "dusk/coop/player_sense.h"
+#include "dusk/coop/render_visibility.h"
 #include "dusk/coop/selected_target_state.h"
 #endif
 
@@ -36,6 +38,10 @@ static int daE_GS_Draw(e_gs_class* a_this) {
     if (a_this->opacity < 1.0f) {
         return 1;
     }
+#if TARGET_PC
+    // Co-op: submit the revealed body once and replay native culling for each Sense owner.
+    dusk::coop::render_visibility::registerSenseOnlyModel(model, actor);
+#endif
 
     g_env_light.settingTevStruct(7, &actor->current.pos, &actor->tevStr);
     actor->tevStr.TevColor.a = (u8)a_this->opacity;
@@ -164,6 +170,11 @@ static void action(e_gs_class* a_this) {
 
 static int daE_GS_Execute(e_gs_class* a_this) {
     fopAc_ac_c* actor = &a_this->enemy;
+
+#if TARGET_PC
+    // Co-op: each attention scanner applies its owner's Sense readiness to this shared ghost.
+    dusk::coop::player_sense::registerRevealActor(actor);
+#endif
 
     f32 alpha_target = 0.0f;
     f32 alpha_speed = l_HIO.disappear_alpha_speed;

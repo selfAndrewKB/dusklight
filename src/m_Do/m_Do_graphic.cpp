@@ -1633,10 +1633,14 @@ void mDoGph_gInf_c::bloom_c::draw2(view_port_class* viewport) {
     }
 
     if (enabled) {
-        GXCreateFrameBuffer(divRects[2].x + divRects[2].w, divRects[1].y + divRects[1].h);
-        // Co-op: the bloom pyramid occupies a viewport-sized private target.
+        const u16 targetWidth = divRects[2].x + divRects[2].w;
+        const u16 targetHeight = divRects[1].y + divRects[1].h;
+        dusk::coop::render_effects::recordBloomTarget(targetWidth, targetHeight);
+        GXCreateFrameBuffer(targetWidth, targetHeight);
+        // Co-op: preserve the native oversized pyramid viewport, but clip writes to its packed
+        // offscreen target rather than the larger source viewport.
         GXSetViewportRender(0.0f, 0.0f, width, height, 0.0f, 1.0f); // use oversized viewport to make the math easier
-        GXSetScissorRender(0, 0, width, height);
+        GXSetScissorRender(0, 0, targetWidth, targetHeight);
 
         GXSetNumTevStages(3);
         GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
@@ -1853,6 +1857,8 @@ void mDoGph_gInf_c::bloom_c::draw(view_port_class* viewport) {
         if (enabled) {
 #ifdef TARGET_PC
             // Co-op: Classic bloom filters only the active native viewport offscreen.
+            dusk::coop::render_effects::recordBloomTarget(static_cast<int>(width),
+                                                           static_cast<int>(height));
             GXCreateFrameBuffer(width, height);
             GXSetViewportRender(0.0f, 0.0f, width, height, 0.0f, 1.0f);
             GXSetScissorRender(0, 0, width, height);
@@ -2069,9 +2075,14 @@ static void retry_captue_frame(view_class* param_0, view_port_class* param_1, in
 #else
         GXSetTexCopyDst(var_r24, var_r23, (GXTexFmt)mDoGph_gInf_c::getFrameBufferTimg()->format, GX_TRUE);
 #endif
+#ifdef TARGET_PC
+        // Co-op: water and projection-particle resources permanently reference the canonical
+        // framebuffer address. Aurora updates that address's resolved texture in place for each
+        // viewport; retire only this direct sampler object before rebuilding it below.
+        mDoGph_gInf_c::getFrameBufferTexObj()->reset();
+#endif
         GXCopyTex(tex, GX_FALSE);
 #ifdef TARGET_PC
-        mDoGph_gInf_c::getFrameBufferTexObj()->reset();
         f32 source_width;
         f32 source_height;
         get_bloom_source_size(param_1, &source_width, &source_height);
@@ -2777,7 +2788,11 @@ int mDoGph_Painter() {
                 fapGm_HIO_c::startCpuTimer();
                 #endif
 
-                if (run_fullscreen_effects) {
+                if (run_fullscreen_effects ||
+                    dusk::coop::render_effects::shouldRefreshScreenParticleFramebuffer())
+                {
+                    // Co-op: screen-distortion particles need the native post-particle capture
+                    // from this viewport even while unrelated fullscreen filters remain gated.
                     retry_captue_frame(&camera_p->view, view_port,
                                        dComIfGp_getCameraZoomForcus(camera_id));
                 }
@@ -2820,6 +2835,10 @@ int mDoGph_Painter() {
 
                 if (run_indirect_screen) {
                     GX_DEBUG_GROUP(dComIfGd_drawIndScreen);
+                } else {
+                    // Co-op: replay classified world-space packets without enabling the mixed
+                    // fullscreen indirect list for ordinary split-screen.
+                    dusk::coop::render_effects::drawViewportSafeIndirectWorldEffects();
                 }
 
                 if (run_indirect_screen &&

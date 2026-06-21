@@ -11,6 +11,10 @@
 #include "d/d_meter2_info.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/coop/player_sense.h"
+#endif
+
 static DUSK_CONSTEXPR int l_bmdData[2][2] = {
     {13, 1},
     {3, 2},
@@ -823,7 +827,16 @@ void daNpc_Hoz_c::evtOrder() {
         } else {
             fopAcM_orderOtherEventId(this, mEvtId, 0xFF, 0xFFFF, 40, 1);
         }
-    } else if ((!mTwilight || daPy_py_c::checkNowWolfEyeUp()) && ((attention_info.flags & fopAc_AttnFlag_SPEAK_e) || (attention_info.flags & fopAc_AttnFlag_TALK_e))) {
+    } else if ((!mTwilight ||
+#if TARGET_PC
+                // Co-op: shared event ordering opens when any eligible scanner can reveal Hena.
+                dusk::coop::player_sense::anyRevealReady()
+#else
+                daPy_py_c::checkNowWolfEyeUp()
+#endif
+                ) &&
+               ((attention_info.flags & fopAc_AttnFlag_SPEAK_e) ||
+                (attention_info.flags & fopAc_AttnFlag_TALK_e))) {
         eventInfo.onCondition(dEvtCnd_CANTALK_e);
         if (chkXYItems()) {
             eventInfo.onCondition(dEvtCnd_CANTALKITEM_e);

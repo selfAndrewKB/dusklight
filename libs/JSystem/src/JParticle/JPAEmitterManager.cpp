@@ -125,11 +125,27 @@ void JPAEmitterManager::draw(JPADrawInfo const* drawInfo, u8 group_id) {
         if (!dusk::coop::render_effects::shouldDrawEmitter(emtr)) {
             continue;
         }
+        const dusk::coop::render_effects::EmitterPresentationState presentation =
+            dusk::coop::render_effects::applyEmitterPresentation(emtr, pWd->mPosCamMtx);
+        if (presentation.restoreCameraMatrix) {
+            // Co-op: camera-relative particles also consume JParticle's derived Y billboard basis.
+            calcYBBCam();
+        }
+        // Co-op: record the effective camera matrix after viewport presentation is installed.
+        dusk::coop::render_effects::recordProjectionParticle(
+            emtr, group_id, pWd->mPosCamMtx, pWd->mPrjMtx);
 #endif
         if (!emtr->checkStatus(0x04)) {
             pWd->mpResMgr = pResMgrAry[emtr->mResMgrID];
             emtr->pRes->draw(pWd, emtr);
         }
+#if TARGET_PC
+        dusk::coop::render_effects::restoreEmitterPresentation(
+            emtr, presentation, pWd->mPosCamMtx);
+        if (presentation.restoreCameraMatrix) {
+            calcYBBCam();
+        }
+#endif
     }
 }
 

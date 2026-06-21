@@ -3,6 +3,12 @@
 #include "d/d_k_wmark.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/coop/player_sense.h"
+#include "dusk/coop/render_effects.h"
+#include "dusk/coop/render_visibility.h"
+#endif
+
 void daNpc_Kn_c::tgHitCallBack(fopAc_ac_c* i_tgActor, dCcD_GObjInf* i_tgObjInf,
                                fopAc_ac_c* i_atActor, dCcD_GObjInf* i_atObjInf) {
     daNpc_Kn_c* kn_actor = (daNpc_Kn_c*)i_tgActor;
@@ -158,9 +164,21 @@ int daNpc_Kn_c::draw(BOOL param_0, BOOL i_setEffMtx, f32 param_2, GXColorS10* i_
     J3DModelData* mdlData_p = model_p->getModelData();
     field_0xe3a = 1;
 
+#if TARGET_PC
+    const bool viewportSenseVisibility =
+        mTwilight && dusk::coop::render_visibility::shouldUseViewportVisibility();
+#else
+    const bool viewportSenseVisibility = false;
+#endif
     if (drawDbgInfo() || checkHide() || mNoDraw) {
         return 1;
     }
+#if TARGET_PC
+    if (viewportSenseVisibility) {
+        // Co-op: retain one submission and replay owner Sense plus native camera culling.
+        dusk::coop::render_visibility::registerSenseOnlyModel(model_p, this);
+    }
+#endif
 
     tevStr.TevColor.r = 0;
     tevStr.TevColor.g = 0;
@@ -739,6 +757,10 @@ bool daNpc_Kn_c::checkCullDraw() {
 
 void daNpc_Kn_c::twilight() {
     if (mTwilight) {
+#if TARGET_PC
+        // Co-op: the actor remains shared while attention eligibility is owner-local.
+        dusk::coop::player_sense::registerRevealActor(this);
+#endif
         attention_info.flags |= fopAc_AttnFlag_UNK_0x400000;
         mNoDraw = FALSE;
         attention_info.flags |= fopAc_AttnFlag_UNK_0x800000;
@@ -1166,9 +1188,13 @@ void daNpc_Kn_c::setHitodamaPrtcl() {
 
         emitter = dComIfGp_particle_getEmitter(mHitodamaPrtclKey[i]);
         if (emitter != NULL) {
-            u8 alpha = (dComIfGs_wolfeye_effect_check() == FALSE) ? 0xFF : 0;
             emitter->setGlobalTranslation(pos.x, pos.y, pos.z);
-            emitter->setGlobalAlpha(alpha);
+#if TARGET_PC
+            // Co-op: spirit wisps draw where the viewport owner has not revealed the body.
+            dusk::coop::render_effects::registerSenseInactiveEmitter(emitter);
+#else
+            emitter->setGlobalAlpha((dComIfGs_wolfeye_effect_check() == FALSE) ? 0xFF : 0);
+#endif
         }
     }
 }

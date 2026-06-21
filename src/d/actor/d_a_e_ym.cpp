@@ -23,6 +23,8 @@
 #include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/player_attention.h"
 #include "dusk/coop/player_camera_status.h"
+#include "dusk/coop/player_sense.h"
+#include "dusk/coop/render_visibility.h"
 #include "dusk/coop/selected_target_state.h"
 #endif
 
@@ -333,6 +335,12 @@ int daE_YM_c::draw() {
     }
 
     J3DModel* model_p = mpMorf->getModel();
+#if TARGET_PC
+    if (mAction != ACT_DOWN) {
+        // Co-op: living Shadow Insects reveal and cull independently; downed insects stay native.
+        dusk::coop::render_visibility::registerSenseOnlyModel(model_p, this);
+    }
+#endif
     g_env_light.settingTevStruct(6, &current.pos, &tevStr);
     g_env_light.setLightTevColorType_MAJI(model_p, &tevStr);
 
@@ -3621,6 +3629,13 @@ int daE_YM_c::execute() {
     if (field_0x71d) {
         return 1;
     }
+
+#if TARGET_PC
+    if (mAction != daE_YM_c::ACT_DOWN) {
+        // Co-op: hidden insects need owner-local Sense; downed insects keep native visibility.
+        dusk::coop::player_sense::registerRevealActor(this);
+    }
+#endif
 
     if (field_0x6f0 != 0) {
         field_0x6f0--;

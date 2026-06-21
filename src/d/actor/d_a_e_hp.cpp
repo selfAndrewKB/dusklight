@@ -13,6 +13,8 @@
 #include "dusk/coop/damage_owner.h"
 #include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/item_get_owner.h"
+#include "dusk/coop/player_sense.h"
+#include "dusk/coop/render_visibility.h"
 #include "dusk/coop/retained_interaction_owner.h"
 #include "dusk/coop/selected_target_state.h"
 #endif
@@ -278,6 +280,12 @@ int daE_HP_c::draw() {
     }
 
     J3DModel* model = mpMorfSO->getModel();
+#if TARGET_PC
+    if (mAction < 5) {
+        // Co-op: living Poe bodies reveal and cull per viewport; down/dead bodies stay native.
+        dusk::coop::render_visibility::registerSenseOnlyModel(model, this);
+    }
+#endif
     g_env_light.settingTevStruct(0, &current.pos, &tevStr);
     g_env_light.setLightTevColorType_MAJI(model, &tevStr);
 
@@ -1342,6 +1350,12 @@ int daE_HP_c::execute() {
 }
 
 static int daE_HP_Execute(daE_HP_c* i_this) {
+#if TARGET_PC
+    if (i_this->mAction < 5) {
+        // Co-op: living Poe lock-on follows Sense; down/dead interactions keep native wolf rules.
+        dusk::coop::player_sense::registerRevealActor(i_this);
+    }
+#endif
     return i_this->execute();
 }
 

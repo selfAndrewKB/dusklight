@@ -18,6 +18,8 @@
 #include "dusk/coop/enemy_targeting.h"
 #include "dusk/coop/item_get_owner.h"
 #include "dusk/coop/player_attention.h"
+#include "dusk/coop/player_sense.h"
+#include "dusk/coop/render_visibility.h"
 #include "dusk/coop/retained_interaction_owner.h"
 #include "dusk/coop/selected_target_state.h"
 #include "dusk/coop/wolf_catch_owner.h"
@@ -307,6 +309,12 @@ static int daE_PO_Draw(e_po_class* i_this) {
                                   (fopAc_ac_c*)daPy_py_c::getMidnaActor()))))
     {
         J3DModel* model_p = i_this->mpMorf->getModel();
+#if TARGET_PC
+        if (a_this->health != 0 && i_this->mActionID != ACT_DEAD) {
+            // Co-op: living Poe bodies reveal and cull per viewport; exposed souls stay native.
+            dusk::coop::render_visibility::registerSenseOnlyModel(model_p, a_this);
+        }
+#endif
         g_env_light.setLightTevColorType_MAJI(model_p, &a_this->tevStr);
         J3DModelData* model_data_p = model_p->getModelData();
         u8 temp_u8 = i_this->field_0x5F4;
@@ -2936,6 +2944,13 @@ static int daE_PO_Execute(e_po_class* i_this) {
 
     fopAc_ac_c* a_this = (fopAc_ac_c*)&i_this->enemy;
     fopEn_enemy_c* e_this = (fopEn_enemy_c*)a_this;
+
+#if TARGET_PC
+    if (i_this->mActionID != ACT_DEAD) {
+        // Co-op: living Poes require owner-local Sense; the exposed soul keeps native wolf rules.
+        dusk::coop::player_sense::registerRevealActor(a_this);
+    }
+#endif
 
     cXyz local_4c;
     cXyz cStack_58;

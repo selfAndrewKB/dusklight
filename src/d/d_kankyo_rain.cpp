@@ -14,6 +14,7 @@
 #include <cstring>
 #if TARGET_PC
 #include "dusk/frame_interpolation.h"
+#include "dusk/coop/camera.h"
 #include "dusk/coop/render_effects.h"
 #endif
 
@@ -1590,11 +1591,108 @@ void dKyr_star_move() {
     }
 }
 
-void cloud_shadow_move() {
+struct CloudSimulationBuffer {
+    int mCount;
+    CLOUD_EFF* mCloudEff;
+};
+
+struct CloudRandomState {
+    u32 value;
+};
+
+static f32 cloudRandomF(CloudRandomState* random, f32 range) {
+    if (random == NULL) {
+        return cM_rndF(range);
+    }
+
+    random->value = random->value * 1664525u + 1013904223u;
+    return static_cast<f32>((random->value >> 8) & 0x00ffffff) *
+           (range / 16777216.0f);
+}
+
+static f32 cloudRandomFX(CloudRandomState* random, f32 range) {
+    if (random == NULL) {
+        return cM_rndFX(range);
+    }
+    return cloudRandomF(random, range * 2.0f) - range;
+}
+
+#if TARGET_PC
+// Co-op: camera-relative weather needs the native cloud lifecycle once per rendered player.
+struct CloudViewportSimulation {
+    bool valid;
+    const dKankyo_cloud_Packet* sourcePacket;
+    int count;
+    CloudRandomState random;
+    CLOUD_EFF effects[50];
+};
+
+static CloudViewportSimulation
+    s_cloudViewportSimulation[dusk::coop::kPlayerSlotCount] = {};
+
+void dKyr_resetCloudViewportState() {
+    for (int i = 0; i < dusk::coop::kPlayerSlotCount; i++) {
+        s_cloudViewportSimulation[i].valid = false;
+        s_cloudViewportSimulation[i].sourcePacket = NULL;
+        s_cloudViewportSimulation[i].count = 0;
+    }
+}
+
+static void initializeCloudViewportSimulation(
+    CloudViewportSimulation* state, const dKankyo_cloud_Packet* source,
+    camera_class* sourceCamera, camera_class* slotCamera, int slotIndex)
+{
+    state->valid = true;
+    state->sourcePacket = source;
+    state->count = source->mCount;
+    state->random.value = 0x6d2b79f5u ^ (0x9e3779b9u * slotIndex) ^
+                          g_Counter.mCounter0;
+
+    cXyz sourceCenter;
+    cXyz slotCenter;
+    dKy_set_eyevect_calc2(sourceCamera, &sourceCenter, 1200.0f, 1200.0f);
+    dKy_set_eyevect_calc2(slotCamera, &slotCenter, 1200.0f, 1200.0f);
+    cXyz offset = slotCenter - sourceCenter;
+    if (g_env_light.mMoyaMode == 8) {
+        offset.y = 0.0f;
+    }
+
+    for (int i = 0; i < 50; i++) {
+        state->effects[i] = source->mCloudEff[i];
+        state->effects[i].mBasePos += offset;
+    }
+}
+
+static void getCloudViewportDrawState(dKankyo_cloud_Packet* source,
+                                      CLOUD_EFF** effects, int* count) {
+    *effects = source->mCloudEff;
+    *count = source->mCount;
+    if (!dusk::coop::render_effects::hasViewport()) {
+        return;
+    }
+
+    const int slotIndex =
+        static_cast<int>(dusk::coop::render_effects::currentViewportSlot());
+    if (slotIndex <= 0 || slotIndex >= dusk::coop::kPlayerSlotCount) {
+        return;
+    }
+
+    CloudViewportSimulation& state = s_cloudViewportSimulation[slotIndex];
+    if (state.valid && state.sourcePacket == source) {
+        *effects = state.effects;
+        *count = state.count;
+    }
+}
+#endif
+
+static void cloud_shadow_move_buffer(CloudSimulationBuffer* packet,
+                                     camera_class* camera, fopAc_ac_c* player,
+                                     CloudRandomState* random,
+                                     const void* diagnosticsPacket) {
     dScnKy_env_light_c* envlight = dKy_getEnvlight();
-    dKankyo_cloud_Packet* packet = g_env_light.mpCloudPacket;
-    camera_class* camera = (camera_class*)dComIfGp_getCamera(0);
-    fopAc_ac_c* player = dComIfGp_getPlayer(0);
+    if (packet == NULL || camera == NULL || player == NULL) {
+        return;
+    }
 
     Mtx camMtx;
     cXyz wind_vecpow = dKyw_get_wind_vecpow();
@@ -1613,20 +1711,26 @@ void cloud_shadow_move() {
     f32 sp3C = 1.0f;
     f32 wind_pow = dKyw_get_wind_pow();
 
-    if (dComIfGd_getView() != NULL) {
-        MTXInverse(dComIfGd_getView()->viewMtxNoTrans, camMtx);
-    } else {
+    view_class* simulationView = &camera->view;
+#if !TARGET_PC
+    simulationView = dComIfGd_getView();
+    if (simulationView == NULL) {
         return;
     }
+#endif
+    MTXInverse(simulationView->viewMtxNoTrans, camMtx);
 
     if (packet->mCount <= g_env_light.mMoyaCount) {
         packet->mCount = (s16)g_env_light.mMoyaCount;
     }
 
     if (packet->mCount != 0) {
-        if (g_env_light.mMoyaMode == 8 || g_env_light.mMoyaMode == 10) {
+        if (random == NULL &&
+            (g_env_light.mMoyaMode == 8 || g_env_light.mMoyaMode == 10))
+        {
             if ((g_Counter.mCounter0 & 128) == 0) {
-                cLib_addCalc(&g_env_light.field_0xebc, 1.0f, 0.1f, 0.01f + cM_rndFX(0.005f), 0.000001f);
+                cLib_addCalc(&g_env_light.field_0xebc, 1.0f, 0.1f,
+                             0.01f + cM_rndFX(0.005f), 0.000001f);
             } else {
                 cLib_addCalc(&g_env_light.field_0xebc, 0.3f, 0.1f, 0.01f, 0.000001f);
             }
@@ -1643,18 +1747,23 @@ void cloud_shadow_move() {
         }
 
         f32 sp28;
-        if (dComIfGd_getView() != NULL) {
-            sp28 = dComIfGd_getView()->fovy / 40.0f;
-            if (sp28 >= 1.0f) {
-                sp28 = 1.0f;
-            }
-        } else {
+        sp28 = simulationView->fovy / 40.0f;
+        if (sp28 >= 1.0f) {
             sp28 = 1.0f;
         }
 
         sp40 = 1200.0f;
         f32 rnd_pos = 1400.0f;
         dKy_set_eyevect_calc2(camera, &center, sp40, sp40);
+#if TARGET_PC
+        if (diagnosticsPacket != NULL) {
+            // Co-op: expose the canonical simulation beside the slot-local packet replays.
+            dusk::coop::render_effects::updateCloudHazeSimulation(
+                g_env_light.mMoyaMode, packet->mCount, diagnosticsPacket, camera,
+                player, 0, camera->view.lookat.eye.x, camera->view.lookat.eye.y,
+                camera->view.lookat.eye.z, center.x, center.y, center.z);
+        }
+#endif
 
         for (int i = 0; i < packet->mCount; i++) {
             switch (packet->mCloudEff[i].mStatus) {
@@ -1666,13 +1775,13 @@ void cloud_shadow_move() {
                 }
                 packet->mCloudEff[i].mBasePos.z = center.z;
 
-                packet->mCloudEff[i].mPosition.x = cM_rndFX(rnd_pos);
-                packet->mCloudEff[i].mPosition.y = cM_rndFX(rnd_pos);
-                packet->mCloudEff[i].mPosition.z = cM_rndFX(rnd_pos);
+                packet->mCloudEff[i].mPosition.x = cloudRandomFX(random, rnd_pos);
+                packet->mCloudEff[i].mPosition.y = cloudRandomFX(random, rnd_pos);
+                packet->mCloudEff[i].mPosition.z = cloudRandomFX(random, rnd_pos);
 
-                packet->mCloudEff[i].field_0x28 = 0.5f + cM_rndF(0.5f);
+                packet->mCloudEff[i].field_0x28 = 0.5f + cloudRandomF(random, 0.5f);
                 packet->mCloudEff[i].mAlpha = 0.0f;
-                packet->mCloudEff[i].field_0x2c = cM_rndF(65535.0f);
+                packet->mCloudEff[i].field_0x2c = cloudRandomF(random, 65535.0f);
                 packet->mCloudEff[i].mPntWindSpeed.x = 0.0f;
                 packet->mCloudEff[i].mPntWindSpeed.y = 0.0f;
                 packet->mCloudEff[i].mPntWindSpeed.z = 0.0f;
@@ -1725,16 +1834,16 @@ void cloud_shadow_move() {
                     packet->mCloudEff[i].mBasePos.z = center.z;
 
                     if (pos.abs(center) > rnd_pos + (0.1f * rnd_pos)) {
-                        packet->mCloudEff[i].mPosition.x = cM_rndFX(rnd_pos);
-                        packet->mCloudEff[i].mPosition.y = cM_rndFX(rnd_pos);
-                        packet->mCloudEff[i].mPosition.z = cM_rndFX(rnd_pos);
+                        packet->mCloudEff[i].mPosition.x = cloudRandomFX(random, rnd_pos);
+                        packet->mCloudEff[i].mPosition.y = cloudRandomFX(random, rnd_pos);
+                        packet->mCloudEff[i].mPosition.z = cloudRandomFX(random, rnd_pos);
                     } else {
                         cLib_addCalc(&packet->mCloudEff[i].mAlpha, 0.0f, 0.5f, 0.1f, 0.01f);
                         if (packet->mCloudEff[i].mAlpha < 0.01f) {
                             get_vectle_calc(&pos, &center, &sp64);
-                            sp64.x += cM_rndF(0.5f);
-                            sp64.y += cM_rndF(0.5f);
-                            sp64.z += cM_rndF(0.5f);
+                            sp64.x += cloudRandomF(random, 0.5f);
+                            sp64.y += cloudRandomF(random, 0.5f);
+                            sp64.z += cloudRandomF(random, 0.5f);
 
                             packet->mCloudEff[i].mPosition.x = sp64.x * rnd_pos;
                             packet->mCloudEff[i].mPosition.y = sp64.y * rnd_pos;
@@ -1848,6 +1957,57 @@ void cloud_shadow_move() {
             cLib_addCalc(&packet->mCloudEff[i].mAlpha, alpha_max * alpha_target, 0.1f, 0.1f, 0.001f);
         }
     }
+}
+
+void cloud_shadow_move() {
+    dKankyo_cloud_Packet* packet = g_env_light.mpCloudPacket;
+    camera_class* primaryCamera = (camera_class*)dComIfGp_getCamera(0);
+    fopAc_ac_c* primaryPlayer = dComIfGp_getPlayer(0);
+    if (packet == NULL || primaryCamera == NULL || primaryPlayer == NULL) {
+        return;
+    }
+
+    CloudSimulationBuffer primary = {packet->mCount, packet->mCloudEff};
+    cloud_shadow_move_buffer(&primary, primaryCamera, primaryPlayer, NULL, packet);
+    packet->mCount = primary.mCount;
+
+#if TARGET_PC
+    // Co-op: camera-relative mist is native per-camera state, not one P1 packet translated at draw.
+    if (g_env_light.mMoyaMode >= 50) {
+        dKyr_resetCloudViewportState();
+        return;
+    }
+
+    for (int i = 1; i < dusk::coop::kPlayerSlotCount; i++) {
+        CloudViewportSimulation& state = s_cloudViewportSimulation[i];
+        fopAc_ac_c* player = dusk::coop::getPlayer(
+            static_cast<dusk::coop::PlayerSlot>(i));
+        // Co-op: do not seed camera-relative weather from a half-initialized render camera.
+        if (player == NULL || !dusk::coop::camera::isExtensionIndex(i) ||
+            (i == 1 && !dusk::coop::camera::isSecondaryCameraReady()))
+        {
+            state.valid = false;
+            state.sourcePacket = NULL;
+            continue;
+        }
+
+        camera_class* camera = (camera_class*)dComIfGp_getCamera(
+            dusk::coop::render_effects::cameraIdForSlot(
+                static_cast<dusk::coop::PlayerSlot>(i)));
+        if (camera == NULL) {
+            continue;
+        }
+
+        if (!state.valid || state.sourcePacket != packet) {
+            initializeCloudViewportSimulation(&state, packet, primaryCamera, camera, i);
+            continue;
+        }
+
+        CloudSimulationBuffer slotBuffer = {state.count, state.effects};
+        cloud_shadow_move_buffer(&slotBuffer, camera, player, &state.random, NULL);
+        state.count = slotBuffer.mCount;
+    }
+#endif
 }
 
 void vrkumo_move() {
@@ -4517,9 +4677,34 @@ void drawCloudShadow(Mtx drawMtx, u8** tex) {
     ZoneScoped;
     dScnKy_env_light_c* envlight = dKy_getEnvlight();
     dKankyo_cloud_Packet* cloud_packet = g_env_light.mpCloudPacket;
+    CLOUD_EFF* cloud_effects = cloud_packet->mCloudEff;
+    int cloud_count = cloud_packet->mCount;
+#if TARGET_PC
+    // Co-op: each viewport consumes the weather simulation owned by its native camera slot.
+    getCloudViewportDrawState(cloud_packet, &cloud_effects, &cloud_count);
+#endif
     camera_class* camera = (camera_class*)dComIfGp_getCamera(0);
+#if TARGET_PC
+    if (dusk::coop::render_effects::hasViewport()) {
+        camera = (camera_class*)dComIfGp_getCamera(
+            dusk::coop::render_effects::currentViewport().cameraId);
+    }
+#endif
 
     static f32 rot = 0.0f;
+#if TARGET_PC
+    // Co-op: replaying the packet for multiple views must not advance its shared animation twice.
+    static u32 rot_frame = 0xffffffff;
+    static f32 frame_rot = 0.0f;
+    const bool advance_rot = rot_frame != g_Counter.mCounter0;
+    if (advance_rot) {
+        rot_frame = g_Counter.mCounter0;
+        frame_rot = rot;
+    }
+#else
+    const bool advance_rot = true;
+    const f32 frame_rot = rot;
+#endif
 
     Mtx camMtx;
     Mtx rotMtx;
@@ -4538,15 +4723,42 @@ void drawCloudShadow(Mtx drawMtx, u8** tex) {
 
     f32 var_f29 = 1.0f;
 
-    if (cloud_packet->mCount > 0) {
+    if (cloud_count > 0) {
         j3dSys.reinitGX();
-        
-        if (dComIfGd_getView() != NULL) {
-            MTXInverse(dComIfGd_getView()->viewMtxNoTrans, camMtx);
+
+        view_class* active_view = dComIfGd_getView();
+        if (active_view != NULL) {
+            MTXInverse(active_view->viewMtxNoTrans, camMtx);
         } else {
             OS_REPORT("\ndrawCloud ikinasi return!!");
             return;
         }
+
+        dDlst_window_c* projection_window = dComIfGp_getWindow(0);
+        camera_process_class* projection_camera =
+            dComIfGp_getCamera(projection_window->getCameraID());
+#if TARGET_PC
+        cXyz first_cloud;
+        first_cloud.x = cloud_effects[0].mBasePos.x + cloud_effects[0].mPosition.x;
+        first_cloud.y = cloud_effects[0].mBasePos.y + cloud_effects[0].mPosition.y;
+        first_cloud.z = cloud_effects[0].mBasePos.z + cloud_effects[0].mPosition.z;
+        int visible_count = 0;
+        f32 alpha_sum = 0.0f;
+        for (int i = 0; i < cloud_count; i++) {
+            if (cloud_effects[i].mAlpha > 0.01f) {
+                visible_count++;
+                alpha_sum += cloud_effects[i].mAlpha;
+            }
+        }
+        // Co-op: record the packet selected for this viewport's native camera simulation.
+        dusk::coop::render_effects::recordCloudHazeDraw(
+            g_env_light.mMoyaMode, cloud_count, cloud_packet,
+            projection_window->getCameraID(), active_view->lookat.eye.x,
+            active_view->lookat.eye.y, active_view->lookat.eye.z, active_view->fovy,
+            active_view->aspect, projection_camera->view.fovy,
+            projection_camera->view.aspect, first_cloud.x, first_cloud.y,
+            first_cloud.z, visible_count, alpha_sum);
+#endif
 
         GXSetClipMode(GX_CLIP_DISABLE);
 
@@ -4597,13 +4809,15 @@ void drawCloudShadow(Mtx drawMtx, u8** tex) {
             GXSetNumIndStages(0);
             dKr_cullVtx_Set();
 
-            MTXRotRad(rotMtx, 'Z', DEG_TO_RAD(rot));
+            MTXRotRad(rotMtx, 'Z', DEG_TO_RAD(frame_rot));
             MTXConcat(camMtx, rotMtx, camMtx);
             GXLoadPosMtxImm(drawMtx, GX_PNMTX0);
 
-            rot -= 0.45f;
-            if (rot < 0.0f) {
-                rot = 719.0f;
+            if (advance_rot) {
+                rot -= 0.45f;
+                if (rot < 0.0f) {
+                    rot = 719.0f;
+                }
             }
 
             GXSetCurrentMtx(GX_PNMTX0);
@@ -4624,19 +4838,20 @@ void drawCloudShadow(Mtx drawMtx, u8** tex) {
 #endif
 
             ResTIMG* fb_timg = mDoGph_gInf_c::getFrameBufferTimg();
-            dDlst_window_c* window = dComIfGp_getWindow(0);
-            camera_process_class* window_cam = dComIfGp_getCamera(window->getCameraID());
             dKyr_set_btitex_common(&fb_texobj, fb_timg, GX_TEXMAP0);
 
             f32 scale = 0.49f;
-            C_MTXLightPerspective(sp120, window_cam->view.fovy, window_cam->view.aspect, scale, -scale, 0.5f, 0.5f);
+            C_MTXLightPerspective(sp120, projection_camera->view.fovy,
+                                  projection_camera->view.aspect, scale, -scale, 0.5f, 0.5f);
             #if WIDESCREEN_SUPPORT
             mDoGph_gInf_c::setWideZoomLightProjection(sp120);
             #endif
             cMtx_concat(sp120, j3dSys.getViewMtx(), spF0);
 
-            rot += 2.0f;
-            MTXRotRad(rotMtx, 'Z', DEG_TO_RAD(rot));
+            if (advance_rot) {
+                rot += 2.0f;
+            }
+            MTXRotRad(rotMtx, 'Z', DEG_TO_RAD(frame_rot));
             MTXConcat(camMtx, rotMtx, camMtx);
 
             GXLoadPosMtxImm(drawMtx, GX_PNMTX0);
@@ -4679,17 +4894,17 @@ void drawCloudShadow(Mtx drawMtx, u8** tex) {
             var_f29 = g_env_light.field_0xebc;
         }
 
-        for (int i = 0; i < cloud_packet->mCount; i++) {
+        for (int i = 0; i < cloud_count; i++) {
             cXyz pos[4];
-            f32 size = cloud_packet->mCloudEff[i].mSize;
+            f32 size = cloud_effects[i].mSize;
 
-            if (!(cloud_packet->mCloudEff[i].mAlpha <= 0.01f)) {
-                color_reg0.a = 255.0f * (cloud_packet->mCloudEff[i].mAlpha * var_f29);
+            if (!(cloud_effects[i].mAlpha <= 0.01f)) {
+                color_reg0.a = 255.0f * (cloud_effects[i].mAlpha * var_f29);
                 GXSetTevColor(GX_TEVREG0, color_reg0);
 
-                sp5C.x = cloud_packet->mCloudEff[i].mBasePos.x + cloud_packet->mCloudEff[i].mPosition.x;
-                sp5C.y = cloud_packet->mCloudEff[i].mBasePos.y + cloud_packet->mCloudEff[i].mPosition.y;
-                sp5C.z = cloud_packet->mCloudEff[i].mBasePos.z + cloud_packet->mCloudEff[i].mPosition.z;
+                sp5C.x = cloud_effects[i].mBasePos.x + cloud_effects[i].mPosition.x;
+                sp5C.y = cloud_effects[i].mBasePos.y + cloud_effects[i].mPosition.y;
+                sp5C.z = cloud_effects[i].mBasePos.z + cloud_effects[i].mPosition.z;
 
                 sp74.x = -size;
                 sp74.y = size;

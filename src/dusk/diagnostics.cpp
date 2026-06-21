@@ -29,6 +29,7 @@
 #include "dusk/coop/player_slots.h"
 #include "dusk/coop/render_effects.h"
 #include "dusk/coop/render_materials.h"
+#include "dusk/coop/render_visibility.h"
 #include "dusk/coop/selected_target_state.h"
 #include "dusk/coop/wolf_catch_owner.h"
 #include "dusk/coop/world_trigger.h"
@@ -1247,6 +1248,19 @@ json eventKeyForProvider(const char* provider, const json& data) {
                 {"emitter_count", slot.value("emitter_count", 0)},
             });
         }
+        json projectionParticles = json::array();
+        for (const json& particle :
+             data.value("projection_particles", json::array()))
+        {
+            projectionParticles.push_back({
+                {"resource_id", particle.value("resource_id", 0u)},
+                {"group_id", particle.value("group_id", 0)},
+                {"resource_manager_id", particle.value("resource_manager_id", 0)},
+                {"slot", particle.value("slot", 0)},
+                {"camera_id", particle.value("camera_id", 0)},
+            });
+        }
+        const json cloudHaze = data.value("cloud_haze", json::object());
         return {
             {"schema_version", data.value("schema_version", 1)},
             {"viewport_slot", data.value("viewport_slot", 0)},
@@ -1258,6 +1272,18 @@ json eventKeyForProvider(const char* provider, const json& data) {
             {"view_dependent_models", data.value("view_dependent_models", json::array())},
             {"projected_material_models",
              data.value("projected_material_models", json::array())},
+            {"projection_particles", projectionParticles},
+            {"cloud_haze",
+             {
+                 {"simulation_recorded",
+                  cloudHaze.value("simulation_recorded", false)},
+                 {"draw_recorded", cloudHaze.value("draw_recorded", false)},
+                 {"mode", cloudHaze.value("mode", 0)},
+                 {"source_camera_id", cloudHaze.value("source_camera_id", 0)},
+                 {"draw_slot", cloudHaze.value("draw_slot", 0)},
+                 {"draw_camera_id", cloudHaze.value("draw_camera_id", 0)},
+                 {"draw_calls", cloudHaze.value("draw_calls", json::array())},
+             }},
         };
     }
     if (name == "camera.state") {
@@ -2147,6 +2173,8 @@ json collectRenderEffects() {
     const coop::render_effects::DebugState effects = coop::render_effects::getDebugState();
     const coop::render_materials::DebugState materials =
         coop::render_materials::getDebugState();
+    const coop::render_visibility::DebugState visibility =
+        coop::render_visibility::getDebugState();
 
     json sense = json::array();
     json twilight = json::array();
@@ -2180,6 +2208,69 @@ json collectRenderEffects() {
         });
     }
 
+    json projectionParticles = json::array();
+    for (int i = 0; i < effects.projectionParticleCount; i++) {
+        const coop::render_effects::ProjectionParticleDebugState& particle =
+            effects.projectionParticles[i];
+        projectionParticles.push_back({
+            {"emitter", ptrString(reinterpret_cast<uintptr_t>(particle.emitter))},
+            {"resource_id", particle.resourceId},
+            {"group_id", particle.groupId},
+            {"resource_manager_id", particle.resourceManagerId},
+            {"slot", particle.slot},
+            {"window_index", particle.windowIndex},
+            {"camera_id", particle.cameraId},
+            {"particle_count", particle.particleCount},
+            {"status", particle.status},
+            {"world", {particle.worldX, particle.worldY, particle.worldZ}},
+            {"camera", {particle.cameraX, particle.cameraY, particle.cameraZ}},
+            {"has_first_particle", particle.hasFirstParticle},
+            {"first_particle",
+             {particle.firstParticleX, particle.firstParticleY,
+              particle.firstParticleZ}},
+            {"projection",
+             {
+                 {"scale_x", particle.projectionScaleX},
+                 {"offset_x", particle.projectionOffsetX},
+                 {"scale_y", particle.projectionScaleY},
+                 {"offset_y", particle.projectionOffsetY},
+             }},
+        });
+    }
+
+    const coop::render_effects::CloudHazeDebugState& haze = effects.cloudHaze;
+    json cloudHaze = {
+        {"simulation_recorded", haze.simulationRecorded},
+        {"draw_recorded", haze.drawRecorded},
+        {"mode", haze.mode},
+        {"count", haze.count},
+        {"packet", ptrString(reinterpret_cast<uintptr_t>(haze.packet))},
+        {"source_camera", ptrString(reinterpret_cast<uintptr_t>(haze.sourceCamera))},
+        {"source_player", ptrString(reinterpret_cast<uintptr_t>(haze.sourcePlayer))},
+        {"source_camera_id", haze.sourceCameraId},
+        {"source_eye", {haze.sourceEyeX, haze.sourceEyeY, haze.sourceEyeZ}},
+        {"simulation_center",
+         {haze.simulationCenterX, haze.simulationCenterY, haze.simulationCenterZ}},
+        {"draw_slot", haze.drawSlot},
+        {"draw_window_index", haze.drawWindowIndex},
+        {"draw_camera_id", haze.drawCameraId},
+        {"active_eye", {haze.activeEyeX, haze.activeEyeY, haze.activeEyeZ}},
+        {"active_fovy", haze.activeFovy},
+        {"active_aspect", haze.activeAspect},
+        {"projection_fovy", haze.projectionFovy},
+        {"projection_aspect", haze.projectionAspect},
+        {"first_cloud", {haze.firstCloudX, haze.firstCloudY, haze.firstCloudZ}},
+        {"draw_calls",
+         {haze.drawCalls[0], haze.drawCalls[1], haze.drawCalls[2], haze.drawCalls[3]}},
+        {"draw_counts",
+         {haze.drawCounts[0], haze.drawCounts[1], haze.drawCounts[2], haze.drawCounts[3]}},
+        {"visible_counts",
+         {haze.visibleCounts[0], haze.visibleCounts[1], haze.visibleCounts[2],
+          haze.visibleCounts[3]}},
+        {"alpha_sums",
+         {haze.alphaSums[0], haze.alphaSums[1], haze.alphaSums[2], haze.alphaSums[3]}},
+    };
+
     json viewport = {
         {"available", effects.viewport.viewport != nullptr},
     };
@@ -2199,7 +2290,7 @@ json collectRenderEffects() {
 
     mDoGph_gInf_c::bloom_c* bloom = mDoGph_gInf_c::getBloom();
     return {
-        {"schema_version", 1},
+        {"schema_version", 5},
         {"viewport_active", effects.viewportActive},
         {"viewport_slot", static_cast<int>(effects.viewport.slot)},
         {"window_index", effects.viewport.windowIndex},
@@ -2215,6 +2306,12 @@ json collectRenderEffects() {
              {"indirect_screen", coop::render_effects::shouldRunIndirectScreenPasses()},
              {"fullscreen_2d", coop::render_effects::shouldRunFullscreen2DOverlays()},
              {"fades", coop::render_effects::shouldRunFades()},
+             {"refresh_invisible_framebuffer",
+              coop::render_effects::shouldRefreshInvisibleListFramebuffer()},
+             {"refresh_projection_particle_framebuffer",
+              coop::render_effects::shouldRefreshProjectionParticleFramebuffer()},
+             {"refresh_screen_particle_framebuffer",
+              coop::render_effects::shouldRefreshScreenParticleFramebuffer()},
          }},
         {"environment",
          {
@@ -2230,13 +2327,28 @@ json collectRenderEffects() {
              {"blur_ratio", bloom->getBlureRatio()},
              {"source_width", effects.bloomSourceWidth},
              {"source_height", effects.bloomSourceHeight},
+             {"target_width", effects.bloomTargetWidth},
+             {"target_height", effects.bloomTargetHeight},
              {"composite_x", effects.bloomCompositeX},
              {"composite_y", effects.bloomCompositeY},
              {"composite_width", effects.bloomCompositeWidth},
              {"composite_height", effects.bloomCompositeHeight},
          }},
         {"sense", sense},
+        {"sense_reveal_emitters", effects.senseRevealEmitterCount},
+        {"sense_inactive_emitters", effects.senseInactiveEmitterCount},
+        {"sense_only_models", visibility.senseOnlyModelCount},
+        {"sense_visibility",
+         {
+             {"last_model", ptrString(reinterpret_cast<uintptr_t>(visibility.lastModel))},
+             {"last_actor", ptrString(reinterpret_cast<uintptr_t>(visibility.lastActor))},
+             {"last_slot", visibility.lastSlot},
+             {"sense_ready", visibility.lastSenseReady},
+             {"culled", visibility.lastCulled},
+         }},
         {"twilight", twilight},
+        {"projection_particles", projectionParticles},
+        {"cloud_haze", cloudHaze},
         {"view_dependent_models", viewModels},
         {"projected_material_models", projectedModels},
     };
@@ -3420,7 +3532,7 @@ Provider s_providers[] = {
     {"scene.current", 1, "cheap", 30, true, 20, 4096, collectSceneCurrent},
     {"render.stats", 1, "cheap", 30, true, 20, 4096, collectRenderStats},
     {"render.windows", 2, "cheap", 1, true, 20, 8192, collectRenderWindows},
-    {"render.effects", 1, "cheap", 1, true, 120, 12288, collectRenderEffects},
+    {"render.effects", 5, "cheap", 1, true, 120, 32768, collectRenderEffects},
     {"camera.state", 2, "cheap", 1, true, 20, 8192, collectCameraState},
     {"camera.area_load", 1, "cheap", 1, true, 120, 32768, collectCameraAreaLoad},
     {"player.slots", 2, "cheap", 1, true, 120, 8192, collectPlayerSlots},

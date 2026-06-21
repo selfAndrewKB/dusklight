@@ -262,7 +262,14 @@ static int fopAc_Draw(void* i_this) {
             print_error_check_c error_check(actor, print_error_check_c::sDRAW);
             #endif
 
+#if TARGET_PC
+            // Co-op: retain the submitting actor while J3D entries inherit viewport visibility.
+            dusk::coop::render_visibility::beginActorDraw(actor);
+#endif
             ret = fpcLf_DrawMethod((leafdraw_method_class DUSK_CONST*)actor->sub_method, actor);
+#if TARGET_PC
+            dusk::coop::render_visibility::endActorDraw();
+#endif
 
             #if DEBUG
             }

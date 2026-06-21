@@ -344,6 +344,10 @@ void dKyw_wether_delete() {
     }
 
     if (g_env_light.mCloudInitialized) {
+#if TARGET_PC
+        // Co-op: additional camera packets cannot retain weather state past the native packet.
+        dKyr_resetCloudViewportState();
+#endif
         JKR_DELETE(g_env_light.mpCloudPacket);
         g_env_light.mpCloudPacket = NULL;
     }
@@ -807,6 +811,10 @@ static void wether_move_moya() {
                     g_env_light.mpCloudPacket->mCloudEff[i].mStatus = 0;
                 }
                 g_env_light.mpCloudPacket->mCount = 0;
+#if TARGET_PC
+                // Co-op: initialize per-camera cloud simulations from this new native packet.
+                dKyr_resetCloudViewportState();
+#endif
                 cloud_shadow_move();
                 g_env_light.mCloudInitialized++;
             }
@@ -822,6 +830,10 @@ static void wether_move_moya() {
         if (g_env_light.mMoyaCount == 0 && g_env_light.mpCloudPacket->mCount == 0) {
             g_env_light.mCloudInitialized = 0;
 
+#if TARGET_PC
+            // Co-op: release sidecar ownership with the canonical packet lifecycle.
+            dKyr_resetCloudViewportState();
+#endif
             JKR_DELETE(g_env_light.mpCloudPacket);
             g_env_light.mpCloudPacket = NULL;
         }

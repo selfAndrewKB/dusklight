@@ -808,6 +808,10 @@ JPABaseEmitter* dPa_simpleEcallBack::createEmitter(JPAEmitterManager* param_0) {
 
         if ((uVar1 & 0x100) != 0) {
             mEmitter->setParticleCallBackPtr(dPa_control_c::getFsenthPcallBack());
+#if TARGET_PC
+            // Co-op: native Sense-reveal particles share simulation but resolve fade per viewport.
+            dusk::coop::render_effects::registerSenseRevealEmitter(mEmitter);
+#endif
         }
 
         mEmitter->setEmitterCallBackPtr(this);
@@ -1540,6 +1544,10 @@ JPABaseEmitter* dPa_control_c::set(u8 param_0, u16 param_1, cXyz const* i_pos,
 
     if ((local_ac & 0x100) != 0) {
         this_00->setParticleCallBackPtr(getFsenthPcallBack());
+#if TARGET_PC
+        // Co-op: preserve the resource-authored Sense reveal flag for viewport replay.
+        dusk::coop::render_effects::registerSenseRevealEmitter(this_00);
+#endif
     }
 
     if ((local_ac & 0x800) != 0) {

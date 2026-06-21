@@ -431,9 +431,18 @@ player who owns the accepted catch event, so it routes through `event_owner`.
 - **Per-viewport effects:** `render_effects` retains the active slot/window/camera/view context,
   Base/Sense environment and bloom snapshots, slot-local Sense fade/emitter state, and slot-local
   Twilight camera lights. `render_materials` owns submitted J3D `viewCalc()` and projected-material
-  replay. These are presentation lifecycles, not simulation or frame interpolation. Bloom is
-  viewport-safe; motion blur, depth of field, indirect-screen passes, generic fullscreen 2D, and
-  fades remain global/gated.
+  replay. `player_sense` owns per-slot reveal eligibility, while `render_visibility` and
+  `render_effects` filter shared reveal model packets, real shadows, reveal particles, and inverse
+  spirit wisps during viewport replay. Actor draw submission supplies native per-camera culling,
+  and particle replay only overrides/restores draw alpha without mutating emitter simulation.
+  Shared gameplay actors and emitters stay singular. Camera-retained visual packets are a distinct
+  case: if native update consumes a player/camera and stores positions, alpha, room ratio, or other
+  history, additional slots need fixed per-slot visual simulation sidecars with private RNG. P1
+  remains canonical. Camera-relative replay uses the exact submitted matrix, independent of frame
+  interpolation enablement. Viewport framebuffer consumers refresh the canonical native capture at
+  the same native phase the consumer expects because water and projection-particle resources retain
+  that address; motion blur, depth of field, mixed indirect-screen passes, generic fullscreen 2D,
+  and fades remain global/gated.
 - **Primary/global state:** story protagonist, demo/cutscene, save/restart, HUD, passive message, or
   single-camera state. Keep P1/global until a dedicated milestone proves otherwise.
 

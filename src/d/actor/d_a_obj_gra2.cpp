@@ -27,6 +27,8 @@
 #include "dusk/coop/message_owner.h"
 #include "dusk/coop/player_camera_status.h"
 #include "dusk/coop/player_query.h"
+#include "dusk/coop/player_sense.h"
+#include "dusk/coop/render_visibility.h"
 #include "dusk/coop/retained_interaction_owner.h"
 #include "dusk/coop/selected_target_state.h"
 #include "dusk/coop/world_trigger.h"
@@ -673,6 +675,12 @@ int daObj_GrA_c::Delete() {
 }
 
 int daObj_GrA_c::Execute(Mtx** param_1) {
+#if TARGET_PC
+    if (field_0x844 != 0) {
+        // Co-op: each attention scanner applies owner-local Sense to this shared spirit Goron.
+        dusk::coop::player_sense::registerRevealActor(this);
+    }
+#endif
     int rv = 1;
     *param_1 = &mBgMtx;
     setParam();
@@ -721,7 +729,19 @@ int daObj_GrA_c::Draw() {
         fVar1 = 900.0f;
     }
 
-    if (field_0x844 == 0 || dComIfGs_wolfeye_effect_check()) {
+    const bool viewportSenseVisibility =
+#if TARGET_PC
+        field_0x844 != 0 && dusk::coop::render_visibility::shouldUseViewportVisibility();
+#else
+        false;
+#endif
+    if (field_0x844 == 0 || viewportSenseVisibility || dComIfGs_wolfeye_effect_check()) {
+#if TARGET_PC
+        if (viewportSenseVisibility) {
+            // Co-op: submit once, then apply owner Sense and native camera culling per viewport.
+            dusk::coop::render_visibility::registerSenseOnlyModel(mpModelMorf->getModel(), this);
+        }
+#endif
         draw(fVar1);
     }
 

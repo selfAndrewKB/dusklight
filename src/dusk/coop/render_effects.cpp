@@ -1,19 +1,26 @@
 #include "dusk/coop/render_effects.h"
 
 #include "JSystem/JParticle/JPAEmitter.h"
+#include "JSystem/JParticle/JPAParticle.h"
+#include "SSystem/SComponent/c_counter.h"
 #include "SSystem/SComponent/c_lib.h"
 #include "d/actor/d_a_alink.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_kankyo.h"
+#include "d/d_kankyo_wether.h"
 #include "dusk/coop/camera.h"
 #include "dusk/coop/event_presentation.h"
+#include "dusk/coop/player_sense.h"
+#include "dusk/coop/render_visibility.h"
+#include "f_op/f_op_camera_mng.h"
 #include "m_Do/m_Do_graphic.h"
 
 namespace dusk::coop::render_effects {
 namespace {
 
 constexpr int kViewportStackCapacity = 4;
-constexpr int kEmitterOwnerCapacity = 32;
+constexpr int kEmitterOwnerCapacity = 256;
+constexpr int kCameraRelativeEmitterCapacity = 16;
 constexpr int kTwilightLightCount = 8;
 ViewportContext s_viewportStack[kViewportStackCapacity] = {};
 int s_viewportDepth = 0;
@@ -26,9 +33,27 @@ struct SenseState {
     JPABaseEmitter* emitters[3] = {};
 };
 
+enum class EmitterVisibility : unsigned char {
+    OwnerOnly,
+    SenseReveal,
+    SenseInactive,
+};
+
 struct EmitterOwner {
     const JPABaseEmitter* emitter = nullptr;
     PlayerSlot slot = PlayerSlot::Invalid;
+    EmitterVisibility visibility = EmitterVisibility::OwnerOnly;
+};
+
+struct CameraRelativeEmitter {
+    const JPABaseEmitter* emitter = nullptr;
+    int simulationCameraId = 0;
+    void* context = nullptr;
+    EmitterViewportPrepareCallback prepare = nullptr;
+    EmitterViewportRestoreCallback restore = nullptr;
+    unsigned int frame = 0;
+    bool hasSimulationCameraMatrix = false;
+    Mtx simulationCameraMatrix = {};
 };
 
 struct BloomSnapshot {
@@ -69,16 +94,38 @@ struct TwilightSnapshot {
 
 SenseState s_senseStates[kPlayerSlotCount] = {};
 EmitterOwner s_emitterOwners[kEmitterOwnerCapacity] = {};
+CameraRelativeEmitter
+    s_cameraRelativeEmitters[kCameraRelativeEmitterCapacity] = {};
 EnvironmentSnapshot s_environment[2] = {};
 TwilightSnapshot s_twilight[kPlayerSlotCount] = {};
 ViewportContext s_lastViewport = {};
 int s_bloomMode = 0;
 int s_bloomSourceWidth = 0;
 int s_bloomSourceHeight = 0;
+int s_bloomTargetWidth = 0;
+int s_bloomTargetHeight = 0;
 float s_bloomCompositeX = 0.0f;
 float s_bloomCompositeY = 0.0f;
 float s_bloomCompositeWidth = 0.0f;
 float s_bloomCompositeHeight = 0.0f;
+unsigned int s_debugFrame = 0xffffffffu;
+int s_projectionParticleCount = 0;
+ProjectionParticleDebugState
+    s_projectionParticles[kProjectionParticleDebugCapacity] = {};
+CloudHazeDebugState s_cloudHaze = {};
+
+void beginDebugFrame() {
+    if (s_debugFrame == g_Counter.mCounter0) {
+        return;
+    }
+
+    s_debugFrame = g_Counter.mCounter0;
+    s_projectionParticleCount = 0;
+    for (int i = 0; i < kProjectionParticleDebugCapacity; i++) {
+        s_projectionParticles[i] = {};
+    }
+    s_cloudHaze = {};
+}
 
 PlayerSlot slotForCamera(int cameraId) {
     for (int i = 0; i < kPlayerSlotCount; i++) {
@@ -105,7 +152,9 @@ SenseState& senseState(PlayerSlot slot) {
 
 PlayerSlot emitterOwner(const JPABaseEmitter* emitter) {
     for (int i = 0; i < kEmitterOwnerCapacity; i++) {
-        if (s_emitterOwners[i].emitter == emitter) {
+        if (s_emitterOwners[i].emitter == emitter &&
+            s_emitterOwners[i].visibility == EmitterVisibility::OwnerOnly)
+        {
             return s_emitterOwners[i].slot;
         }
     }
@@ -206,16 +255,29 @@ void reset() {
     for (int i = 0; i < kEmitterOwnerCapacity; i++) {
         s_emitterOwners[i] = {};
     }
+    for (int i = 0; i < kCameraRelativeEmitterCapacity; i++) {
+        s_cameraRelativeEmitters[i] = {};
+    }
+    player_sense::reset();
+    render_visibility::reset();
     s_environment[0] = {};
     s_environment[1] = {};
     s_lastViewport = {};
     s_bloomMode = 0;
     s_bloomSourceWidth = 0;
     s_bloomSourceHeight = 0;
+    s_bloomTargetWidth = 0;
+    s_bloomTargetHeight = 0;
     s_bloomCompositeX = 0.0f;
     s_bloomCompositeY = 0.0f;
     s_bloomCompositeWidth = 0.0f;
     s_bloomCompositeHeight = 0.0f;
+    s_debugFrame = 0xffffffffu;
+    s_projectionParticleCount = 0;
+    for (int i = 0; i < kProjectionParticleDebugCapacity; i++) {
+        s_projectionParticles[i] = {};
+    }
+    s_cloudHaze = {};
 }
 
 void registerEmitterOwner(JPABaseEmitter* emitter, PlayerSlot slot) {
@@ -225,9 +287,68 @@ void registerEmitterOwner(JPABaseEmitter* emitter, PlayerSlot slot) {
 
     for (int i = 0; i < kEmitterOwnerCapacity; i++) {
         if (s_emitterOwners[i].emitter == emitter || s_emitterOwners[i].emitter == nullptr) {
-            s_emitterOwners[i] = {emitter, slot};
+            s_emitterOwners[i] = {emitter, slot, EmitterVisibility::OwnerOnly};
             return;
         }
+    }
+}
+
+void registerSenseRevealEmitter(JPABaseEmitter* emitter) {
+    if (emitter == nullptr) {
+        return;
+    }
+
+    for (int i = 0; i < kEmitterOwnerCapacity; i++) {
+        if (s_emitterOwners[i].emitter == emitter || s_emitterOwners[i].emitter == nullptr) {
+            s_emitterOwners[i] = {
+                emitter, PlayerSlot::Invalid, EmitterVisibility::SenseReveal,
+            };
+            return;
+        }
+    }
+}
+
+void registerSenseInactiveEmitter(JPABaseEmitter* emitter) {
+    if (emitter == nullptr) {
+        return;
+    }
+
+    for (int i = 0; i < kEmitterOwnerCapacity; i++) {
+        if (s_emitterOwners[i].emitter == emitter || s_emitterOwners[i].emitter == nullptr) {
+            s_emitterOwners[i] = {
+                emitter, PlayerSlot::Invalid, EmitterVisibility::SenseInactive,
+            };
+            return;
+        }
+    }
+}
+
+void registerCameraRelativeEmitter(JPABaseEmitter* emitter, int simulationCameraId,
+                                   void* context,
+                                   EmitterViewportPrepareCallback prepare,
+                                   EmitterViewportRestoreCallback restore) {
+    if (emitter == nullptr) {
+        return;
+    }
+
+    CameraRelativeEmitter* available = nullptr;
+    for (int i = 0; i < kCameraRelativeEmitterCapacity; i++) {
+        CameraRelativeEmitter& state = s_cameraRelativeEmitters[i];
+        if (state.emitter == emitter) {
+            available = &state;
+            break;
+        }
+        if (available == nullptr &&
+            (state.emitter == nullptr || state.frame != g_Counter.mCounter0))
+        {
+            available = &state;
+        }
+    }
+
+    if (available != nullptr) {
+        *available = {
+            emitter, simulationCameraId, context, prepare, restore, g_Counter.mCounter0,
+        };
     }
 }
 
@@ -235,14 +356,101 @@ void unregisterEmitter(const JPABaseEmitter* emitter) {
     for (int i = 0; i < kEmitterOwnerCapacity; i++) {
         if (s_emitterOwners[i].emitter == emitter) {
             s_emitterOwners[i] = {};
-            return;
+            break;
+        }
+    }
+    for (int i = 0; i < kCameraRelativeEmitterCapacity; i++) {
+        if (s_cameraRelativeEmitters[i].emitter == emitter) {
+            s_cameraRelativeEmitters[i] = {};
         }
     }
 }
 
 bool shouldDrawEmitter(const JPABaseEmitter* emitter) {
-    const PlayerSlot owner = emitterOwner(emitter);
-    return owner == PlayerSlot::Invalid || !hasViewport() || owner == currentViewportSlot();
+    for (int i = 0; i < kEmitterOwnerCapacity; i++) {
+        const EmitterOwner& state = s_emitterOwners[i];
+        if (state.emitter != emitter) {
+            continue;
+        }
+
+        if (state.visibility == EmitterVisibility::OwnerOnly) {
+            return state.slot == PlayerSlot::Invalid || !hasViewport() ||
+                   state.slot == currentViewportSlot();
+        }
+    }
+
+    return true;
+}
+
+EmitterPresentationState applyEmitterPresentation(JPABaseEmitter* emitter,
+                                                  Mtx cameraMatrix) {
+    EmitterPresentationState result;
+    if (emitter == nullptr || !hasViewport()) {
+        return result;
+    }
+
+    for (int i = 0; i < kEmitterOwnerCapacity; i++) {
+        const EmitterOwner& state = s_emitterOwners[i];
+        if (state.emitter != emitter || state.visibility == EmitterVisibility::OwnerOnly) {
+            continue;
+        }
+
+        result.restoreAlpha = true;
+        result.alpha = emitter->getGlobalAlpha();
+        const float strength = senseStrength(currentViewportSlot());
+        const float alpha = state.visibility == EmitterVisibility::SenseReveal
+                                ? strength
+                                : 1.0f - strength;
+        emitter->setGlobalAlpha(static_cast<unsigned char>(alpha * 255.0f));
+        break;
+    }
+
+    for (int i = 0; i < kCameraRelativeEmitterCapacity; i++) {
+        CameraRelativeEmitter& state = s_cameraRelativeEmitters[i];
+        if (state.emitter != emitter || state.frame != g_Counter.mCounter0) {
+            continue;
+        }
+
+        if (currentViewport().cameraId == state.simulationCameraId) {
+            // Co-op: preserve the exact submitted Camera-0 matrix, including interpolation.
+            MTXCopy(cameraMatrix, state.simulationCameraMatrix);
+            state.hasSimulationCameraMatrix = true;
+        } else if (state.hasSimulationCameraMatrix) {
+            result.restoreCameraMatrix = true;
+            MTXCopy(cameraMatrix, result.cameraMatrix);
+            MTXCopy(state.simulationCameraMatrix, cameraMatrix);
+        } else {
+            camera_process_class* simulationCamera =
+                dComIfGp_getCamera(state.simulationCameraId);
+            if (simulationCamera != nullptr) {
+                result.restoreCameraMatrix = true;
+                MTXCopy(cameraMatrix, result.cameraMatrix);
+                MTXCopy(simulationCamera->view.viewMtx, cameraMatrix);
+            }
+        }
+        if (state.prepare != nullptr) {
+            state.prepare(emitter, currentViewportSlot(), state.context);
+        }
+        result.restoreCallback = state.restore;
+        result.callbackContext = state.context;
+        break;
+    }
+
+    return result;
+}
+
+void restoreEmitterPresentation(JPABaseEmitter* emitter,
+                                const EmitterPresentationState& state,
+                                Mtx cameraMatrix) {
+    if (emitter != nullptr && state.restoreCallback != nullptr) {
+        state.restoreCallback(emitter, state.callbackContext);
+    }
+    if (state.restoreCameraMatrix) {
+        MTXCopy(state.cameraMatrix, cameraMatrix);
+    }
+    if (emitter != nullptr && state.restoreAlpha) {
+        emitter->setGlobalAlpha(state.alpha);
+    }
 }
 
 bool isSenseActive(PlayerSlot slot) {
@@ -264,8 +472,18 @@ float currentViewportSenseStrength() {
 
 float senseStrengthForEmitter(const JPABaseEmitter* emitter) {
     const PlayerSlot owner = emitterOwner(emitter);
-    return owner == PlayerSlot::Invalid ? g_env_light.senses_effect_strength
-                                        : senseStrength(owner);
+    if (owner != PlayerSlot::Invalid) {
+        return senseStrength(owner);
+    }
+
+    float strength = 0.0f;
+    for (int i = 0; i < kPlayerSlotCount; i++) {
+        const float slotStrength = senseStrength(static_cast<PlayerSlot>(i));
+        if (slotStrength > strength) {
+            strength = slotStrength;
+        }
+    }
+    return strength;
 }
 
 void updateSense() {
@@ -449,10 +667,146 @@ void recordBloomPresentation(int mode, int sourceWidth, int sourceHeight, float 
     s_bloomMode = mode;
     s_bloomSourceWidth = sourceWidth;
     s_bloomSourceHeight = sourceHeight;
+    s_bloomTargetWidth = 0;
+    s_bloomTargetHeight = 0;
     s_bloomCompositeX = compositeX;
     s_bloomCompositeY = compositeY;
     s_bloomCompositeWidth = compositeWidth;
     s_bloomCompositeHeight = compositeHeight;
+}
+
+void recordBloomTarget(int targetWidth, int targetHeight) {
+    s_bloomTargetWidth = targetWidth;
+    s_bloomTargetHeight = targetHeight;
+}
+
+void recordProjectionParticle(const JPABaseEmitter* emitter, int groupId,
+                              const Mtx cameraMatrix, const Mtx projectionMatrix) {
+#if TARGET_PC
+    if (emitter == nullptr || (groupId != 3 && groupId != 11 && groupId != 13)) {
+        return;
+    }
+
+    beginDebugFrame();
+    const ViewportContext& viewport = currentViewport();
+    const unsigned int resourceId =
+        emitter->pRes != nullptr ? emitter->pRes->getUsrIdx() : 0;
+    for (int i = 0; i < s_projectionParticleCount; i++) {
+        const ProjectionParticleDebugState& existing = s_projectionParticles[i];
+        if (existing.resourceId == resourceId &&
+            existing.resourceManagerId == emitter->getResourceManagerID() &&
+            existing.slot == static_cast<int>(viewport.slot) && existing.groupId == groupId)
+        {
+            return;
+        }
+    }
+
+    if (s_projectionParticleCount >= kProjectionParticleDebugCapacity) {
+        return;
+    }
+
+    ProjectionParticleDebugState& state =
+        s_projectionParticles[s_projectionParticleCount++];
+    JGeometry::TVec3<float> world;
+    emitter->calcEmitterGlobalPosition(&world);
+    state.emitter = emitter;
+    state.resourceId = resourceId;
+    state.groupId = groupId;
+    state.resourceManagerId = emitter->getResourceManagerID();
+    state.slot = static_cast<int>(viewport.slot);
+    state.windowIndex = viewport.windowIndex;
+    state.cameraId = viewport.cameraId;
+    state.particleCount = emitter->getParticleNumber();
+    state.status = emitter->mStatus;
+    state.worldX = world.x;
+    state.worldY = world.y;
+    state.worldZ = world.z;
+    state.cameraX = cameraMatrix[0][0] * world.x + cameraMatrix[0][1] * world.y +
+                    cameraMatrix[0][2] * world.z + cameraMatrix[0][3];
+    state.cameraY = cameraMatrix[1][0] * world.x + cameraMatrix[1][1] * world.y +
+                    cameraMatrix[1][2] * world.z + cameraMatrix[1][3];
+    state.cameraZ = cameraMatrix[2][0] * world.x + cameraMatrix[2][1] * world.y +
+                    cameraMatrix[2][2] * world.z + cameraMatrix[2][3];
+    if (emitter->mAlivePtclBase.getFirst() != nullptr) {
+        JGeometry::TVec3<float> particle;
+        emitter->mAlivePtclBase.getFirst()->getObject()->getGlobalPosition(&particle);
+        state.hasFirstParticle = true;
+        state.firstParticleX = particle.x;
+        state.firstParticleY = particle.y;
+        state.firstParticleZ = particle.z;
+    }
+    state.projectionScaleX = projectionMatrix[0][0];
+    state.projectionOffsetX = projectionMatrix[0][3];
+    state.projectionScaleY = projectionMatrix[1][1];
+    state.projectionOffsetY = projectionMatrix[1][3];
+#endif
+}
+
+void updateCloudHazeSimulation(int mode, int count, const void* packet,
+                               const void* sourceCamera, const void* sourcePlayer,
+                               int sourceCameraId, float sourceEyeX, float sourceEyeY,
+                               float sourceEyeZ, float centerX, float centerY, float centerZ) {
+#if TARGET_PC
+    beginDebugFrame();
+    s_cloudHaze.simulationRecorded = true;
+    s_cloudHaze.mode = mode;
+    s_cloudHaze.count = count;
+    s_cloudHaze.packet = packet;
+    s_cloudHaze.sourceCamera = sourceCamera;
+    s_cloudHaze.sourcePlayer = sourcePlayer;
+    s_cloudHaze.sourceCameraId = sourceCameraId;
+    s_cloudHaze.sourceEyeX = sourceEyeX;
+    s_cloudHaze.sourceEyeY = sourceEyeY;
+    s_cloudHaze.sourceEyeZ = sourceEyeZ;
+    s_cloudHaze.simulationCenterX = centerX;
+    s_cloudHaze.simulationCenterY = centerY;
+    s_cloudHaze.simulationCenterZ = centerZ;
+#endif
+}
+
+void recordCloudHazeDraw(int mode, int count, const void* packet, int sourceCameraId,
+                         float activeEyeX, float activeEyeY, float activeEyeZ,
+                         float activeFovy, float activeAspect, float projectionFovy,
+                         float projectionAspect, float firstCloudX, float firstCloudY,
+                         float firstCloudZ, int visibleCount, float alphaSum) {
+#if TARGET_PC
+    beginDebugFrame();
+    const ViewportContext& viewport = currentViewport();
+    const int slot = slotIndex(viewport.slot);
+    s_cloudHaze.drawRecorded = true;
+    s_cloudHaze.mode = mode;
+    s_cloudHaze.count = count;
+    s_cloudHaze.packet = packet;
+    s_cloudHaze.sourceCameraId = sourceCameraId;
+    s_cloudHaze.drawSlot = static_cast<int>(viewport.slot);
+    s_cloudHaze.drawWindowIndex = viewport.windowIndex;
+    s_cloudHaze.drawCameraId = viewport.cameraId;
+    s_cloudHaze.activeEyeX = activeEyeX;
+    s_cloudHaze.activeEyeY = activeEyeY;
+    s_cloudHaze.activeEyeZ = activeEyeZ;
+    s_cloudHaze.activeFovy = activeFovy;
+    s_cloudHaze.activeAspect = activeAspect;
+    s_cloudHaze.projectionFovy = projectionFovy;
+    s_cloudHaze.projectionAspect = projectionAspect;
+    s_cloudHaze.firstCloudX = firstCloudX;
+    s_cloudHaze.firstCloudY = firstCloudY;
+    s_cloudHaze.firstCloudZ = firstCloudZ;
+    s_cloudHaze.drawCalls[slot]++;
+    s_cloudHaze.drawCounts[slot] = count;
+    s_cloudHaze.visibleCounts[slot] = visibleCount;
+    s_cloudHaze.alphaSums[slot] = alphaSum;
+#endif
+}
+
+void drawViewportSafeIndirectWorldEffects() {
+#if TARGET_PC
+    // Co-op: ordinary cloud/mist modes are world presentation, unlike the mixed fullscreen list.
+    if (hasViewport() && g_env_light.mpCloudPacket != nullptr &&
+        g_env_light.mMoyaMode < 50)
+    {
+        g_env_light.mpCloudPacket->draw();
+    }
+#endif
 }
 
 DebugState getDebugState() {
@@ -462,6 +816,8 @@ DebugState getDebugState() {
     state.bloomMode = s_bloomMode;
     state.bloomSourceWidth = s_bloomSourceWidth;
     state.bloomSourceHeight = s_bloomSourceHeight;
+    state.bloomTargetWidth = s_bloomTargetWidth;
+    state.bloomTargetHeight = s_bloomTargetHeight;
     state.bloomCompositeX = s_bloomCompositeX;
     state.bloomCompositeY = s_bloomCompositeY;
     state.bloomCompositeWidth = s_bloomCompositeWidth;
@@ -475,6 +831,7 @@ DebugState getDebugState() {
         state.sense[i].strength = sense.strength;
         for (int j = 0; j < kEmitterOwnerCapacity; j++) {
             if (s_emitterOwners[j].emitter != nullptr &&
+                s_emitterOwners[j].visibility == EmitterVisibility::OwnerOnly &&
                 s_emitterOwners[j].slot == static_cast<PlayerSlot>(i))
             {
                 state.sense[i].emitterCount++;
@@ -485,6 +842,21 @@ DebugState getDebugState() {
         state.twilight[i].player = s_twilight[i].player;
         state.twilight[i].activeMask = s_twilight[i].activeMask;
     }
+    for (int i = 0; i < kEmitterOwnerCapacity; i++) {
+        if (s_emitterOwners[i].emitter == nullptr) {
+            continue;
+        }
+        if (s_emitterOwners[i].visibility == EmitterVisibility::SenseReveal) {
+            state.senseRevealEmitterCount++;
+        } else if (s_emitterOwners[i].visibility == EmitterVisibility::SenseInactive) {
+            state.senseInactiveEmitterCount++;
+        }
+    }
+    state.projectionParticleCount = s_projectionParticleCount;
+    for (int i = 0; i < s_projectionParticleCount; i++) {
+        state.projectionParticles[i] = s_projectionParticles[i];
+    }
+    state.cloudHaze = s_cloudHaze;
     return state;
 }
 
@@ -517,6 +889,14 @@ bool shouldRefreshInvisibleListFramebuffer() {
 }
 
 bool shouldRefreshProjectionParticleFramebuffer() {
+#if TARGET_PC
+    return dusk::coop::event_presentation::shouldPresentSplitViewports();
+#else
+    return false;
+#endif
+}
+
+bool shouldRefreshScreenParticleFramebuffer() {
 #if TARGET_PC
     return dusk::coop::event_presentation::shouldPresentSplitViewports();
 #else

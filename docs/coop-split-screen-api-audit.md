@@ -24,7 +24,7 @@ families, and which systems are intentionally deferred.
 | Should an explicitly classified singular event, interactive dialogue, item-get sequence, or captured menu surface temporarily present one fullscreen camera and hide non-presenting players? | `event_presentation` | Implemented opt-in override above the camera sidecar; howling stones, Midna service, interactive dialogue, generic ItemGet, and captured fullscreen menu surfaces are classified consumers |
 | Which player activated an NPC/object/event trigger? | `interaction_owner` / `event_owner` | Initial knob/shutter prompt-side and accepted door-demo proofs implemented; generic ALINK talk/check/pickup actions already flow through slot-local attention/status, while remaining world-actor singleton prompts are audited case by case |
 | Which camera or player should audio listener state follow? | `audio_listener_owner` | Not implemented; audio listener stays camera 0/P1-owned |
-| Should this actor, world chunk, foliage/detail, or background part be draw-culled for local split-screen? | `render_visibility` | Initial PC split-screen bypass implemented for known P1-camera draw-culling paths |
+| Should this actor, world chunk, foliage/detail, background part, or Sense-only model draw in this viewport? | `render_visibility` | PC split-screen bypass covers known P1-camera culling; Sense-only model packets and real shadows are filtered per viewport |
 
 ## Current Split-Screen Patches To Revisit
 
@@ -92,8 +92,23 @@ Audit decision:
   tail again.
 - Heat-haze projection particles bind the particle resource `dummy` texture, which is backed by the
   framebuffer. Split-screen refreshes that framebuffer texture from the active viewport immediately
-  before projection particles draw; this is separate from the later indirect-screen draw list, which
-  remains disabled in split-screen because it contains mixed fullscreen weather/effect packets.
+  before projection particles draw. The backing `ResTIMG` remains canonical. Rebuilding the common
+  and room JParticle resource managers' cached `dummy` bindings did not change the Goron Mines haze,
+  and diagnostics instead identified `daYkgr_c` particle `0x80E2` as the Camera-0-relative
+  distortion sheet. It now retains one simulation while `render_effects` installs its simulation-
+  camera matrix captured at native submission and slot-local path strength for each viewport draw.
+  Its native post-particle framebuffer capture is refreshed per viewport so the distortion samples
+  current fire/lava particles instead of a pre-particle frame. Kankyo modes below 50 are
+  separately replayed as camera-relative world-space cloud/mist packets while the mixed indirect-
+  screen list remains disabled. Each active camera owns a fixed `CLOUD_EFF` simulation sidecar;
+  P1 retains the canonical packet and vanilla RNG, additional slots use private visual RNG, and
+  shared texture animation advances once. This sidecar is required because native update stores
+  camera/player-dependent positions, alpha, and room-ratio history before draw; replaying P1's
+  completed packet under Camera 1 cannot recover that missing lifecycle.
+- Framebuffer-effect policy is per consumer and per phase. The group-13 distortion sheet requires
+  the second native capture after ordinary particles, while water requires the capture before the
+  invisible-list replay. Satisfying either dependency does not enable motion blur, depth of field,
+  fades, or the mixed indirect-screen list.
 - Refractive water surfaces are submitted through the invisible draw lists and sample the same
   framebuffer texture. Split-screen refreshes that capture from the active viewport immediately
   before each invisible-list replay, including the alternate blur ordering, so water does not sample

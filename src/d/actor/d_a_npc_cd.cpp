@@ -4,6 +4,11 @@
 #include "d/actor/d_a_player.h"
 #include <cstring>
 
+#if TARGET_PC
+#include "dusk/coop/render_effects.h"
+#include "dusk/coop/render_visibility.h"
+#endif
+
 static int jntNodeCallBack(J3DJoint* i_jnt, int param_1) {
     if (param_1 == 0) {
         J3DModel* model = j3dSys.getModel();
@@ -446,12 +451,24 @@ int daNpcCd_c::drawObj(int idx, J3DModel* i_model, f32 i_scale) {
         -1, 3, 5, 5, 3, 5, 3, 0, 0,
     };
 
-    if (mIsDarkWorld && !daPy_py_c::checkNowWolfEyeUp()) {
+    const bool viewportSenseVisibility =
+#if TARGET_PC
+        mIsDarkWorld && dusk::coop::render_visibility::shouldUseViewportVisibility();
+#else
+        false;
+#endif
+    if (mIsDarkWorld && !viewportSenseVisibility && !daPy_py_c::checkNowWolfEyeUp()) {
         return 1;
     }
 
     s32 jntNum = a_jntNumTbl[idx];
     if (i_model && jntNum >= 0) {
+#if TARGET_PC
+        if (viewportSenseVisibility) {
+            // Co-op: spirit equipment follows the body's owner Sense and native culling.
+            dusk::coop::render_visibility::registerSenseOnlyModel(i_model, this);
+        }
+#endif
         g_env_light.setLightTevColorType_MAJI(i_model, &tevStr);
         mDoMtx_stack_c::copy(mpMorf->getModel()->getAnmMtx(jntNum));
         mDoMtx_stack_c::scaleM(i_scale, i_scale, i_scale);
@@ -463,10 +480,24 @@ int daNpcCd_c::drawObj(int idx, J3DModel* i_model, f32 i_scale) {
 }
 
 int daNpcCd_c::drawNpc() {
-    if (mIsDarkWorld && !daPy_py_c::checkNowWolfEyeUp()) {
+    const bool viewportSenseVisibility =
+#if TARGET_PC
+        mIsDarkWorld && dusk::coop::render_visibility::shouldUseViewportVisibility();
+#else
+        false;
+#endif
+    if (mIsDarkWorld && !viewportSenseVisibility && !daPy_py_c::checkNowWolfEyeUp()) {
         setHitodamaParticle();
         return 1;
     }
+
+#if TARGET_PC
+    if (viewportSenseVisibility) {
+        // Co-op: create both native presentations once, then cull the body per Sense viewport.
+        dusk::coop::render_visibility::registerSenseOnlyModel(mpMorf->getModel(), this);
+        setHitodamaParticle();
+    }
+#endif
 
     if (mIsDarkWorld) {
         g_env_light.settingTevStruct(4, &current.pos, &tevStr);
@@ -525,6 +556,10 @@ void daNpcCd_c::setHitodamaParticle() {
             dComIfGp_particle_set(mHitodamaEmitters[i], id[i], &sp28, &shape_angle, 0);
         pEmitter = dComIfGp_particle_getEmitter(mHitodamaEmitters[i]);
         if (pEmitter != NULL) {
+#if TARGET_PC
+            // Co-op: the unrevealed spirit wisp is the inverse of viewport-local Sense.
+            dusk::coop::render_effects::registerSenseInactiveEmitter(pEmitter);
+#else
             u8 alpha;
             if (daPy_py_c::checkNowWolfEyeUp() == FALSE) {
                 alpha = 0xff;
@@ -532,8 +567,9 @@ void daNpcCd_c::setHitodamaParticle() {
                 alpha = 0;
             }
 
-            pEmitter->setGlobalTranslation(sp28.x, sp28.y, sp28.z);
             pEmitter->setGlobalAlpha(alpha);
+#endif
+            pEmitter->setGlobalTranslation(sp28.x, sp28.y, sp28.z);
         }
     }
 }
