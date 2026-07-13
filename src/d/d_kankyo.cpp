@@ -41,6 +41,8 @@
 #include "dusk/coop/player_slots.h"
 #include "dusk/coop/render_effects.h"
 #include "dusk/coop/render_materials.h"
+
+static f32 timeScale = 1.0f;
 #endif
 
 static void GxXFog_set();
@@ -1943,6 +1945,9 @@ void dScnKy_env_light_c::setLight_palno_get(u8* prev_envr_id_p, u8* next_envr_id
     u8 psel_idx = 0;
     int i;
     int sp14 = 0;
+#if TARGET_PC
+    const f32 timeScale = (pattern_ratio_p == &g_env_light.pat_ratio) ? ::timeScale : 1.0f;
+#endif
 
     if (*init_timer_p != 0) {
         (*init_timer_p)++;
@@ -2276,14 +2281,22 @@ void dScnKy_env_light_c::setLight_palno_get(u8* prev_envr_id_p, u8* next_envr_id
 
             if (g_env_light.mColPatMode == 0) {
                 if (pselect_p->change_rate > 0.0f) {
+#if TARGET_PC
+                    *pattern_ratio_p += timeScale * ((1.0f / 30) / pselect_p->change_rate);
+#else
                     *pattern_ratio_p += (1.0f / 30) / pselect_p->change_rate;
+#endif
                 }
 
                 // pattern change rate is faster in hyrule field
                 if (strcmp(dComIfGp_getStartStageName(), "F_SP121") == 0 &&
                     *prev_pat_p == *next_pat_p)
                 {
+#if TARGET_PC
+                    *pattern_ratio_p += timeScale * (1.0f / 15);
+#else
                     *pattern_ratio_p += (1.0f / 15);
+#endif
                 }
 
                 if (*pattern_ratio_p >= 1.0f) {
@@ -2531,6 +2544,10 @@ void dScnKy_env_light_c::setLight() {
         u8 next_pal_start_id;
         u8 prev_pal_end_id;
         u8 next_pal_end_id;
+#if TARGET_PC
+        const f32 deltaTime = dusk::game_clock::consume_interval(this);
+        timeScale = deltaTime / dusk::game_clock::period_for_original_frames(1.0f);
+#endif
         setLight_palno_get(&g_env_light.PrevCol, &g_env_light.UseCol, &g_env_light.wether_pat0,
                            &g_env_light.wether_pat1, &prev_pal_start_id, &prev_pal_end_id,
                            &next_pal_start_id, &next_pal_end_id, &color_ratio, &start_pat_pal_id,
@@ -2689,8 +2706,6 @@ void dScnKy_env_light_c::setLight() {
                 sense_bloom_pulse = sin * 0.2f;
 
                 #if TARGET_PC
-                    const f32 deltaTime = dusk::game_clock::consume_interval(this);
-                    const f32 timeScale = deltaTime / dusk::game_clock::period_for_original_frames(1.0f);
                     S_fuwan_sin += (s16)((cM_rndF(2000.0f) + 500) * timeScale);
                 #else
                     S_fuwan_sin += (s16)cM_rndF(2000.0f) + 500;
