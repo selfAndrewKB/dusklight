@@ -837,6 +837,11 @@ static int dScnPly_Execute(dScnPly_c* i_this) {
 
         dComIfGp_getEvent()->Step();
         dComIfGp_getAttention()->Run();
+#if TARGET_PC
+        // Co-op: actor-produced hints and targets must reach every slot in the same
+        // post-world phase as P1's native attention scanner.
+        dusk::coop::player_attention::updateAdditionalPlayers();
+#endif
     }
 
     #if DEBUG

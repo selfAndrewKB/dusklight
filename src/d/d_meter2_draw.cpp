@@ -868,9 +868,11 @@ void restorePaneState(CPaneMgr* pane, const CoopPaneState& state) {
 void dMeter2Draw_c::drawCoopSecondaryButtonHud(J2DGrafContext* i_restoreGrafCtx) {
     // Co-op: P2's prompt state shares vanilla panes, so isolate the secondary draw and restore them.
     // Co-op: window 1 is P2's split-screen viewport, so require two active windows.
+    // Co-op: secondary ALINK actions own their native temporary HUD visibility latch.
     if (!dusk::coop::event_presentation::shouldPresentSplitViewports() ||
         dComIfGp_getWindowNum() < 2 ||
-        dComIfGp_isPauseFlag())
+        dComIfGp_isPauseFlag() ||
+        !dusk::coop::hud_owner::isVisible(dusk::coop::PlayerSlot::Secondary))
     {
         return;
     }

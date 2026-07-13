@@ -13,6 +13,13 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
 - When logging through `aurora::Module` / fmt on MSVC, cast small integer, enum, `BOOL`, and bool-ish expressions to ordinary `int` / `unsigned int` as needed. Avoid clever format arguments that trip fmt compile-time checks.
 - For secondary ALINK shield/attention bugs, do not treat clean P2 input as proof that state is decoupled. Current evidence points at shared attention/player-status state, so capture status facts before adding behavior fixes.
 - `checkAttentionLock()` is the first confirmed singleton hazard: route ALINK gameplay through `dusk::coop::player_attention` so additional players get slot-local `dAttention_c` state while P1/global attention can still drive camera/HUD/story uses.
+- A shared attention actor may need a slot-local actor view rather than duplication. Midna wolf-jump
+  tags keep one story switch/message flow, but each Link owns path cursor, jump readiness, landing
+  data, attention flags, and attention/cursor position. Route selection, lock retention, cursor draw,
+  ALINK action, companion animation, and camera through the same explicit player view.
+- Advance additional attention scanners beside P1's native post-world `dAttention_c::Run()` call,
+  after world actors submit requests. Running P2 attention opportunistically inside ALINK changes
+  the producer/consumer phase and can lose Z hints or prompt state.
 - Diagnostics must keep `latest.json` rich and `events.jsonl` semantic. Continuous values may appear in latest snapshots or emitted payload context, but they should not drive JSONL events unless the profile is explicitly testing frame-level churn.
 - In-game co-op debug overlays are for fast visual inspection only. Keep durable evidence in structured diagnostics and avoid making overlays mutate gameplay, diagnostics, or target policy.
 - Runtime co-op identity should come from the player-slot registry (`getSlotForActor`, `isPlayerInSlot`, `isAdditionalPlayer`). ALINK negative actor arguments are only spawn-time bootstraps before extra-slot registration exists.
@@ -57,6 +64,12 @@ This file is the short map for future Codex sessions. Keep it small. Put durable
 - ItemGet teardown is ordered: classify the closing event from `event->getName()` while it is in END state, request release, let event `Step()` clear camera play, let camera actors consume recovery, then finish release at `mDoGph_Painter()` entry before window/render-policy sampling. `getRunEventName()` cannot classify END state, and releasing immediately after `setCameraPlay(0)` is still too early.
 - Poe soul collection is the validated `item_get_owner` producer. Other `DEFAULT_GETITEM` sources must retain the exact collector before ordering/changing the event; do not assume the generic fallback proves pickup, chest, NPC, insect, key, or equipment ownership.
 - Midna/manual wolf-transform ownership uses slot-local Midna service actors. Keep P1's Midna as the canonical story/save/global actor, but active additional players need runtime Midna copies registered through `midna_owner`; prompt eligibility, message branch reads, transform blocking, accepted transform demo handoff, physical service setup, and slot-local talk/camera status follow the service actor's ALINK slot. Active interactive dialogue must begin presentation after the native message controller accepts the message, with `talkStartInit()` as fallback insurance, then resolve listener ALINK, speaker Midna, input pad, and talk-camera fallback actor through `message_owner`, not P1's global Midna/form state or camera `mpPlayerActor`.
+- Midna ownership and message ownership are separate. Non-dialogue abilities such as wolf-jump
+  staging retain validated ALINK/tag process IDs per slot through `midna_owner` without beginning
+  `message_owner` or fullscreen dialogue presentation. For ordinary no-message wolf jumps, never
+  order the singular talk event for any slot: it globally enters `PROC_TALK`, Event cameras, and
+  input lock. Retain `Traveling` and `Stationed` ownership until ALINK's native jump proc has copied
+  the tag data and retained the actor; only real tutorial messages use the singular event.
 - Runtime service actors that native code may delete or recreate must retain both a pointer and a process ID, then validate the live actor before message/camera use. A retained pointer alone is not an ownership boundary.
 - Camera/facing bugs need a three-frame ownership trace before code changes survive: accepted event/message owner, first actor/proc frame, and camera-consumption frame. This catches cases where P2 accepts correctly but an intermediate native proc turns back toward P1/global state.
 - Same-frame teardown is unsafe around messages and cameras. If native message or actor teardown can run before event-camera consumption in the same management pass, defer owner release until the camera stops consuming the retained actors.

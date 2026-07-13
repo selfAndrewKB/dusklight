@@ -19,6 +19,8 @@ PlayerSlot currentSlot();
 daAlink_c* currentPlayer();
 void pushSlot(PlayerSlot slot);
 void popSlot();
+void setVisibleForPlayer(daAlink_c* player, bool visible);
+bool isVisible(PlayerSlot slot);
 
 bool isSecondaryPromptPass();
 u8 buttonStatus(player_button_status::ButtonStatusKind kind);

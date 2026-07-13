@@ -35,8 +35,9 @@ This is not a global replacement of `dComIfGp_getPlayer(0)`, `daPy_getPlayerActo
 
 - `player_attention` V1 owns a slot-local `dAttention_c` for additional ALINK actors while P1 keeps
   the global `dComIfGp_getAttention()` path.
-- `daAlink_c::setAtnList()` updates and binds `mAttention` through `player_attention` before ALINK
-  derives `mTargetedActor`, mark state, and guard/target facts.
+- `daAlink_c::setAtnList()` binds `mAttention` through `player_attention` before ALINK derives
+  `mTargetedActor`, mark state, and guard/target facts. `dScnPly` advances every additional scanner
+  beside P1's native post-world `Run()` call, after actors have submitted that frame's requests.
 - `dCamera_c` gameplay paths that already own an `mpPlayerActor` now read attention through that
   actor, so camera 1 can see P2's slot-local lock state instead of P1 global attention.
 - The play scene now draws additional players' slot-local attention cursors, and
@@ -51,9 +52,25 @@ This is not a global replacement of `dComIfGp_getPlayer(0)`, `daPy_getPlayerActo
   target?" capability.
 - Additional players' scanners reject registered player actors as lock-on candidates. This keeps
   P2 from target-locking P1 after restoring P2's normal player target capability mask.
+- Midna wolf-jump tags keep their story switch and tutorial message flow singular, but their path
+  cursor, next-point latch, landing data, jump-ready state, and attention position/flags are now
+  slot-local. `player_attention` supplies that owner-specific actor view to native selection,
+  lock retention, and cursor drawing; ALINK, owner Midna, and camera consumers ask the tag for the
+  same player explicitly. One player's stationed Midna or path progress therefore cannot enable,
+  redirect, or cancel another player's jump chain.
+- No-message wolf-jump Z acceptance uses a non-dialogue `midna_owner` ability service for every
+  slot. Ability partners use fixed per-slot storage and validated ALINK/tag process IDs, so P1 and
+  P2 approaches cannot evict one another or collide with singular Midna dialogue. The tag retains
+  explicit `Traveling` and `Stationed` phases while native Midna motion runs, exposes the ordinary
+  lock/Jump action after arrival, and releases the ability only after `procWolfTagJumpInit()` has
+  retained and copied the tag state. P1 returns to canonical tag state at that handoff; P2+ continue
+  through slot-local traversal state. Only tags with real tutorial text order the singular event.
+- The native wolf-jump approach's `2dShowOff/On` latch is routed through `hud_owner`: P1 preserves
+  the vanilla global HUD path, while additional slots hide and restore only their secondary replay.
 - `attention.state` diagnostics now include a `slots` array for slot-local attention objects, so
   P2 lock-on failures can be separated into missing candidate list, button-state, lock promotion,
-  or ALINK target handoff failures.
+  or ALINK target handoff failures. It also records each slot's Z-hint target and owner-resolved
+  target position/flags for shared actors such as wolf-jump tags.
 - The legacy `Ignore shared attention lock` probe is no longer part of default secondary ALINK
   behavior or the Actor Spawner UI. It was a containment switch, not the final ownership model.
 - Shared ALINK body-model calculator ownership is also no longer a probe. The

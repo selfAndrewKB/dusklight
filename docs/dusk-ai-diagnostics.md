@@ -342,6 +342,10 @@ The smallest useful implementation starts with:
   emission is driven only by those semantic transitions.
 - `message.owner`: active interactive dialogue owner, retained pad, listener/speaker actors,
   fullscreen-presentation flag, and latest begin/end/reset transition.
+- `midna.service` schema 2: singular dialogue ownership plus a fixed per-slot ability array with
+  validated player/Midna/partner actors. Wolf-jump entries include approach phase, readiness,
+  lock position, owner attention flags, and Midna-to-point distance. Continuous travel distance
+  remains latest-only and does not emit JSONL events.
 - `diagnostics.stats`: recorder health in `latest.json`, including per-provider event counts, byte counts, throttles, payload oversize counts, current budget-window counts, and configured provider budgets.
 
 Leave process-tree, heap, OSReport sink, and debug-viewer providers for follow-up unless the first implementation needs them to answer the current ALINK question.

@@ -3,6 +3,8 @@
 #include "aurora/gfx.h"
 #include "d/actor/d_a_alink.h"
 #include "d/actor/d_a_horse.h"
+#include "d/actor/d_a_midna.h"
+#include "d/actor/d_a_tag_wljump.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_item.h"
 #include "dusk/coop/alink_form_resources.h"
@@ -23,6 +25,7 @@
 #include "dusk/coop/item_awareness.h"
 #include "dusk/coop/line_render_diagnostics.h"
 #include "dusk/coop/message_owner.h"
+#include "dusk/coop/midna_owner.h"
 #include "dusk/coop/player_attention.h"
 #include "dusk/coop/player_camera_status.h"
 #include "dusk/coop/player_query.h"
@@ -446,6 +449,7 @@ json attentionStateEventKey(const json& data) {
         {"check_object_count", data.value("check_object_count", 0)},
         {"attn_status", data.value("attn_status", 0)},
         {"lockon_target_0", actorIdentityEventData(data.value("lockon_target_0", json::object()))},
+        {"zhint_target", actorIdentityEventData(data.value("zhint_target", json::object()))},
         {"action_target_0", actorIdentityEventData(data.value("action_target_0", json::object()))},
         {"check_object_target_0", actorIdentityEventData(data.value("check_object_target_0", json::object()))},
         {"lockon_list_active", attentionListEventKey(data.value("lockon_list_active", json::array()))},
@@ -1978,6 +1982,59 @@ json collectAlinkFormResources() {
     };
 }
 
+json collectMidnaService() {
+    const bool active = coop::midna_owner::isServiceActive();
+    daAlink_c* player = active ? coop::midna_owner::currentPlayer() : nullptr;
+    daMidna_c* midna = player != nullptr ? coop::midna_owner::getMidnaForPlayer(player) : nullptr;
+    fopAc_ac_c* partner = active ? coop::midna_owner::currentPartner() : nullptr;
+    json abilities = json::array();
+    for (int i = 0; i < coop::kPlayerSlotCount; i++) {
+        daAlink_c* abilityPlayer = static_cast<daAlink_c*>(
+            coop::getPlayer(static_cast<coop::PlayerSlot>(i)));
+        fopAc_ac_c* abilityPartner =
+            coop::midna_owner::abilityPartnerForPlayer(abilityPlayer);
+        daMidna_c* abilityMidna = abilityPlayer != nullptr
+                                      ? coop::midna_owner::getMidnaForPlayer(abilityPlayer)
+                                      : nullptr;
+        json ability = {
+            {"slot", i},
+            {"active", abilityPartner != nullptr},
+            {"player", actorSummary(abilityPlayer)},
+            {"midna", actorSummary(abilityMidna)},
+            {"partner", actorSummary(abilityPartner)},
+        };
+
+        if (abilityPlayer != nullptr && abilityMidna != nullptr && abilityPartner != nullptr &&
+            fopAcM_GetName(abilityPartner) == fpcNm_Tag_Wljump_e)
+        {
+            daTagWljump_c* tag = static_cast<daTagWljump_c*>(abilityPartner);
+            const cXyz* lockPos = tag->getLockPos(abilityPlayer);
+            ability["wolf_jump_approach_phase"] = tag->getCoopApproachPhase(abilityPlayer);
+            ability["wolf_jump_ready"] = tag->isCoopTraversalReady(abilityPlayer);
+            ability["wolf_jump_attention_flags"] = tag->getAttentionFlags(abilityPlayer);
+            ability["wolf_jump_lock_position"] =
+                lockPos != nullptr ? json::array({lockPos->x, lockPos->y, lockPos->z})
+                                   : json(nullptr);
+            ability["wolf_jump_midna_distance"] =
+                lockPos != nullptr ? abilityMidna->current.pos.abs(*lockPos) : -1.0f;
+        }
+
+        abilities.push_back(ability);
+    }
+
+    return {
+        {"schema_version", 2},
+        {"dialogue", {
+            {"active", active},
+            {"slot", active ? static_cast<int>(coop::midna_owner::currentSlot()) : -1},
+            {"player", actorSummary(player)},
+            {"midna", actorSummary(midna)},
+            {"partner", actorSummary(partner)},
+        }},
+        {"abilities", abilities},
+    };
+}
+
 json attentionObjectSummary(dAttention_c* attention, int slot) {
     json data = {
         {"slot", slot},
@@ -1989,6 +2046,8 @@ json attentionObjectSummary(dAttention_c* attention, int slot) {
 
     data["ptr"] = ptrString(reinterpret_cast<uintptr_t>(attention));
     data["owner"] = actorSummary(attention->mpPlayer);
+    data["owner_event_condition"] =
+        attention->mpPlayer != nullptr ? attention->mpPlayer->eventInfo.getCondition() : 0;
     data["pad_no"] = attention->mPadNo;
     data["player_attention_flags"] = attention->mPlayerAttentionFlags;
     data["flags"] = attention->mFlags;
@@ -2008,9 +2067,26 @@ json attentionObjectSummary(dAttention_c* attention, int slot) {
     data["attn_refresh_timer"] = static_cast<unsigned int>(attention->field_0x32e);
     data["attn_release_timer"] = static_cast<unsigned int>(attention->field_0x32f);
     data["attn_block_timer"] = attention->mAttnBlockTimer;
-    data["lockon_target_0"] = actorSummary(attention->LockonTarget(0));
+    fopAc_ac_c* lockTarget = attention->LockonTarget(0);
+    fopAc_ac_c* zHintTarget = attention->getZHintTarget();
+    data["lockon_target_0"] = actorSummary(lockTarget);
+    data["zhint_target"] = actorSummary(zHintTarget);
     data["action_target_0"] = actorSummary(attention->ActionTarget(0));
     data["check_object_target_0"] = actorSummary(attention->CheckObjectTarget(0));
+    if (lockTarget != nullptr) {
+        const cXyz& ownerPosition =
+            coop::player_attention::actorPositionForOwner(attention, lockTarget);
+        data["owner_target_flags"] =
+            coop::player_attention::actorFlagsForOwner(attention, lockTarget);
+        data["owner_target_position"] = {ownerPosition.x, ownerPosition.y, ownerPosition.z};
+    }
+    if (zHintTarget != nullptr) {
+        const cXyz& ownerPosition =
+            coop::player_attention::actorPositionForOwner(attention, zHintTarget);
+        data["zhint_owner_flags"] =
+            coop::player_attention::actorFlagsForOwner(attention, zHintTarget);
+        data["zhint_owner_position"] = {ownerPosition.x, ownerPosition.y, ownerPosition.z};
+    }
 
     data["lockon_list_capacity"] = 8;
     data["lockon_list_active"] = attentionListSummary(attention->mLockOnList, 8);
@@ -2024,7 +2100,7 @@ json attentionObjectSummary(dAttention_c* attention, int slot) {
 json collectAttentionState() {
     dAttention_c* attention = dComIfGp_getAttention();
     json data = {
-        {"schema_version", 2},
+        {"schema_version", 4},
         {"available", attention != nullptr},
     };
     if (attention == nullptr) {
@@ -3641,10 +3717,11 @@ Provider s_providers[] = {
     {"horse.owner", 4, "cheap", 1, true, 120, 12288, collectHorseOwner},
     {"event.presentation", 2, "cheap", 1, true, 120, 4096, collectEventPresentation},
     {"message.owner", 1, "cheap", 1, true, 120, 4096, collectMessageOwner},
+    {"midna.service", 2, "cheap", 1, false, 0, 4096, collectMidnaService},
     {"alink.form_resources", 2, "cheap", 1, true, 120, 8192, collectAlinkFormResources},
     {"render.lines", 2, "cheap", 1, true, 120, 32768, collectRenderLines},
     {"input.pad", 1, "cheap", 1, true, 120, 4096, collectInputPad},
-    {"attention.state", 2, "medium", 5, true, 60, 32768, collectAttentionState},
+    {"attention.state", 4, "medium", 5, true, 60, 32768, collectAttentionState},
     {"player.status", 1, "cheap", 1, true, 120, 8192, collectPlayerStatus},
     {"coop.player_query", 1, "cheap", 5, true, 240, 8192, collectPlayerQuery},
     {"enemy.targeting", 1, "cheap", 5, true, 240, 12288, collectEnemyTargeting},

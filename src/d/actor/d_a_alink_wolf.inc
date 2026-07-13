@@ -5113,13 +5113,32 @@ int daAlink_c::getWolfTagJumpTime() const {
 }
 
 const cXyz* daAlink_c::checkMidnaLockJumpPoint() const {
+#if TARGET_PC
+    daMidna_c* midna = dusk::coop::midna_owner::getMidnaForPlayer(this);
+#else
+    daMidna_c* midna = getMidnaActor();
+#endif
     if ((!mLinkAcch.ChkGroundHit() && mProcID != PROC_WOLF_TAG_JUMP) || checkMidnaUseAbility() ||
-        getMidnaActor()->eventInfo.checkCommandTalk())
+        midna == NULL || midna->eventInfo.checkCommandTalk())
     {
         return NULL;
     }
 
+#if TARGET_PC
+    // Co-op: ordinary jump staging is a slot-local ability; tutorial dialogue
+    // retains the tag directly, while a real tutorial uses the singular service partner.
+    fopAc_ac_c* partner_p = dusk::coop::midna_owner::abilityPartnerForPlayer(this);
+    if (partner_p == NULL && dusk::coop::midna_owner::isServiceActive() &&
+        dusk::coop::midna_owner::currentPlayer() == this)
+    {
+        partner_p = dusk::coop::midna_owner::currentPartner();
+    }
+    if (partner_p == NULL) {
+        partner_p = dusk::coop::midna_owner::talkPartnerForPlayer(this);
+    }
+#else
     fopAc_ac_c* partner_p = fopAcM_getTalkEventPartner(daPy_getLinkPlayerActorClass());
+#endif
     fopAc_ac_c* wljump_p = NULL;
 
     if (checkWolfTagLockJumpReady()) {
@@ -5135,7 +5154,11 @@ const cXyz* daAlink_c::checkMidnaLockJumpPoint() const {
     }
 
     if (wljump_p != NULL) {
+#if TARGET_PC
+        return static_cast<daTagWljump_c*>(wljump_p)->getLockPos(this);
+#else
         return static_cast<daTagWljump_c*>(wljump_p)->getLockPos();
+#endif
     }
 
     return NULL;
@@ -5155,17 +5178,40 @@ int daAlink_c::procWolfTagJumpInit(fopAc_ac_c* i_tag) {
         field_0x3198 = 1;
     } else {
         daTagWljump_c* tag = (daTagWljump_c*)i_tag;
+#if TARGET_PC
+        const cXyz* lockPos = tag->getLockPos(this);
+        if (lockPos == NULL) {
+            // Co-op: a rejected handoff must release the retained approach just
+            // as a successful proc takes custody of it.
+            tag->releaseCoopApproach(this);
+            return procWolfWaitInit();
+        }
+        field_0x37c8 = *lockPos;
+#else
         field_0x37c8 = *tag->getLockPos();
+#endif
 
         cXyz sp14 = field_0x37c8 - current.pos;
+#if TARGET_PC
+        f32 temp_f31 = tag->getLandArea(this) / sp14.absXZ();
+#else
         f32 temp_f31 = tag->getLandArea() / sp14.absXZ();
+#endif
 
         field_0x37c8.x -= sp14.x * temp_f31;
         field_0x37c8.z -= sp14.z * temp_f31;
 
         field_0x280c.setData(i_tag);
+#if TARGET_PC
+        tag->onNextCheckFlg(this);
+        mProcVar1.field_0x300a = tag->getNotSlideFlg(this);
+        // Co-op: release Midna's approach owner only after the native jump proc
+        // retains the tag and copies every point-dependent value it consumes.
+        tag->releaseCoopApproach(this);
+#else
         tag->onNextCheckFlg();
         mProcVar1.field_0x300a = tag->getNotSlideFlg();
+#endif
     }
 
     setSingleAnimeWolf(WANM_JUMP_ATTACK_START, mpHIO->mWolf.mWlAutoJump.m.mWeakJumpAnmSpeed, mpHIO->mWolf.mWlAutoJump.m.mJumpAnm.mStartFrame, mpHIO->mWolf.mWlAutoJump.m.mJumpAnm.mEndFrame, mpHIO->mWolf.mWlAutoJump.m.mJumpAnm.mInterpolation);
@@ -5214,14 +5260,25 @@ int daAlink_c::procWolfTagJump() {
     mProcVar0.field_0x3008--;
 
     if (mProcVar0.field_0x3008 < 0) {
-        if (tag == NULL || tag->getLockPos() == NULL || mProcVar0.field_0x3008 < -mpHIO->mWolf.mWlPoint.m.mLockJumpStopTime) {
+        if (tag == NULL ||
+#if TARGET_PC
+            tag->getLockPos(this) == NULL ||
+#else
+            tag->getLockPos() == NULL ||
+#endif
+            mProcVar0.field_0x3008 < -mpHIO->mWolf.mWlPoint.m.mLockJumpStopTime)
+        {
             procWolfWaitInit();
         } else {
             if (field_0x3198 == 0) {
                 onResetFlg0(RFLG0_WOLF_TAG_LOCK_JUMP_READY);
             }
 
+#if TARGET_PC
+            field_0x3738 = *tag->getLockPos(this);
+#else
             field_0x3738 = *tag->getLockPos();
+#endif
             setDoStatus(BUTTON_STATUS_UNK_147);
 
             cLib_addCalcAngleS(&shape_angle.y, cLib_targetAngleY(&current.pos, &field_0x3738), 2, 0x2000, 0x800);
@@ -5264,9 +5321,14 @@ int daAlink_c::procWolfTagJump() {
             }
 
             if (tag != NULL) {
-                if (tag->getLockPos() != NULL) {
+#if TARGET_PC
+                const cXyz* lockPos = tag->getLockPos(this);
+#else
+                const cXyz* lockPos = tag->getLockPos();
+#endif
+                if (lockPos != NULL) {
                     onResetFlg0(RFLG0_WOLF_TAG_LOCK_JUMP_READY);
-                    field_0x3738 = *tag->getLockPos();
+                    field_0x3738 = *lockPos;
 
                     if (mProcVar1.field_0x300a != 0) {
                         field_0x2f99 = 0x50;
@@ -5329,9 +5391,14 @@ int daAlink_c::procWolfTagJumpLand() {
     daPy_frameCtrl_c* frameCtrl_p = mUnderFrameCtrl;
 
     daTagWljump_c* wljump_p = (daTagWljump_c*)field_0x280c.getActor();
-    if (wljump_p != NULL && wljump_p->getLockPos() != NULL) {
+#if TARGET_PC
+    const cXyz* lockPos = wljump_p != NULL ? wljump_p->getLockPos(this) : NULL;
+#else
+    const cXyz* lockPos = wljump_p != NULL ? wljump_p->getLockPos() : NULL;
+#endif
+    if (lockPos != NULL) {
         onResetFlg0(RFLG0_WOLF_TAG_LOCK_JUMP_READY);
-        field_0x3738 = *wljump_p->getLockPos();
+        field_0x3738 = *lockPos;
 
         if (frameCtrl_p->getFrame() > mpHIO->mWolf.mWlPoint.m.mTagLandingAnm.mCancelFrame) {
             setDoStatus(BUTTON_STATUS_UNK_147);

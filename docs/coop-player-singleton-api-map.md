@@ -311,7 +311,7 @@ player who owns the accepted catch event, so it routes through `event_owner`.
 | "Which player owns this boomerang-carried object until it is released?" | retained item-owner plumbing on `daPy_boomerangMove_c` / item movement helpers | Bomb Bug NBOMB boomerang movement retains the throwing player so carry/catch/drop position uses P2 when P2 threw the boomerang |
 | "Which player owns this collectible draw-in/pickup effect?" | `dusk::coop::retained_interaction_owner::Collect` plus active-player pickup eligibility | Tears of Light retain the player who entered the native pickup radius so draw-in lines and `onWolfLightDropGet()` use that slot |
 | "Which player owns this item/tool instance?" | item-owner helpers / owner keeps | Partially implemented by item ownership patches |
-| "What is this player slot locked onto or allowed to target?" | `dusk::coop::player_attention` | V1 gives additional ALINK actors their own `dAttention_c`; lock acquisition/status gating, owner target-capability masks, owner camera gameplay, cursor drawing, and actor-observed "am I locked-on?" checks use the same attention owner while P1 remains on global attention for HUD/story compatibility |
+| "What is this player slot locked onto or allowed to target?" | `dusk::coop::player_attention` | V1 gives additional ALINK actors their own `dAttention_c`; lock acquisition/status gating, owner target-capability masks, owner camera gameplay, cursor drawing, and actor-observed "am I locked-on?" checks use the same attention owner while P1 remains on global attention for HUD/story compatibility. Additional scanners advance beside P1's native post-world pass so actor-produced hints share the vanilla submission/consumption phase |
 | "What Do/A/R/Z, wolf X/Y, or 3D action status should this ALINK consume?" | `dusk::coop::player_button_status` | Implemented for ALINK gameplay prompt state; P1 forwards to vanilla globals and additional slots store sidecar values |
 | "Which X/Y items has this player assigned?" | `dusk::coop::player_item_selection` | Implemented as runtime sidecar assignments for additional slots with P1 forwarding to vanilla globals; inventory and consumable pools remain shared |
 | "Which runtime Epona belongs to this player slot or rider?" | `dusk::coop::horse_owner` | Authored Epona remains canonical for story/save compatibility and additional slots receive slot-assigned runtime clones; rider-local mounted gameplay, per-viewport spur presentation, and any-active-horse fence-jump tags are routed, while remaining collision and authored world-tag families stay active audit work |
@@ -322,7 +322,7 @@ player who owns the accepted catch event, so it routes through `event_owner`.
 | "Which player owns first-person/item/camera-action status?" | `dusk::coop::player_camera_status` over `dusk::coop::camera` | First pass implemented for slot-local status 0/1 bits, camera attention bits, subject zoom/focus, bow/slingshot, Hawkeye, iron ball subject mode, hookshot subject/hang/flight status, MG_ROD camera/cast status, and wolf AOE charge/dome/lock camera status lifecycle |
 | "Which player owns this prompt/object interaction?" | `dusk::coop::interaction_owner` | Selects active-player prompt owners for knob/shutter door side fields. Generic ALINK talk/check/pickup and carried-item actions already work through slot-local attention/status; use this API for remaining world actors with their own P1-only eligibility scans. Howling stones intentionally remain P1/global |
 | "Which player requested this accepted event/demo?" | `dusk::coop::event_owner` | Initial implementation derives from event `Pt1`; message input, ALINK door-demo staff consumption, and knob/shutter door demos use it so P2-started scripted interactions do not animate or move P1 |
-| "Which player owns the transient Midna service and manual wolf-transform request?" | `dusk::coop::midna_owner` | P1's Midna remains canonical for story/save/global paths, while active additional slots get runtime Midna service actors; active-service position/no-draw setup, prompt eligibility, message branch reads, transform blocking, accepted transform demo handoff, and the talk/camera status bit follow the service actor's ALINK slot |
+| "Which player owns the transient Midna service, wolf-jump staging, and manual wolf-transform request?" | `dusk::coop::midna_owner` | P1's Midna remains canonical for story/save/global paths, while active additional slots get runtime Midna service actors. Dialogue remains one retained service, but non-dialogue abilities use validated fixed per-slot ALINK/tag retains. Ordinary `Tag_Wljump` approaches never order the global talk event: each slot retains native Midna travel through `Traveling` and `Stationed`, then releases only after ALINK's jump proc takes custody. Real tutorial messages remain singular |
 | "Which player owns this active interactive dialogue/message surface?" | `dusk::coop::message_owner` | Retains the dialogue slot, pad, listener, speaker, and presenter actor after the native message controller accepts the message, with `talkStartInit()` as fallback insurance; prefers active `midna_owner` service, otherwise falls back to `event_owner`; A/B and choice input read the retained pad while native global movement/input locking remains intact |
 | "Should this explicitly classified singular event, interactive dialogue, retained enemy interaction, or captured menu surface temporarily present one fullscreen camera and hide non-presenting player visuals?" | `dusk::coop::event_presentation` | Implemented as an opt-in presentation override above the camera sidecar; ALINK, runtime Epona, and runtime Midna actors consult the same slot predicate while continuing simulation. P1/global howling stones, Midna service, interactive dialogue, retained enemy Link-swallow/Rider-carry presentation, item ring, Start-menu tree, field/dungeon maps, and Agitha's insect screen are classified consumers |
 | "Which player is retained by this training sequence?" | future `training_owner` | Deferred unless Hidden Skill / `NPC_KN` playtesting exposes a concrete P2 ownership failure |
@@ -382,14 +382,20 @@ player who owns the accepted catch event, so it routes through `event_owner`.
   an iteration over every registered horse.
 - **HUD owner:** meter/prompt presentation ownership. It decides which slot's prompt state and
   native human/wolf meter branch are being drawn for the active HUD viewport, not who is eligible to
-  interact or who accepted an event. Keep prompt eligibility in `interaction_owner` and accepted
-  event input in `event_owner`.
+  interact or who accepted an event. It also owns additional-slot 2D visibility latches for native
+  local actions such as Midna wolf-jump approach; P1 still forwards to the vanilla global latch.
+  Keep prompt eligibility in `interaction_owner` and accepted event input in `event_owner`.
 - **UI owner:** transient presentation-slot ownership, retained singular UI ownership, and
   viewport-local 2D projection/draw setup. Use it for item wheel ownership and viewport overlays,
   not world-rendered fishing line/bobber geometry.
 - **Player camera status:** first-person and item-aiming states such as bow, slingshot, Hawkeye,
   hookshot, and iron ball subject mode. Route through slot camera ownership rather than global
   player-status bits.
+- **Owner-specific attention actor view:** a shared world actor may expose different transient
+  attention flags or positions to each player without becoming separate gameplay actors. Midna
+  wolf-jump tags are the first proof: shared switch/message state stays singular, while path cursor,
+  jump-ready state, landing data, selection position, and lock cursor position follow the scanning
+  ALINK through `player_attention`. Every downstream consumer must use that same explicit player.
 - **Interaction owner:** prompt-driven actions such as talk, check, pickup, and object use.
   Keep it separate from enemy targeting, item owner lookup, and accepted event ownership. Prompt
   code should return the selected slot/actor before the event manager accepts an order.

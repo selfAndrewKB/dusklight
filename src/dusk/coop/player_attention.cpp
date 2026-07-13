@@ -1,6 +1,7 @@
 #include "dusk/coop/player_attention.h"
 
 #include "d/actor/d_a_alink.h"
+#include "d/actor/d_a_tag_wljump.h"
 #include "d/d_attention.h"
 #include "d/d_com_inf_game.h"
 #include "JSystem/J3DGraphBase/J3DDrawBuffer.h"
@@ -94,6 +95,15 @@ void updateForPlayer(daAlink_c* player) {
     attention->Run();
 }
 
+void updateAdditionalPlayers() {
+    for (int i = 1; i < kPlayerSlotCount; i++) {
+        daAlink_c* player = static_cast<daAlink_c*>(getPlayer(static_cast<PlayerSlot>(i)));
+        if (player != nullptr) {
+            updateForPlayer(player);
+        }
+    }
+}
+
 bool isLockOn(daAlink_c* player) {
     dAttention_c* attention = attentionForPlayer(player);
     return attention != nullptr && attention->Lockon();
@@ -102,6 +112,11 @@ bool isLockOn(daAlink_c* player) {
 fopAc_ac_c* zHintForPlayer(daAlink_c* player) {
     dAttention_c* attention = attentionForPlayer(player);
     return attention != nullptr ? attention->getZHintTarget() : nullptr;
+}
+
+int requestZHintForPlayer(daAlink_c* player, fopAc_ac_c* actor, int priority) {
+    dAttention_c* attention = attentionForPlayer(player);
+    return attention != nullptr ? attention->ZHintRequest(actor, priority) : 0;
 }
 
 void drawAll() {
@@ -222,6 +237,34 @@ bool canSelectActor(dAttention_c* attention, const fopAc_ac_c* actor) {
 
     // Co-op: P2 can target enemies/objects, but player actors are not lock-on targets.
     return getSlotForActor(actor) == PlayerSlot::Invalid;
+}
+
+unsigned int actorFlagsForOwner(dAttention_c* attention, const fopAc_ac_c* actor) {
+    if (actor == nullptr) {
+        return 0;
+    }
+
+    if (attention != nullptr && attention->mpPlayer != nullptr &&
+        fpcM_GetName(actor) == fpcNm_Tag_Wljump_e)
+    {
+        // Co-op: one shared jump tag exposes the path point owned by each Link's native scanner.
+        return static_cast<const daTagWljump_c*>(actor)->getAttentionFlags(
+            static_cast<const daAlink_c*>(attention->mpPlayer));
+    }
+
+    return actor->attention_info.flags;
+}
+
+const cXyz& actorPositionForOwner(dAttention_c* attention, const fopAc_ac_c* actor) {
+    if (attention != nullptr && attention->mpPlayer != nullptr && actor != nullptr &&
+        fpcM_GetName(actor) == fpcNm_Tag_Wljump_e)
+    {
+        // Co-op: lock selection and cursor drawing must consume the same slot-local jump point.
+        return static_cast<const daTagWljump_c*>(actor)->getAttentionPosition(
+            static_cast<const daAlink_c*>(attention->mpPlayer));
+    }
+
+    return actor->attention_info.position;
 }
 
 bool isViewportCursorDrawActive() {

@@ -62,6 +62,7 @@
 #include "dusk/coop/camera.h"
 #include "dusk/coop/event_presentation.h"
 #include "dusk/coop/horse_owner.h"
+#include "dusk/coop/hud_owner.h"
 #include "dusk/coop/input.h"
 #include "dusk/coop/message_owner.h"
 #include "dusk/coop/midna_owner.h"
@@ -89,6 +90,14 @@ static int daAlink_Delete(daAlink_c* i_this);
 static int daAlink_Execute(daAlink_c* i_this);
 static int daAlink_Draw(daAlink_c* i_this);
 static fopAc_ac_c* daAlink_searchTagKandelaar(fopAc_ac_c* i_actor, void* i_data);
+
+#if TARGET_PC
+// Co-op: Midna-driven movement gates must follow the companion assigned to this ALINK slot.
+static bool daAlink_checkOwnerMidnaNoInput(const daAlink_c* player) {
+    daMidna_c* midna = dusk::coop::midna_owner::getMidnaForPlayer(player);
+    return midna != NULL && midna->checkNoInput();
+}
+#endif
 
 #if TARGET_PC
 namespace {
@@ -10105,11 +10114,22 @@ void daAlink_c::setStickData() {
         mMoveValue = 0.0f;
         mStickAngle = 0;
         mMoveAngle = 0;
-    } else if (checkMidnaLockJumpPoint() && getMidnaActor()->checkNoInput()) {
+    } else if (checkMidnaLockJumpPoint()
+#if TARGET_PC
+               && daAlink_checkOwnerMidnaNoInput(this)
+#else
+               && getMidnaActor()->checkNoInput()
+#endif
+    ) {
         mStickValue = 0.0f;
         mMoveValue = 0.0f;
         mStickAngle = 0;
+#if TARGET_PC
+        // Co-op: Midna jump approach hides only this Link's viewport HUD.
+        dusk::coop::hud_owner::setVisibleForPlayer(this, false);
+#else
         dComIfGp_2dShowOff();
+#endif
         onNoResetFlg2(FLG2_UNK_80);
         var_r31 = TRUE;
         field_0x2fe4 = shape_angle.y;
@@ -10310,14 +10330,18 @@ void daAlink_c::setStickData() {
 
     if (!var_r31 && checkNoResetFlg2(FLG2_UNK_80)) {
         offNoResetFlg2(FLG2_UNK_80);
+#if TARGET_PC
+        // Co-op: restore the same slot-local HUD latch set by Midna jump approach.
+        dusk::coop::hud_owner::setVisibleForPlayer(this, true);
+#else
         dComIfGp_2dShowOn();
+#endif
     }
 }
 
 void daAlink_c::setAtnList() {
 #if TARGET_PC
-    // Co-op: derive target/guard state from this player's attention owner, not P1's global lock.
-    dusk::coop::player_attention::updateForPlayer(this);
+    // Co-op: consume this player's scanner; dScnPly advances every scanner beside P1's native pass.
     mAttention = dusk::coop::player_attention::attentionForPlayer(this);
 #endif
 
@@ -11129,13 +11153,22 @@ void daAlink_c::decideCommonDoStatus() {
             } else {
                 if (mTargetedActor != NULL) {
                     if (fopAcM_GetName(mTargetedActor) == fpcNm_Tag_Wljump_e) {
-                        if (static_cast<daTagWljump_c*>(mTargetedActor)->getLockPos() != NULL) {
-                            if (!getMidnaActor()->checkNoInput()) {
+#if TARGET_PC
+                        // Co-op: lock action and retained point consume this ALINK's tag traversal.
+                        daTagWljump_c* jumpTag = static_cast<daTagWljump_c*>(mTargetedActor);
+                        const cXyz* jumpPoint = jumpTag->getLockPos(this);
+                        daMidna_c* midna = dusk::coop::midna_owner::getMidnaForPlayer(this);
+#else
+                        const cXyz* jumpPoint = static_cast<daTagWljump_c*>(mTargetedActor)->getLockPos();
+                        daMidna_c* midna = getMidnaActor();
+#endif
+                        if (jumpPoint != NULL) {
+                            if (midna != NULL && !midna->checkNoInput()) {
                                 setDoStatus(BUTTON_STATUS_UNK_147);
                             }
 
                             onResetFlg0(RFLG0_WOLF_TAG_LOCK_JUMP_READY);
-                            field_0x3738 = *static_cast<daTagWljump_c*>(mTargetedActor)->getLockPos();
+                            field_0x3738 = *jumpPoint;
                         }
                     } else {
                         setDoStatus(BUTTON_STATUS_UNK_139);
@@ -12332,7 +12365,24 @@ int daAlink_c::orderZTalk() {
                     fopAcM_orderOtherEventId(zhint, ((daTagMhint_c*)zhint)->getEventID(), ((daTagMhint_c*)zhint)->getToolEventID(), 0xFFFF, 0, 1);
                 } else {
 #if TARGET_PC
-                    dusk::coop::midna_owner::beginService(this, zhint);
+                    if (fopAcM_GetName(zhint) == fpcNm_Tag_Wljump_e) {
+                        daTagWljump_c* jumpTag = static_cast<daTagWljump_c*>(zhint);
+                        if (!jumpTag->requiresTutorialMessage()) {
+                            // Co-op: the native no-message scheduler is a Midna ability for
+                            // every slot; only genuine tutorial text enters the talk event.
+                            dusk::coop::midna_owner::beginAbilityService(this, zhint);
+                            if (!jumpTag->beginCoopTraversal(this)) {
+                                dusk::coop::midna_owner::endAbilityService(this, zhint);
+                                return 0;
+                            }
+                            field_0x35a0 = field_0x3594;
+                            return 1;
+                        } else {
+                            dusk::coop::midna_owner::beginService(this, zhint);
+                        }
+                    } else {
+                        dusk::coop::midna_owner::beginService(this, zhint);
+                    }
 #endif
                     fopAcM_orderTalkEvent(this, zhint, 0, 0);
                 }
@@ -20867,7 +20917,12 @@ daAlink_c::~daAlink_c() {
 
     if (checkNoResetFlg2(FLG2_UNK_80)) {
         offNoResetFlg2(FLG2_UNK_80);
+#if TARGET_PC
+        // Co-op: actor teardown restores only this ALINK slot's pending HUD hide.
+        dusk::coop::hud_owner::setVisibleForPlayer(this, true);
+#else
         dComIfGp_2dShowOn();
+#endif
     }
 
     if (mProcID == PROC_WARP || (mProcID == PROC_TOOL_DEMO && mProcVar2.field_0x300c != 0)) {
@@ -20894,6 +20949,9 @@ daAlink_c::~daAlink_c() {
     dKy_plight_cut(&mMagneBootsPlight);
 
     #if TARGET_PC
+    // Co-op: scene-local Midna abilities cannot retain an ALINK past actor teardown.
+    dusk::coop::midna_owner::endAbilityService(
+        this, dusk::coop::midna_owner::abilityPartnerForPlayer(this));
     if (coop_secondary) {
         // Co-op: extra Links never own vanilla player 0 globals.
         dusk::coop::unregisterPlayer(coop_slot, this);

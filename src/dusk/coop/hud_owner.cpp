@@ -9,9 +9,18 @@
 #include "dusk/coop/horse_owner.h"
 #include "dusk/coop/player_item_selection.h"
 #include "dusk/coop/ui_owner.h"
+#include "f_op/f_op_actor_mng.h"
 
 namespace dusk::coop::hud_owner {
 namespace {
+
+struct SlotVisibility {
+    daAlink_c* owner = nullptr;
+    fpc_ProcID ownerId = fpcM_ERROR_PROCESS_ID_e;
+    bool visible = true;
+};
+
+SlotVisibility s_visibility[kPlayerSlotCount];
 
 bool isSecondarySlot(PlayerSlot slot) {
     return slot != PlayerSlot::Invalid && slot != PlayerSlot::Primary &&
@@ -28,6 +37,24 @@ bool usesSelectionCounter(u8 item) {
     return item == dItemNo_BOMB_BAG_LV1_e || item == dItemNo_NORMAL_BOMB_e ||
            item == dItemNo_WATER_BOMB_e || item == dItemNo_POKE_BOMB_e ||
            item == dItemNo_PACHINKO_e || item == dItemNo_BEE_CHILD_e;
+}
+
+SlotVisibility* visibilityForPlayer(daAlink_c* player) {
+    const PlayerSlot slot = getSlotForActor(player);
+    const int slotIndex = static_cast<int>(slot);
+    if (slotIndex <= static_cast<int>(PlayerSlot::Primary) || slotIndex >= kPlayerSlotCount) {
+        return nullptr;
+    }
+
+    SlotVisibility& state = s_visibility[slotIndex];
+    const fpc_ProcID ownerId = fopAcM_GetID(player);
+    if (state.owner != player || state.ownerId != ownerId) {
+        state = SlotVisibility{};
+        state.owner = player;
+        state.ownerId = ownerId;
+    }
+
+    return &state;
 }
 
 }  // namespace
@@ -51,6 +78,27 @@ void pushSlot(PlayerSlot slot) {
 
 void popSlot() {
     ui_owner::popPresentationSlot();
+}
+
+void setVisibleForPlayer(daAlink_c* player, bool visible) {
+    SlotVisibility* state = visibilityForPlayer(player);
+    if (state != nullptr) {
+        state->visible = visible;
+    } else if (visible) {
+        dComIfGp_2dShowOn();
+    } else {
+        dComIfGp_2dShowOff();
+    }
+}
+
+bool isVisible(PlayerSlot slot) {
+    if (slot == PlayerSlot::Invalid || slot == PlayerSlot::Primary) {
+        return dComIfGp_2dShowCheck();
+    }
+
+    daAlink_c* player = static_cast<daAlink_c*>(getPlayer(slot));
+    SlotVisibility* state = visibilityForPlayer(player);
+    return state == nullptr || state->visible;
 }
 
 bool isSecondaryPromptPass() {

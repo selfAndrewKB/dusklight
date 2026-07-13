@@ -40,11 +40,19 @@ struct MidnaSlotState {
 struct State {
     PlayerSlot slot = PlayerSlot::Invalid;
     fopAc_ac_c* partner = nullptr;
+    fpc_ProcID partnerId = fpcM_ERROR_PROCESS_ID_e;
     bool presentationActive = false;
     bool awaitingEventStart = false;
     bool pendingEnd = false;
     bool talkCameraSeededDuringStartup = false;
     bool talkCameraStableReseeded = false;
+};
+
+struct AbilityState {
+    daAlink_c* player = nullptr;
+    fpc_ProcID playerId = fpcM_ERROR_PROCESS_ID_e;
+    fopAc_ac_c* partner = nullptr;
+    fpc_ProcID partnerId = fpcM_ERROR_PROCESS_ID_e;
 };
 
 struct TransformBlockSearch {
@@ -54,6 +62,7 @@ struct TransformBlockSearch {
 
 MidnaSlotState s_midnas[kPlayerSlotCount];
 State s_state;
+AbilityState s_abilities[kPlayerSlotCount];
 
 constexpr bool isValidSlot(PlayerSlot slot) {
     return slot == PlayerSlot::Slot0 || slot == PlayerSlot::Slot1 ||
@@ -66,6 +75,41 @@ constexpr int slotIndex(PlayerSlot slot) {
 
 PlayerSlot normalizeSlot(PlayerSlot slot) {
     return slot == PlayerSlot::Invalid ? PlayerSlot::Primary : slot;
+}
+
+fopAc_ac_c* liveServicePartner() {
+    if (s_state.partner == nullptr || s_state.partnerId == fpcM_ERROR_PROCESS_ID_e) {
+        return nullptr;
+    }
+
+    return fpcM_SearchByID(s_state.partnerId) == static_cast<base_process_class*>(s_state.partner)
+               ? s_state.partner
+               : nullptr;
+}
+
+AbilityState* abilityStateForPlayer(const daAlink_c* player) {
+    if (player == nullptr) {
+        return nullptr;
+    }
+
+    const PlayerSlot slot = getSlotForActor(static_cast<const fopAc_ac_c*>(player));
+    return isValidSlot(slot) ? &s_abilities[slotIndex(slot)] : nullptr;
+}
+
+fopAc_ac_c* liveAbilityPartner(const daAlink_c* player) {
+    AbilityState* state = abilityStateForPlayer(player);
+    if (state == nullptr || state->player != player ||
+        state->playerId != fopAcM_GetID(player) || state->partner == nullptr ||
+        state->partnerId == fpcM_ERROR_PROCESS_ID_e ||
+        fpcM_SearchByID(state->partnerId) != static_cast<base_process_class*>(state->partner))
+    {
+        if (state != nullptr) {
+            *state = AbilityState{};
+        }
+        return nullptr;
+    }
+
+    return state->partner;
 }
 
 MidnaSlotState* stateForSlot(PlayerSlot slot) {
@@ -153,6 +197,29 @@ void beginPresentation(PlayerSlot slot) {
     s_state.presentationActive = true;
 }
 
+void beginServiceInternal(daAlink_c* player, fopAc_ac_c* partner) {
+    if (s_state.slot != PlayerSlot::Invalid) {
+        endService();
+    }
+
+    s_state = State{};
+    PlayerSlot slot = normalizeSlot(getSlotForActor(player));
+    s_state.slot = slot;
+    s_state.partner = partner != nullptr ? partner : static_cast<fopAc_ac_c*>(getMidna(slot));
+    s_state.partnerId = s_state.partner != nullptr ? fopAcM_GetID(s_state.partner)
+                                                   : fpcM_ERROR_PROCESS_ID_e;
+    s_state.awaitingEventStart = true;
+    s_state.pendingEnd = false;
+    s_state.talkCameraSeededDuringStartup = false;
+    s_state.talkCameraStableReseeded = false;
+
+    beginPresentation(slot);
+    // Co-op: interactive Midna service owns the first fullscreen dialogue handoff.
+    message_owner::begin(slot, static_cast<fopAc_ac_c*>(player),
+                         static_cast<fopAc_ac_c*>(getMidna(slot)), true,
+                         message_owner::BeginSource::MidnaService);
+}
+
 }  // namespace
 
 bool isAdditionalMidnaSpawnRequest(const fopAc_ac_c* actor) {
@@ -194,6 +261,7 @@ void unregisterMidna(PlayerSlot slot, const daMidna_c* midna) {
     state->midna = nullptr;
     state->midnaId = fpcM_ERROR_PROCESS_ID_e;
     state->pendingSpawnId = fpcM_ERROR_PROCESS_ID_e;
+    s_abilities[slotIndex(slot)] = AbilityState{};
     CoopMidnaLog.debug("unregistered Midna slot {} actor 0x{:x}", slotIndex(slot),
                        reinterpret_cast<uintptr_t>(midna));
 
@@ -331,19 +399,40 @@ bool canUseService(const daAlink_c* player) {
 }
 
 void beginService(daAlink_c* player, fopAc_ac_c* partner) {
-    PlayerSlot slot = normalizeSlot(getSlotForActor(player));
-    s_state.slot = slot;
-    s_state.partner = partner != nullptr ? partner : static_cast<fopAc_ac_c*>(getMidna(slot));
-    s_state.awaitingEventStart = true;
-    s_state.pendingEnd = false;
-    s_state.talkCameraSeededDuringStartup = false;
-    s_state.talkCameraStableReseeded = false;
-    beginPresentation(slot);
-    // Co-op: Midna service acceptance is earlier than some transform-message
-    // controller setup paths, so it owns the first fullscreen dialogue handoff.
-    message_owner::begin(slot, static_cast<fopAc_ac_c*>(player),
-                         static_cast<fopAc_ac_c*>(getMidna(slot)), true,
-                         message_owner::BeginSource::MidnaService);
+    beginServiceInternal(player, partner);
+}
+
+void beginAbilityService(daAlink_c* player, fopAc_ac_c* partner) {
+    AbilityState* state = abilityStateForPlayer(player);
+    if (state == nullptr || partner == nullptr) {
+        return;
+    }
+
+    // Co-op: non-dialogue Midna abilities are concurrent slot-local services,
+    // independent of the one singular Midna conversation owner.
+    state->player = player;
+    state->playerId = fopAcM_GetID(player);
+    state->partner = partner;
+    state->partnerId = fopAcM_GetID(partner);
+}
+
+void endAbilityService(const daAlink_c* player, const fopAc_ac_c* partner) {
+    AbilityState* state = abilityStateForPlayer(player);
+    if (state != nullptr && liveAbilityPartner(player) == partner) {
+        *state = AbilityState{};
+    }
+}
+
+void endAbilityServicesForPartner(const fopAc_ac_c* partner) {
+    if (partner == nullptr) {
+        return;
+    }
+
+    for (int i = 0; i < kPlayerSlotCount; i++) {
+        if (s_abilities[i].partner == partner) {
+            s_abilities[i] = AbilityState{};
+        }
+    }
 }
 
 void requestEndService() {
@@ -417,6 +506,9 @@ void updateService() {
 
 void reset() {
     s_state = State{};
+    for (int i = 0; i < kPlayerSlotCount; i++) {
+        s_abilities[i] = AbilityState{};
+    }
 }
 
 bool isServiceActive() {
@@ -470,6 +562,10 @@ daAlink_c* currentPlayer() {
     return playerForSlot(currentSlot());
 }
 
+fopAc_ac_c* currentPartner() {
+    return isServiceActive() ? liveServicePartner() : nullptr;
+}
+
 daAlink_c* messageFlowPlayer() {
     daAlink_c* player = isServiceActive() ? currentPlayer() : eventOwnerPlayer();
     return player != nullptr ? player : eventOwnerPlayer();
@@ -485,7 +581,7 @@ fopAc_ac_c* talkPartnerForPlayer(const daAlink_c* player) {
             return static_cast<fopAc_ac_c*>(midna);
         }
 
-        return s_state.partner;
+        return currentPartner();
     }
 
     if (message_owner::isActive() && message_owner::currentPlayer() == player) {
@@ -497,6 +593,10 @@ fopAc_ac_c* talkPartnerForPlayer(const daAlink_c* player) {
     return fopAcM_getTalkEventPartner(const_cast<daAlink_c*>(player));
 }
 
+fopAc_ac_c* abilityPartnerForPlayer(const daAlink_c* player) {
+    return liveAbilityPartner(player);
+}
+
 bool isServicePartner(const fopAc_ac_c* partner) {
     if (partner == nullptr) {
         return false;
@@ -504,7 +604,8 @@ bool isServicePartner(const fopAc_ac_c* partner) {
 
     const s16 name = fpcM_GetName(partner);
     return name == fpcNm_MIDNA_e || name == fpcNm_Tag_Mhint_e ||
-           name == fpcNm_Tag_Mstop_e || name == fpcNm_Tag_Mmsg_e;
+           name == fpcNm_Tag_Mstop_e || name == fpcNm_Tag_Mmsg_e ||
+           name == fpcNm_Tag_Wljump_e;
 }
 
 bool shouldConsumeAlinkStaff(const daAlink_c* player) {
@@ -522,7 +623,7 @@ bool shouldSkipAlinkStaff(const daAlink_c* player) {
 
     // Co-op: Midna's transform handoff retargets Pt2 to the retained ALINK, so
     // the service partner is the reliable signal for skipping non-owner staff.
-    if (isServiceActive() && isServicePartner(s_state.partner)) {
+    if (isServiceActive() && isServicePartner(currentPartner())) {
         return true;
     }
 
@@ -537,7 +638,7 @@ bool shouldSkipAlinkStaff(const daAlink_c* player) {
         partner = fopAcM_getTalkEventPartner(eventOwnerPlayer());
     }
     if (partner == nullptr) {
-        partner = s_state.partner;
+        partner = currentPartner();
     }
     return isServicePartner(partner);
 }

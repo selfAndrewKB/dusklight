@@ -25,6 +25,9 @@ void releaseMidnaForSlot(PlayerSlot slot);
 
 bool canUseService(const daAlink_c* player);
 void beginService(daAlink_c* player, fopAc_ac_c* partner);
+void beginAbilityService(daAlink_c* player, fopAc_ac_c* partner);
+void endAbilityService(const daAlink_c* player, const fopAc_ac_c* partner);
+void endAbilityServicesForPartner(const fopAc_ac_c* partner);
 void requestEndService();
 void endService();
 void finishPendingEndService();
@@ -38,8 +41,10 @@ bool shouldReseedTalkCameraForStableMidna(daMidna_c* midna, bool poseReady);
 void markTalkCameraStableReseeded();
 PlayerSlot currentSlot();
 daAlink_c* currentPlayer();
+fopAc_ac_c* currentPartner();
 daAlink_c* messageFlowPlayer();
 fopAc_ac_c* talkPartnerForPlayer(const daAlink_c* player);
+fopAc_ac_c* abilityPartnerForPlayer(const daAlink_c* player);
 
 bool isServicePartner(const fopAc_ac_c* partner);
 bool shouldConsumeAlinkStaff(const daAlink_c* player);
