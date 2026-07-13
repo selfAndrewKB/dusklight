@@ -771,24 +771,24 @@ void dScnLogo_c::nextSceneChange() {
                     status = mDoMemCd_LoadSync(buf, sizeof(buf), 0);
                     // Wait until the card is loaded
                 } while (status == 0);
-            
+
                 if (status == 1) {
                     dComIfGs_setCardToMemory(buf, dusk::SaveRequested - 1);
                 } else {
                     dComIfGs_init();
                 }
-            
+
                 dComIfGs_setNoFile(dusk::SaveRequested);
                 dComIfGs_setDataNum(dusk::SaveRequested-1);
 
                 dComIfGs_gameStart();
-            
+
                 fopScnM_ChangeReq(this, fpcNm_PLAY_SCENE_e, 0, 30);
-            
+
                 dKy_clear_game_init();
                 dComIfGs_resetDan();
                 dComIfGs_setRestartRoomParam(0);
-            
+
                 DuskLog.info("Loaded Save From Slot {}",dusk::SaveRequested);
                 dusk::SaveRequested = 0xff;
             } else if (dusk::SaveRequested == 0xff) {
